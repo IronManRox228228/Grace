@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Drop licensed TAN Pearl files in renderer/public/fonts and uncomment:
+@font-face {
+  font-family: 'TAN Pearl';
+  src: url('/fonts/TANPearl.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+*/
+
+* {
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  color: #3B4430;
+}
+
+/* Respect reduced-motion preferences everywhere, including
+   framer-motion's spring transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(59, 68, 48, 0.15);
+  border-radius: 999px;
+}

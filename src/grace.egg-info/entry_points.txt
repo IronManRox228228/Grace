@@ -1,0 +1,2 @@
+[console_scripts]
+grace = grace.main:main

@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: grace
+Version: 0.0.1
+Summary: Offline voice-first accessibility assistant for Windows
+Requires-Python: >=3.10

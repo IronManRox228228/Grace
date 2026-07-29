@@ -1,0 +1,41 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDEs
+.idea/
+.vscode/
+
+# Environment
+.env
+
+# AI Models
+models/
+
+# Project-specific
+.zcode/
+.opencode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Electron build
+dist/
+out/
+
+# Logs
+logs/
+*.log
+
+# HuggingFace cache
+.huggingface/
+
+llama cpp/
+
+libs/*.jar
