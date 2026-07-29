@@ -7,7 +7,7 @@ echo ============================================================
 echo.
 
 :: 1. Python Virtual Environment Setup
-echo [1/5] Setting up Python virtual environment...
+echo [1/6] Setting up Python virtual environment...
 if not exist "venv" (
     echo Creating virtual environment in .\venv ...
     python -m venv venv
@@ -40,33 +40,47 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: 2. Custom Llama CPP Setup (TurboQuant tqp-v0.3.0)
+:: 2. Environment Configuration Setup (.env)
 echo.
-echo [2/5] Setting up custom Llama CPP (TurboQuant v0.3.0)...
+echo [2/6] Setting up local environment configuration (.env)...
+if not exist ".env" (
+    if exist ".env.example" (
+        echo Creating .env from .env.example ...
+        copy .env.example .env
+    ) else (
+        echo [WARNING] Neither .env nor .env.example found.
+    )
+) else (
+    echo .env configuration file already exists.
+)
+
+:: 3. Custom Llama CPP Setup (TurboQuant tqp-v0.3.0)
+echo.
+echo [3/6] Setting up custom Llama CPP (TurboQuant v0.3.0)...
 python scripts/setup_llama_cpp.py
 if errorlevel 1 (
     echo [WARNING] Llama CPP setup encountered an error. You can retry running: python scripts/setup_llama_cpp.py
 )
 
-:: 3. Speech and Audio Models Setup
+:: 4. Speech and Audio Models Setup
 echo.
-echo [3/5] Downloading required speech/audio models (Vosk, Whisper)...
+echo [4/6] Downloading required speech/audio models (Vosk, Whisper)...
 python scripts/download_models.py
 if errorlevel 1 (
     echo [WARNING] Model download script encountered an error. You can retry running: python scripts/download_models.py
 )
 
-:: 4. OculiX Java Bridge & JARs Setup
+:: 5. OculiX Java Bridge & JARs Setup
 echo.
-echo [4/5] Setting up OculiX Java Bridge JARs...
+echo [5/6] Downloading OculiX and OpenCV Java JARs (libs/*.jar)...
 python scripts/setup_oculix.py
 if errorlevel 1 (
     echo [WARNING] OculiX setup encountered an error. Pure OpenCV fallback will be used.
 )
 
-:: 5. Frontend Node.js Dependencies Setup
+:: 6. Frontend Node.js Dependencies Setup
 echo.
-echo [5/5] Installing Frontend Node.js dependencies...
+echo [6/6] Installing Frontend Node.js dependencies (node_modules)...
 if exist "frontend\package.json" (
     cd frontend
     call npm install
@@ -78,7 +92,7 @@ if exist "frontend\package.json" (
 echo.
 echo ============================================================
 echo   [SUCCESS] Full setup complete!
-echo   All ignored dependencies and binaries have been installed.
+echo   All ignored dependencies and binaries (.env, venv, llama cpp, models, libs/*.jar, node_modules) are ready.
 echo   To activate the environment: call venv\Scripts\activate.bat
 echo   To launch Grace: python scripts/launch_grace.py or python -m grace
 echo ============================================================
