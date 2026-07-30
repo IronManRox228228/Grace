@@ -66,9 +66,32 @@ class Config:
     whisper_silence_duration_ms: int = int(os.getenv("WHISPER_SILENCE_DURATION_MS", "700"))
 
     # Kokoro
-    kokoro_workers: int = int(os.getenv("KOKORO_WORKERS", "3"))
+    # Two workers share ONE KModel: enough concurrency to hide synthesis behind
+    # playback, without paying for a second copy of the model in VRAM.
+    kokoro_workers: int = int(os.getenv("KOKORO_WORKERS", "2"))
     kokoro_device: str = os.getenv("KOKORO_DEVICE", "cuda")
-    kokoro_dtype: str = os.getenv("KOKORO_DTYPE", "float16")
+    # float16 is rejected by kokoro 0.9.4 (its internal tensors stay float32),
+    # so float32 is the only working value; see kokoro_engine._resolve_dtype.
+    kokoro_dtype: str = os.getenv("KOKORO_DTYPE", "float32")
+    kokoro_warmup: bool = os.getenv("KOKORO_WARMUP", "true").lower() in ("true", "1", "yes")
+    kokoro_cache_size: int = int(os.getenv("KOKORO_CACHE_SIZE", "32"))
+
+    # Agent loop
+    agent_max_iterations: int = int(os.getenv("AGENT_MAX_ITERATIONS", "12"))
+    planner_max_calls_per_goal: int = int(os.getenv("PLANNER_MAX_CALLS_PER_GOAL", "8"))
+    screenshot_max_width: int = int(os.getenv("SCREENSHOT_MAX_WIDTH", "1280"))
+
+    # Browser DOM access. Attach-only: Grace never launches a browser with a
+    # debug flag and never touches the user's profile. Unset (0) = disabled,
+    # in which case browser elements come from the UIA/ARIA tree instead.
+    cdp_port: int = int(os.getenv("GRACE_CDP_PORT", "0"))
+
+    # OculiX / JPype visual fallback. Off by default: it starts a JVM in-process
+    # and can block for seconds per unresolved click.
+    use_oculix: bool = os.getenv("USE_OCULIX", "false").lower() in ("true", "1", "yes")
+
+    # Logging
+    log_level: str = os.getenv("GRACE_LOG_LEVEL", "INFO")
 
     # WebSocket (frontend)
     ws_host: str = os.getenv("WS_HOST", "127.0.0.1")

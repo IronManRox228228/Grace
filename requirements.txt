@@ -1,6 +1,10 @@
 aiohttp>=3.9.0
 faster-whisper>=1.0.0
-kokoro>=0.1.0
+kokoro>=0.9.4
+# kokoro -> misaki[en] -> spacy/espeak; the bare `misaki` wheel is not enough.
+misaki[en]>=0.9.4
+# loguru imports win32_setctime on Windows; without it `import kokoro` fails.
+win32-setctime>=1.1.0
 mss>=9.0.2
 numpy>=1.26.0
 pyautogui>=0.9.54
@@ -20,4 +24,7 @@ Pillow>=10.0.0
 comtypes>=1.4.0
 pytesseract>=0.3.10
 send2trash>=1.8.0
+# Imported at runtime but previously undeclared:
+scikit-learn>=1.3.0   # rag/retriever.py TF-IDF index
+pydub>=0.25.1         # response/feedback.py activation chime
 

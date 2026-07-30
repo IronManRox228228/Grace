@@ -81,28 +81,46 @@ def download_whisper_model():
         print(f"  Error: {e}")
 
 
-def check_kokoro_model():
-    """Check if Kokoro model is available."""
-    import os
-    path = os.path.join(os.path.dirname(__file__), "..", "models", "kokoro")
+KOKORO_REPO = "hexgrad/Kokoro-82M"
+# Weights, config and the one voice pack Grace uses. Skips the sample audio and
+# the other ~50 voice packs, which would otherwise triple the download.
+KOKORO_PATTERNS = ["config.json", "kokoro-v1_0.pth", "voices/af_bella.pt"]
 
-    # Check HuggingFace cache first
-    hf_cache = os.path.expanduser(
-        r".cache\huggingface\hub\models--hexgrad--Kokoro-82M\snapshots"
-    )
 
-    if os.path.exists(hf_cache):
-        print(f"  Kokoro model found in HuggingFace cache: {hf_cache}")
+def download_kokoro_model():
+    """Download the Kokoro-82M weights and the af_bella voice pack.
+
+    Grace forces HF_HUB_OFFLINE=1 at runtime, so the model has to be fetched
+    ahead of time. This used to only *check* for the model, and the check was
+    broken: os.path.expanduser() on a path with no leading '~' returns it
+    unchanged, so it tested a relative path that could never exist.
+    """
+    print(f"Downloading Kokoro model ({KOKORO_REPO})...")
+
+    # snapshot_download honours these, and Grace's own modules set them at
+    # import time - clear them so this script can actually reach the network.
+    for var in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
+        os.environ.pop(var, None)
+
+    try:
+        from huggingface_hub import snapshot_download
+
+        path = snapshot_download(KOKORO_REPO, allow_patterns=KOKORO_PATTERNS)
+        print(f"  Kokoro model installed at {path}")
+
+        voices = os.path.join(path, "voices", "af_bella.pt")
+        if not os.path.exists(voices):
+            print(f"  WARNING: voice pack missing at {voices}")
+            return False
+
+        print("  Set these in your .env:")
+        print(f"    KOKORO_MODEL_PATH={os.path.join(path, 'kokoro-v1_0.pth')}")
+        print(f"    KOKORO_VOICES_PATH={voices}")
         return True
-
-    if os.path.exists(path):
-        print(f"  Kokoro model found at {path}")
-        return True
-
-    print(f"  Kokoro model not found. Checking HuggingFace cache...")
-    print(f"  Expected at: {hf_cache}")
-    print("  If not cached, run: huggingface-cli download hexgrad/Kokoro-82M")
-    return False
+    except Exception as e:
+        print(f"  Error downloading Kokoro model: {e}")
+        print(f"  Download manually with: huggingface-cli download {KOKORO_REPO}")
+        return False
 
 
 def main():
@@ -110,8 +128,8 @@ def main():
     print("Grace - Model Download")
     print("=" * 60)
 
-    print("\n1. Checking Kokoro model...")
-    check_kokoro_model()
+    print("\n1. Downloading Kokoro model...")
+    download_kokoro_model()
 
     print("\n2. Downloading Vosk model...")
     download_vosk_model()

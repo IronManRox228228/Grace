@@ -31,19 +31,24 @@ _TOOL_LABELS: dict[str, str] = {
     "delete_file": "Moving file to recycle bin\u2026",
 }
 
+# One entry per handler ComputerUse actually implements. The removed keys
+# (double_click, right_click, move_mouse, focus_window, get_cursor_position)
+# had no corresponding _<name> method, so they could never be dispatched.
 _CUA_LABELS: dict[str, str] = {
     "click": "Clicking\u2026",
-    "double_click": "Double-clicking\u2026",
-    "right_click": "Right-clicking\u2026",
     "type_text": "Typing\u2026",
     "press_key": "Pressing key\u2026",
-    "move_mouse": "Moving mouse\u2026",
     "drag": "Dragging\u2026",
     "scroll": "Scrolling\u2026",
     "screenshot": "Taking screenshot\u2026",
     "list_windows": "Listing windows\u2026",
-    "focus_window": "Focusing window\u2026",
-    "get_cursor_position": "Getting cursor position\u2026",
+    "list_apps": "Listing applications\u2026",
+    "get_window": "Reading window\u2026",
+    "activate": "Switching window\u2026",
+    "launch": "Launching application\u2026",
+    "text": "Reading screen\u2026",
+    "set_value": "Setting value\u2026",
+    "secondary_action": "Right-clicking\u2026",
 }
 
 
@@ -103,6 +108,12 @@ class Dispatcher:
         self._cua = computer_use
         self._ws = ws_server
         self._last_search_results: list[str] = []
+        self._app_indexer = None
+        self._app_indexer_lock = asyncio.Lock()
+
+    def set_app_indexer(self, indexer) -> None:
+        """Install a pre-built index (main.py builds one during startup warmup)."""
+        self._app_indexer = indexer
 
     async def execute(self, intent: Intent) -> dict[str, Any]:
         """Execute a parsed intent.
@@ -224,12 +235,17 @@ class Dispatcher:
             display_name = name or target_url
             return {"status": "ok", "text": f"I've opened {display_name} in your browser."}
 
-        # 2. Launch installed application via AppIndexer
-        from grace.automation.app_indexer import AppIndexer
-        if not hasattr(self, "_app_indexer") or self._app_indexer is None:
-            self._app_indexer = AppIndexer()
+        # 2. Launch installed application via AppIndexer. Building the index
+        # globs Program Files recursively, so it must never run on the loop.
+        # The lock stops two concurrent "open X" requests building it twice.
+        if self._app_indexer is None:
+            async with self._app_indexer_lock:
+                if self._app_indexer is None:
+                    from grace.automation.app_indexer import AppIndexer
 
-        return self._app_indexer.launch(name)
+                    self._app_indexer = await asyncio.to_thread(AppIndexer)
+
+        return await asyncio.to_thread(self._app_indexer.launch, name)
 
     async def _close_app(self, params: dict) -> dict:
         name = params.get("name", "")
@@ -237,7 +253,9 @@ class Dispatcher:
             return {"status": "error", "error": "Missing 'name' parameter"}
 
         try:
-            result = subprocess.run(
+            # taskkill blocks for up to 10s; keep it off the event loop.
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["taskkill", "/F", "/IM", f"{name}.exe"],
                 capture_output=True,
                 text=True,
@@ -246,7 +264,8 @@ class Dispatcher:
             if result.returncode == 0:
                 return {"status": "ok", "text": f"I've closed {name}."}
             else:
-                result2 = subprocess.run(
+                result2 = await asyncio.to_thread(
+                    subprocess.run,
                     ["taskkill", "/F", "/FI", f"WINDOWTITLE eq {name}"],
                     capture_output=True,
                     text=True,
@@ -272,7 +291,9 @@ class Dispatcher:
             docs_dir = os.path.join(user_profile, "Documents")
             cmd = f'$searchResults = Get-ChildItem -Path "{docs_dir}" -Recurse -Include *.pdf,*.docx,*.txt,*.xlsx -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -like "*{query}*" }} | Select-Object -First 10 FullName; $searchResults | ForEach-Object {{ $_.FullName }}'
 
-            result = subprocess.run(
+            # A recursive Get-ChildItem over Documents can run the full 30s.
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["powershell", "-Command", cmd],
                 capture_output=True,
                 text=True,

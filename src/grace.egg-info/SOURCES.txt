@@ -11,7 +11,6 @@ src/grace/audio/__init__.py
 src/grace/audio/capture.py
 src/grace/audio/wake_word.py
 src/grace/automation/__init__.py
-src/grace/automation/cua_bridge.py
 src/grace/intent/__init__.py
 src/grace/intent/parser.py
 src/grace/intent/prompt.py

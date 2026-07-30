@@ -731,7 +731,8 @@ class TestTTSPlayerBreak:
             player._queue.append(b"data2")
         assert player.queue_size == 2
         with player._lock:
-            item = player._queue.pop(0)
+            # _queue is a deque; still FIFO, which is what this asserts.
+            item = player._queue.popleft()
         assert item == b"data1"
         assert player.queue_size == 1
 

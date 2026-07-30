@@ -31,9 +31,10 @@ class TestConfig:
         assert config.vosk_threshold == 0.4
         assert config.whisper_vad_threshold == 0.008
         assert config.whisper_silence_duration_ms == 700
-        assert config.kokoro_workers == 3
+        # Two workers share one KModel; see KokoroEngine.
+        assert config.kokoro_workers == 2
         assert config.kokoro_device == "cuda"
-        assert config.kokoro_dtype == "float16"
+        assert config.kokoro_dtype == "float32"
 
     def test_llama_server_url(self):
         """Test derived server URL property."""

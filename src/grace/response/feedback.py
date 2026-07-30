@@ -24,8 +24,13 @@ class FeedbackSounds:
     """Generates and plays audio feedback tones."""
 
     @staticmethod
-    def play_chime(duration: float = 0.8, volume: float = 0.4) -> None:
-        """Play activation chime from custom MP3 asset file."""
+    def play_chime(duration: float = 0.8, volume: float = 0.4, blocking: bool = False) -> None:
+        """Play the activation chime.
+
+        Non-blocking by default: this runs on the asyncio thread right before
+        listening starts, and waiting out the ~0.8 s chime there delayed the
+        start of capture by the full length of the sound.
+        """
         global _CACHED_CHIME_SAMPLES, _CACHED_CHIME_RATE
 
         try:
@@ -44,7 +49,8 @@ class FeedbackSounds:
 
             if _CACHED_CHIME_SAMPLES is not None:
                 sd.play(_CACHED_CHIME_SAMPLES, _CACHED_CHIME_RATE)
-                sd.wait()
+                if blocking:
+                    sd.wait()
                 logger.debug("Custom chime MP3 played")
                 return
         except Exception as exc:
@@ -61,5 +67,6 @@ class FeedbackSounds:
         envelope[-fade_len:] = np.linspace(1, 0, fade_len)
         audio = (tone1 + tone2) * envelope * np.exp(-2 * t) * volume / 2
         sd.play(audio, sample_rate)
-        sd.wait()
+        if blocking:
+            sd.wait()
         logger.debug("Fallback chime played")

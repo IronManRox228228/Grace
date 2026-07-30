@@ -137,8 +137,22 @@ class OculixBridge:
             pass
 
     @classmethod
+    def is_enabled(cls) -> bool:
+        """Whether the OculiX visual fallback is switched on.
+
+        Off by default: it starts a JVM inside the Python process, and the
+        resolver tries three rendered font templates at a 2 s timeout each, so
+        an unresolved click can block for seconds. With the UIA/DOM element
+        graph doing the work, this path should almost never be needed.
+        """
+        import os
+        return os.getenv("USE_OCULIX", "false").lower() in ("true", "1", "yes")
+
+    @classmethod
     def is_available(cls) -> bool:
-        """Check if OculiX is initialized and ready."""
+        """Check if OculiX is enabled, initialized and ready."""
+        if not cls.is_enabled():
+            return False
         if not cls._available and not cls._jvm_started:
             cls.initialize()
         return cls._available

@@ -14,6 +14,19 @@ import aiohttp
 
 logger = logging.getLogger("grace.gemma")
 
+# Retries for a 429. Kept small and explicit: the user's key is rate-limited
+# quickly, and silently retrying forever just moves the stall somewhere else.
+RATE_LIMIT_RETRIES = 2
+RATE_LIMIT_BACKOFF_SECONDS = (1.0, 4.0)
+
+
+class RateLimitError(RuntimeError):
+    """Raised when the cloud model returns HTTP 429 after backoff.
+
+    Surfaced rather than swallowed so the caller can tell the user their quota
+    is exhausted, instead of silently degrading to a different model.
+    """
+
 
 class GemmaClient:
     """HTTP client supporting Cloud Gemini 3.6 Flash API and local llama-server."""
@@ -115,12 +128,13 @@ class GemmaClient:
         temperature: float = 0.2,
         max_tokens: int = 1024,
     ) -> AsyncIterator[str]:
-        """Stream response tokens from Google Gemini REST API with automatic model fallback."""
-        candidate_models = [self._model_name]
-        for fallback in ["gemini-3.1-flash-lite", "gemini-2.0-flash-lite", "gemini-1.5-flash-latest"]:
-            if fallback not in candidate_models:
-                candidate_models.append(fallback)
+        """Stream response tokens from the configured Gemini model.
 
+        Exactly one model is called. The old fallback chain
+        (gemini-2.0-flash-lite, gemini-1.5-flash-latest) turned a single
+        rate-limited request into three requests against three separate
+        quotas, which is the fastest possible way to exhaust all of them.
+        """
         system_instruction = None
         contents = []
         for msg in messages:
@@ -151,40 +165,66 @@ class GemmaClient:
         if system_instruction:
             payload["system_instruction"] = system_instruction
 
-        last_error = None
-        for model in candidate_models:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?key={self._api_key}&alt=sse"
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                        if resp.status != 200:
-                            body = await resp.text()
-                            logger.warning(f"Gemini model '{model}' failed with status {resp.status}: {body[:150]}")
-                            last_error = RuntimeError(f"HTTP {resp.status}: {body[:100]}")
-                            if resp.status == 429:
-                                await asyncio.sleep(1.0)
-                            continue
+        model = self._model_name
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
+            f":streamGenerateContent?key={self._api_key}&alt=sse"
+        )
 
-                        self._model_name = model  # Remember working model
-                        async for line_bytes in resp.content:
-                            line_str = line_bytes.decode("utf-8", errors="replace").strip()
-                            if line_str.startswith("data: "):
-                                data_json = line_str[6:].strip()
-                                try:
-                                    chunk = json.loads(data_json)
-                                    candidates = chunk.get("candidates", [])
-                                    if candidates and isinstance(candidates, list):
-                                        parts = candidates[0].get("content", {}).get("parts", [])
-                                        for part in parts:
-                                            text = part.get("text")
-                                            if text:
-                                                yield text
-                                except Exception:
-                                    pass
-                        return  # Successfully streamed content
-            except Exception as e:
-                logger.warning(f"Gemini streaming exception for model '{model}': {e}")
+        last_error = None
+        for attempt in range(RATE_LIMIT_RETRIES + 1):
+            try:
+                # Reuse the pooled session. Opening a fresh ClientSession per
+                # call threw away the connection pool and paid a full TCP+TLS
+                # handshake on every single turn.
+                session = await self._get_http()
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    if resp.status == 429:
+                        body = await resp.text()
+                        last_error = RateLimitError(
+                            f"{model} rate limited (HTTP 429): {body[:150]}"
+                        )
+                        if attempt < RATE_LIMIT_RETRIES:
+                            delay = RATE_LIMIT_BACKOFF_SECONDS[
+                                min(attempt, len(RATE_LIMIT_BACKOFF_SECONDS) - 1)
+                            ]
+                            logger.warning(
+                                f"Gemini '{model}' rate limited; retrying in {delay:.0f}s "
+                                f"({attempt + 1}/{RATE_LIMIT_RETRIES})"
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        raise last_error
+
+                    if resp.status != 200:
+                        body = await resp.text()
+                        logger.error(f"Gemini '{model}' failed with status {resp.status}: {body[:150]}")
+                        raise RuntimeError(f"HTTP {resp.status}: {body[:100]}")
+
+                    async for line_bytes in resp.content:
+                        line_str = line_bytes.decode("utf-8", errors="replace").strip()
+                        if line_str.startswith("data: "):
+                            data_json = line_str[6:].strip()
+                            try:
+                                chunk = json.loads(data_json)
+                                candidates = chunk.get("candidates", [])
+                                if candidates and isinstance(candidates, list):
+                                    parts = candidates[0].get("content", {}).get("parts", [])
+                                    for part in parts:
+                                        text = part.get("text")
+                                        if text:
+                                            yield text
+                            except Exception:
+                                pass
+                    return
+            except RateLimitError:
+                raise
+            except aiohttp.ClientError as e:
+                logger.warning(f"Gemini streaming transport error for '{model}': {e}")
                 last_error = e
+                if attempt >= RATE_LIMIT_RETRIES:
+                    break
+                await asyncio.sleep(RATE_LIMIT_BACKOFF_SECONDS[0])
 
         if last_error:
             raise last_error
@@ -192,35 +232,36 @@ class GemmaClient:
     async def _stream_response(self, payload: dict) -> AsyncIterator[str]:
         """Parse SSE stream and yield token chunks from local llama-server."""
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self._base_url}/v1/chat/completions",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=120),
-                ) as resp:
-                    if resp.status != 200:
-                        body = await resp.text()
-                        logger.error(f"LLM SSE stream failed with status {resp.status}: {body}")
-                        raise RuntimeError(f"LLM request failed: HTTP {resp.status}: {body}")
+            # Pooled session, same reasoning as the Gemini path.
+            session = await self._get_http()
+            async with session.post(
+                f"{self._base_url}/v1/chat/completions",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.error(f"LLM SSE stream failed with status {resp.status}: {body}")
+                    raise RuntimeError(f"LLM request failed: HTTP {resp.status}: {body}")
 
-                    async for line_bytes in resp.content:
-                        line_str = line_bytes.decode("utf-8", errors="replace").strip()
-                        if not line_str or line_str.startswith(":"):
+                async for line_bytes in resp.content:
+                    line_str = line_bytes.decode("utf-8", errors="replace").strip()
+                    if not line_str or line_str.startswith(":"):
+                        continue
+                    if line_str == "data: [DONE]":
+                        break
+                    if line_str.startswith("data: "):
+                        data_json = line_str[6:].strip()
+                        try:
+                            chunk_data = json.loads(data_json)
+                            choices = chunk_data.get("choices", [])
+                            if choices and isinstance(choices, list):
+                                delta = choices[0].get("delta", {})
+                                content = delta.get("content")
+                                if content:
+                                    yield content
+                        except json.JSONDecodeError:
                             continue
-                        if line_str == "data: [DONE]":
-                            break
-                        if line_str.startswith("data: "):
-                            data_json = line_str[6:].strip()
-                            try:
-                                chunk_data = json.loads(data_json)
-                                choices = chunk_data.get("choices", [])
-                                if choices and isinstance(choices, list):
-                                    delta = choices[0].get("delta", {})
-                                    content = delta.get("content")
-                                    if content:
-                                        yield content
-                            except json.JSONDecodeError:
-                                continue
         except Exception as e:
             logger.error(f"SSE streaming exception: {e}")
             raise
@@ -237,6 +278,10 @@ class GemmaClient:
             if stream is not None:
                 async for token in stream:
                     tokens.append(token)
+        except RateLimitError:
+            # Must reach the caller: quota exhaustion is something the user
+            # needs told, not something to paper over with an empty result.
+            raise
         except Exception as e:
             logger.error(f"Failed to generate intent: {e}")
 
@@ -266,6 +311,8 @@ class GemmaClient:
             if stream is not None:
                 async for token in stream:
                     tokens.append(token)
+        except RateLimitError:
+            raise
         except Exception as e:
             logger.error(f"Failed to generate text: {e}")
 

@@ -10,37 +10,13 @@ from typing import Optional, Any
 
 logger = logging.getLogger("grace.intent")
 
-# All valid tool names (union of CUA + hardcoded tools)
-VALID_TOOLS = {
-    # CUA tools
-    "cua_click",
-    "cua_type_text",
-    "cua_press_key",
-    "cua_screenshot",
-    "cua_text",
-    "cua_scroll",
-    "cua_drag",
-    "cua_activate",
-    "cua_list_apps",
-    "cua_list_windows",
-    "cua_get_window",
-    "cua_launch",
-    "cua_set_value",
-    "cua_secondary_action",
-    # System tools
-    "open_app",
-    "close_app",
-    "search_files",
-    "open_file",
-    "read_pdf",
-    "summarize_pdf",
-    "adjust_volume",
-    "lock_computer",
-    "open_calculator",
-    "delete_file",
-    # Conversation
-    "converse",
-}
+from grace.intent.tools import ALL_TOOLS
+
+# Derived from tools.py rather than hand-maintained. There were three separate
+# copies of this list (here, tools.py, and prompt.py) and they had already
+# drifted apart, so a tool could be advertised to the model and then rejected
+# by the parser - or vice versa.
+VALID_TOOLS = {tool.name for tool in ALL_TOOLS}
 
 
 class IntentParseError(Exception):

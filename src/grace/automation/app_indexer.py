@@ -6,27 +6,96 @@ app launch requests deterministically without falling back to browsers.
 """
 
 import glob
+import json
 import logging
 import os
 import subprocess
 import threading
+import time
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger("grace.automation.app_indexer")
+
+# Recursively globbing Program Files takes tens of seconds. The result barely
+# changes between runs, so it is cached on disk and only rebuilt when stale.
+CACHE_PATH = os.path.join(os.path.expanduser("~"), ".grace", "app_index.json")
+CACHE_MAX_AGE_SECONDS = 7 * 24 * 3600
+CACHE_VERSION = 1
 
 
 class AppIndexer:
     """Indexes and launches installed Windows applications."""
 
-    def __init__(self):
+    def __init__(self, use_cache: bool = True):
         self._apps: Dict[str, str] = {}
         self._uwp_apps: Dict[str, str] = {}
         self._indexed = False
         self._lock = threading.Lock()
+        if use_cache and self._load_cache():
+            return
         self._index_apps()
+        if use_cache:
+            self._save_cache()
+
+    # -- disk cache ------------------------------------------------------
+
+    def _load_cache(self) -> bool:
+        """Populate from the on-disk index. Returns False if absent or stale."""
+        try:
+            stat = os.stat(CACHE_PATH)
+        except OSError:
+            return False
+        if time.time() - stat.st_mtime > CACHE_MAX_AGE_SECONDS:
+            logger.info("App index cache is stale; rebuilding")
+            return False
+        try:
+            with open(CACHE_PATH, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception as e:
+            logger.debug(f"App index cache unreadable ({e}); rebuilding")
+            return False
+        if data.get("version") != CACHE_VERSION:
+            return False
+        apps = data.get("apps") or {}
+        uwp = data.get("uwp") or {}
+        if not apps and not uwp:
+            return False
+        with self._lock:
+            self._apps = dict(apps)
+            self._uwp_apps = dict(uwp)
+            self._indexed = True
+        logger.info(f"Loaded app index from cache ({len(apps)} apps, {len(uwp)} UWP)")
+        return True
+
+    def _save_cache(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
+            with self._lock:
+                payload = {
+                    "version": CACHE_VERSION,
+                    "apps": self._apps,
+                    "uwp": self._uwp_apps,
+                }
+            # Write-then-rename so a crash mid-write cannot leave a truncated
+            # cache that would be loaded as authoritative next launch.
+            tmp = CACHE_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            os.replace(tmp, CACHE_PATH)
+        except Exception as e:
+            logger.debug(f"Could not persist app index: {e}")
+
+    def refresh(self) -> None:
+        """Force a full rescan and rewrite the cache."""
+        with self._lock:
+            self._apps = {}
+            self._uwp_apps = {}
+        self._index_apps()
+        self._save_cache()
 
     def _index_apps(self) -> None:
         """Scan Start Menu shortcuts and local user programs."""
+        started = time.perf_counter()
         with self._lock:
             user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
             search_paths = [
@@ -47,7 +116,10 @@ class AppIndexer:
                     logger.debug(f"Error scanning pattern {path_pattern}: {e}")
 
             self._indexed = True
-            logger.info(f"Indexed {len(self._apps)} Windows desktop applications")
+            logger.info(
+                f"Indexed {len(self._apps)} Windows desktop applications "
+                f"in {time.perf_counter() - started:.1f}s"
+            )
 
         # Synchronously scan for UWP / Store Apps via PowerShell Get-StartApps
         self._scan_uwp_apps()

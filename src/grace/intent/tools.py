@@ -252,6 +252,34 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
 ALL_TOOLS: list[ToolDefinition] = CUA_TOOLS + SYSTEM_TOOLS
 
 
+def _signature(tool: ToolDefinition) -> str:
+    """`name(param: type, optional: type=default)` for one tool."""
+    parts = []
+    for p in tool.params:
+        piece = f"{p.name}: {p.param_type}"
+        if not p.required and p.default is not None:
+            piece += f"={p.default}"
+        parts.append(piece)
+    return f"{tool.name}({', '.join(parts)})"
+
+
+def format_tools_compact() -> str:
+    """One line per tool, for the intent prompt.
+
+    The intent prompt is on the critical path for every single utterance, so it
+    stays terse for prefill latency - but it is generated from this list rather
+    than hand-written. The hand-written copy had already lost
+    `cua_secondary_action` and `cua_get_window`, so the model could never call
+    them even though the parser accepted them.
+    """
+    lines = ["1. System Tools (Native Windows):"]
+    lines += [f"- {_signature(t)}: {t.description}" for t in SYSTEM_TOOLS]
+    lines.append("")
+    lines.append("2. CUA Tools (UI Automation):")
+    lines += [f"- {_signature(t)}: {t.description}" for t in CUA_TOOLS]
+    return "\n".join(lines)
+
+
 def format_tools_for_prompt() -> str:
     """Format all available tools into a rich, detailed schema string for system prompts."""
     lines = []

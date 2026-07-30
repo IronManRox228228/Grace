@@ -4,9 +4,17 @@ Classifies incoming user voice requests into either:
 1. Fast-Path (Deterministic Windows API execution)
 2. Agentic Goal (Autonomous multi-step ReAct loop)
 3. Direct Verbal Conversation
+
+Two things used to send almost everything down the slow path. Keywords were
+matched as substrings, so "explain" contained "plain"... and more damagingly
+"open" matched "opening", "happen" and "reopened", while "x" matched any word
+containing an x. And the keyword sweep ran *before* the parsed intent was
+consulted, so a request the intent model had already resolved to a single
+deterministic tool still took the full screenshot-and-vision loop.
 """
 
 import logging
+import re
 from enum import Enum
 from typing import Optional
 from grace.intent.parser import Intent
@@ -23,53 +31,96 @@ class TaskComplexity(Enum):
 class CapabilityRouter:
     """Routes voice intents to either the fast deterministic executor or the agentic loop."""
 
-    # Tools that execute in a single deterministic fast-path pass (pure hardware/OS locks)
+    # Tools that complete in one deterministic pass. No screen state is read,
+    # so there is nothing for the agentic loop to add.
     FAST_PATH_TOOLS = {
         "adjust_volume",
         "lock_computer",
+        "open_calculator",
+        "open_app",
+        "close_app",
+        "open_file",
+        "search_files",
+        "delete_file",
+        "cua_launch",
+        "cua_list_windows",
+        "cua_list_apps",
     }
 
-    # Comprehensive action verbs, UI elements, media terms, and workflow keywords
+    # Tools that inherently need to look at the screen and iterate.
+    AGENTIC_TOOLS = {
+        "cua_click",
+        "cua_type_text",
+        "cua_press_key",
+        "cua_scroll",
+        "cua_drag",
+        "cua_set_value",
+        "cua_secondary_action",
+        "cua_activate",
+        "read_pdf",
+        "summarize_pdf",
+    }
+
+    # Multi-step phrasings that genuinely need the agentic loop even when the
+    # intent model produced a single tool call. Deliberately much smaller than
+    # the old ~80-keyword list, which caught the word "app" in "happy".
     AGENTIC_KEYWORDS = {
-        # Action verbs & UI interactions
-        "click", "press", "type", "input", "select", "choose", "tap", "hit",
-        "scroll", "drag", "move", "hover", "focus", "play", "pause", "watch",
-        "open", "launch", "close", "exit", "stop", "search", "find", "lookup",
-        "navigate", "go to", "visit", "fill", "check", "read", "summarize",
-        "create", "write", "notes", "copy", "paste", "extract", "organize",
-
-        # UI components, screen & media elements
-        "video", "link", "button", "menu", "icon", "image", "photo", "picture",
-        "tab", "window", "page", "screen", "site", "website", "url", "browser",
-        "app", "application", "file", "folder", "doc", "pdf", "text", "element",
-
-        # Popular web platforms & desktop tools
-        "youtube", "google", "reddit", "github", "twitter", "x.com", "amazon",
-        "wikipedia", "netflix", "chatgpt", "edge", "chrome", "notepad", "calculator",
-        "explorer", "terminal", "cmd", "word", "excel", "powerpoint", "vlc", "spotify"
+        "click", "press", "type", "select", "choose", "tap",
+        "scroll", "drag", "hover", "play", "pause", "watch",
+        "navigate", "fill", "summarize", "extract", "organize",
+        "then", "after that", "and then",
     }
+
+    CONVERSATION_KEYWORDS = {
+        "hello", "hi", "hey", "thanks", "thank you", "goodbye", "bye",
+        "who are you", "what can you do", "how are you",
+    }
+
+    @classmethod
+    def _mentions(cls, text: str, phrases) -> bool:
+        """Whole-word / whole-phrase matching, not substring."""
+        for phrase in phrases:
+            pattern = r"\b" + r"\s+".join(re.escape(w) for w in phrase.split()) + r"\b"
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
+        return False
 
     @classmethod
     def classify(cls, prompt_text: str, parsed_intent: Optional[Intent] = None) -> TaskComplexity:
         """Determine task complexity path."""
-        prompt_lower = prompt_text.lower().strip()
+        prompt_lower = (prompt_text or "").lower().strip()
 
-        # Check for multi-step agentic keywords
-        if any(keyword in prompt_lower for keyword in cls.AGENTIC_KEYWORDS):
-            logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL (Keyword match: '{prompt_text}')")
-            return TaskComplexity.AGENTIC_GOAL
+        # 1. Trust the parsed intent first. It is the most specific signal we
+        #    have, and re-deciding from raw keywords discards that work.
+        if parsed_intent is not None:
+            tool = parsed_intent.tool or ""
 
-        if parsed_intent:
-            if parsed_intent.tool in cls.FAST_PATH_TOOLS:
-                logger.info(f"CapabilityRouter: Route -> FAST_PATH (Tool: '{parsed_intent.tool}')")
-                return TaskComplexity.FAST_PATH
-            elif parsed_intent.tool.startswith("cua_") or parsed_intent.tool in ("open_app", "close_app", "open_file", "read_pdf", "summarize_pdf"):
-                # App workflows and CUA manipulation -> Agentic path
-                logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL (Tool: '{parsed_intent.tool}')")
+            if tool in cls.AGENTIC_TOOLS:
+                logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL (tool '{tool}')")
                 return TaskComplexity.AGENTIC_GOAL
-            elif parsed_intent.is_conversation:
-                logger.info("CapabilityRouter: Route -> CONVERSATION")
+
+            if tool in cls.FAST_PATH_TOOLS:
+                # A single-tool intent still goes agentic if the utterance
+                # clearly chains more work onto it ("open YouTube and play...").
+                if cls._mentions(prompt_lower, cls.AGENTIC_KEYWORDS):
+                    logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL (multi-step phrasing around '{tool}')")
+                    return TaskComplexity.AGENTIC_GOAL
+                logger.info(f"CapabilityRouter: Route -> FAST_PATH (tool '{tool}')")
+                return TaskComplexity.FAST_PATH
+
+            if parsed_intent.is_conversation:
+                logger.info("CapabilityRouter: Route -> CONVERSATION (intent)")
                 return TaskComplexity.CONVERSATION
 
-        logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL (Default agentic for workflow prompt '{prompt_text}')")
+        # 2. No usable intent. Greetings and small talk should never take the
+        #    agentic path - that was a screenshot and a vision call to say hi.
+        if cls._mentions(prompt_lower, cls.CONVERSATION_KEYWORDS):
+            logger.info("CapabilityRouter: Route -> CONVERSATION (phrasing)")
+            return TaskComplexity.CONVERSATION
+
+        if cls._mentions(prompt_lower, cls.AGENTIC_KEYWORDS):
+            logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL (keyword match: '{prompt_text}')")
+            return TaskComplexity.AGENTIC_GOAL
+
+        logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL (default for '{prompt_text}')")
         return TaskComplexity.AGENTIC_GOAL

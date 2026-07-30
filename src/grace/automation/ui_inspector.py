@@ -299,9 +299,14 @@ class UIInspector:
             for elem in self._last_elements:
                 if elem.name.lower().strip() == q:
                     return elem
-            # Partial match
+            # Partial match. Deliberately one-directional: the reverse test
+            # (`elem.name in q`) meant a control named "x" matched any query
+            # containing an x, so lookups for names that do not exist returned
+            # an arbitrary control instead of failing. Short names are also
+            # excluded from substring matching for the same reason.
             for elem in self._last_elements:
-                if q in elem.name.lower() or elem.name.lower() in q:
+                name = elem.name.lower().strip()
+                if len(name) >= 3 and q in name:
                     return elem
 
         return None

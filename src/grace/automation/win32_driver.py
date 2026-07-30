@@ -31,9 +31,12 @@ SM_YVIRTUALSCREEN = 77
 SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 
-# Delays tuned for browser focus acquisition (Bug #1: first-click sink)
+# Delays tuned for browser focus acquisition (Bug #1: first-click sink).
+# HOVER_SETTLE_FAST_MS applies when the target window was already foreground,
+# which is the common case for a multi-step agent acting inside one window.
 FOCUS_SETTLE_MS = 150
 HOVER_SETTLE_MS = 60
+HOVER_SETTLE_FAST_MS = 10
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -70,6 +73,16 @@ class INPUT(ctypes.Structure):
 
 class Win32Driver:
     """Dispatches background input events to Windows application message queues."""
+
+    @classmethod
+    def _is_foreground(cls, target_hwnd: int) -> bool:
+        """True if target_hwnd is already the foreground window."""
+        try:
+            import win32gui
+
+            return win32gui.GetForegroundWindow() == target_hwnd
+        except Exception:
+            return False
 
     @classmethod
     def _ensure_foreground(cls, target_hwnd: int) -> bool:
@@ -133,8 +146,12 @@ class Win32Driver:
             logger.debug(f"ALT-tap unlock failed: {e}")
 
     @classmethod
-    def click_at(cls, x: int, y: int, hwnd: Optional[int] = None) -> bool:
+    def click_at(cls, x: int, y: int, hwnd: Optional[int] = None, clicks: int = 1) -> bool:
         """Dispatch a mouse click to physical coordinates (x, y).
+
+        `clicks` > 1 sends repeated down/up pairs inside the double-click time,
+        so double-click requests are honoured here rather than only on the
+        pyautogui fallback path.
 
         Fix Bug #1 (first-click sink): activate & verify foreground focus first.
         Fix Bug #3 (missing hover): move the hardware cursor (SetCursorPos) and
@@ -144,24 +161,38 @@ class Win32Driver:
         DPIHelper.ensure_dpi_aware()
 
         target_hwnd = None
+        already_foreground = False
         try:
             import win32gui
 
             target_hwnd = hwnd or win32gui.WindowFromPoint((int(x), int(y)))
             if target_hwnd and win32gui.IsWindowVisible(target_hwnd):
-                cls._ensure_foreground(target_hwnd)
+                # _ensure_foreground returns immediately (and sleeps nothing)
+                # when the window is already active; remember that so the hover
+                # settle below can be shortened too.
+                already_foreground = cls._is_foreground(target_hwnd)
+                if not already_foreground:
+                    cls._ensure_foreground(target_hwnd)
         except Exception as e:
             # pywin32 optional; focus activation is best-effort
             logger.debug(f"Win32Driver focus step skipped: {e}")
 
-        # Position the hardware cursor first so the OS tracks a real hover state
+        # Position the hardware cursor first so the OS tracks a real hover state.
+        # The settle exists because a freshly-activated Chromium window swallows
+        # a click that arrives before it has processed the activation; a window
+        # that was already in front needs no such grace period.
         try:
             ctypes.windll.user32.SetCursorPos(int(x), int(y))
-            time.sleep(HOVER_SETTLE_MS / 1000.0)
+            settle_ms = HOVER_SETTLE_FAST_MS if already_foreground else HOVER_SETTLE_MS
+            time.sleep(settle_ms / 1000.0)
         except Exception as e:
             logger.debug(f"SetCursorPos failed: {e}")
 
-        cls.send_input_click(x, y)
+        for i in range(max(1, int(clicks or 1))):
+            if i:
+                # Comfortably inside the default 500ms double-click interval.
+                time.sleep(0.05)
+            cls.send_input_click(x, y)
         return True
 
     @classmethod

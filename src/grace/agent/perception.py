@@ -7,6 +7,7 @@ and Win32 UI control hierarchy context to feed Gemma's reasoning loop.
 import asyncio
 import io
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any, Optional, List
 
@@ -14,19 +15,50 @@ logger = logging.getLogger("grace.agent.perception")
 
 
 def _run_async(coro):
-    """Safely run async coroutine in sync or async contexts."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    """Resolve a WinRT awaitable from either a sync or an async context.
 
-    if loop and loop.is_running():
-        # Running inside existing event loop
-        import nest_asyncio
-        nest_asyncio.apply()
-        return loop.run_until_complete(coro)
-    else:
+    This used to call nest_asyncio.apply() and then re-enter the *running*
+    loop. Monkey-patching the loop to be reentrant from library code is a
+    process-wide change that breaks the invariants asyncio.to_thread and
+    aiohttp rely on, and it can deadlock if the coroutine ever needs the loop
+    it is nested inside. Here a nested call is pushed to a short-lived thread
+    with its own loop instead, so the outer loop is never re-entered.
+    """
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+
+    if running is None:
         return asyncio.run(coro)
+
+    result: dict = {}
+
+    def _worker():
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as e:  # noqa: BLE001 - re-raised on the caller's thread
+            result["error"] = e
+
+    thread = threading.Thread(target=_worker, name="grace-winrt-ocr", daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
+def _word_rect(word) -> Optional[tuple[int, int, int, int]]:
+    """Read a WinRT OcrWord's rect, tolerating either naming convention."""
+    rect = getattr(word, "bounding_rect", None)
+    if rect is None:
+        rect = getattr(word, "boundingRect", None)
+    if rect is None:
+        return None
+    try:
+        return (int(rect.x), int(rect.y), int(rect.width), int(rect.height))
+    except Exception:
+        return None
 
 
 @dataclass
@@ -60,6 +92,14 @@ class ScreenSnapshot:
     # Fix Bug #2: DPI scale factor (logical -> physical) so the LLM's relative
     # (x, y) predictions map 1:1 to the physical screen pixel grid.
     dpi_scale: float = 1.0
+    # The structured element graph. Carried on the snapshot so the click path
+    # uses the exact same ids the model was shown, instead of re-walking the
+    # tree and renumbering from a screen that has since changed.
+    graph: Any = None
+    # Dimensions of the image actually sent to the vision model, which is
+    # downscaled. Grounding coordinates come back in *this* space.
+    image_width: int = 0
+    image_height: int = 0
 
     def to_markdown(self) -> str:
         """Format the screen state into clean markdown for Gemma."""
@@ -78,7 +118,12 @@ class ScreenSnapshot:
         # Fix Bug #2: surface DPI scale so coordinates predict physical pixels.
         lines.append(f"DPI Scale: {self.dpi_scale:.2f} (logical -> physical)")
 
-        if self.ui_elements:
+        # Prefer the structured graph: it carries role, value, placeholder and
+        # the chrome/page distinction, none of which the flat list had.
+        if self.graph is not None and len(self.graph):
+            lines.append("")
+            lines.append(self.graph.to_prompt(limit=40))
+        elif self.ui_elements:
             lines.append("\n### Active Interactive Accessibility Controls (Use element_index to click):")
             for elem in self.ui_elements[:35]:
                 cl, ct, cr, cb = elem.bounds
@@ -101,9 +146,11 @@ class PerceptionEngine:
     """Captures desktop state, performs OCR, and extracts Win32 control metadata."""
 
     _shared_inspector = None
+    _shared_graph_builder = None
 
-    def __init__(self):
+    def __init__(self, run_ocr: bool = True):
         self._winrt_ocr_available = False
+        self._run_ocr = run_ocr
         self._check_ocr_support()
         if PerceptionEngine._shared_inspector is None:
             from grace.automation.ui_inspector import UIInspector
@@ -115,6 +162,16 @@ class PerceptionEngine:
             from grace.automation.ui_inspector import UIInspector
             cls._shared_inspector = UIInspector()
         return cls._shared_inspector
+
+    @classmethod
+    def get_graph_builder(cls):
+        """One builder process-wide, so its cache is actually shared."""
+        if cls._shared_graph_builder is None:
+            from grace.config import Config
+            from grace.perception.element_graph import ElementGraphBuilder
+
+            cls._shared_graph_builder = ElementGraphBuilder(cdp_port=Config().cdp_port)
+        return cls._shared_graph_builder
 
     def _check_ocr_support(self):
         """Check availability of Windows.Media.Ocr."""
@@ -128,18 +185,41 @@ class PerceptionEngine:
 
     def capture_snapshot(self) -> ScreenSnapshot:
         """Capture desktop screenshot, run OCR, and query active window info."""
+        from grace.util.timing import stage
+
         active_window = self._get_active_window_info()
-        width, height, img_bytes = self._take_screenshot()
+        with stage("screenshot"):
+            width, height, img_bytes, image_width, image_height = self._take_screenshot()
 
-        ocr_lines = []
-        if img_bytes:
-            ocr_lines = self._run_ocr(img_bytes, width, height)
-
-        ui_elements = []
+        graph = None
         try:
-            ui_elements = self.get_shared_inspector().inspect_active_window()
+            with stage("element_graph") as graph_stage:
+                graph = self.get_graph_builder().build()
+                graph_stage.detail(f"{len(graph)} elements via {'+'.join(graph.sources) or 'none'}")
         except Exception as e:
-            logger.debug(f"UIInspector query in perception engine skipped: {e}")
+            logger.debug(f"Element graph build skipped: {e}")
+
+        # OCR is only needed where the accessibility tree comes up empty, e.g.
+        # canvas-rendered or remote-desktop UIs. Skipping it when the graph is
+        # rich removes the most expensive part of an observation.
+        ocr_lines = []
+        should_ocr = self._run_ocr and img_bytes and (graph is None or len(graph) < 5)
+        if should_ocr:
+            with stage("ocr") as ocr_stage:
+                ocr_lines = self._perform_ocr(img_bytes, width, height)
+                ocr_stage.detail(f"{len(ocr_lines)} lines")
+
+        # The legacy flat inspector is now only a fallback: when the graph has
+        # elements it supersedes this entirely, and running both walked the UIA
+        # tree twice per observation for nothing.
+        ui_elements = []
+        if graph is None or not len(graph):
+            try:
+                with stage("uia_legacy") as uia_stage:
+                    ui_elements = self.get_shared_inspector().inspect_active_window()
+                    uia_stage.detail(f"{len(ui_elements)} elements")
+            except Exception as e:
+                logger.debug(f"UIInspector query in perception engine skipped: {e}")
 
         # Fix Bug #2: capture the active per-monitor DPI scale so the agent
         # prompt exposes the logical->physical coordinate mapping.
@@ -160,6 +240,9 @@ class PerceptionEngine:
             ui_elements=ui_elements,
             png_bytes=img_bytes,
             dpi_scale=dpi_scale,
+            graph=graph,
+            image_width=image_width,
+            image_height=image_height,
         )
 
     async def capture_snapshot_async(self) -> ScreenSnapshot:
@@ -186,19 +269,38 @@ class PerceptionEngine:
             logger.debug(f"Failed to query active window info: {e}")
             return None
 
-    def _take_screenshot(self) -> tuple[int, int, Optional[bytes]]:
-        """Take screenshot and return (width, height, PNG bytes)."""
+    def _take_screenshot(self) -> tuple[int, int, Optional[bytes], int, int]:
+        """Screenshot the desktop.
+
+        Returns (screen_w, screen_h, png_bytes, image_w, image_h). The image is
+        downscaled before encoding: a full 4K PNG base64'd into every turn is a
+        large share of the prompt, and grounding models are trained on far
+        smaller inputs. image_w/h are returned so predicted coordinates can be
+        scaled back to screen space.
+        """
         try:
             import pyautogui
+            from grace.config import Config
+
             screenshot = pyautogui.screenshot()
+            screen_w, screen_h = screenshot.width, screenshot.height
+
+            max_width = Config().screenshot_max_width
+            image = screenshot
+            if max_width and screen_w > max_width:
+                ratio = max_width / float(screen_w)
+                image = screenshot.resize(
+                    (max_width, max(1, int(screen_h * ratio)))
+                )
+
             buf = io.BytesIO()
-            screenshot.save(buf, format="PNG", compress_level=1)
-            return screenshot.width, screenshot.height, buf.getvalue()
+            image.save(buf, format="PNG", compress_level=1)
+            return screen_w, screen_h, buf.getvalue(), image.width, image.height
         except Exception as e:
             logger.debug(f"pyautogui screenshot failed: {e}, using fallback dimensions")
-            return 1920, 1080, None
+            return 1920, 1080, None, 0, 0
 
-    def _run_ocr(self, img_bytes: bytes, width: int, height: int) -> List[OcrLine]:
+    def _perform_ocr(self, img_bytes: bytes, width: int, height: int) -> List[OcrLine]:
         """Perform OCR on screenshot bytes."""
         if not img_bytes:
             return []
@@ -225,15 +327,25 @@ class PerceptionEngine:
                     lines = []
                     for line in result.lines:
                         text = line.text
-                        # FIX BUG #1: Calculate real bounding box from word rectangles
-                        if line.words and len(line.words) > 0:
-                            min_x = min(int(w.boundingRect.x) for w in line.words)
-                            min_y = min(int(w.boundingRect.y) for w in line.words)
-                            max_r = max(int(w.boundingRect.x + w.boundingRect.width) for w in line.words)
-                            max_b = max(int(w.boundingRect.y + w.boundingRect.height) for w in line.words)
-                            rect = (min_x, min_y, max_r - min_x, max_b - min_y)
-                        else:
-                            rect = (0, 0, 0, 0)
+                        # Real bounding box from the word rectangles. The Python
+                        # WinRT projection exposes snake_case `bounding_rect`;
+                        # the old `boundingRect` raised AttributeError on every
+                        # line, so this silently fell through to Tesseract on
+                        # every single turn after paying for the WinRT decode.
+                        rect = (0, 0, 0, 0)
+                        try:
+                            words = list(line.words or [])
+                            if words:
+                                boxes = [_word_rect(w) for w in words]
+                                boxes = [b for b in boxes if b is not None]
+                                if boxes:
+                                    min_x = min(b[0] for b in boxes)
+                                    min_y = min(b[1] for b in boxes)
+                                    max_r = max(b[0] + b[2] for b in boxes)
+                                    max_b = max(b[1] + b[3] for b in boxes)
+                                    rect = (min_x, min_y, max_r - min_x, max_b - min_y)
+                        except Exception as e:
+                            logger.debug(f"OCR word rect extraction failed: {e}")
                         lines.append(OcrLine(text=text, bounding_box=rect))
                     return lines
             except Exception as e:

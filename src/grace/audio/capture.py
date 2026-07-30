@@ -1,6 +1,7 @@
 import logging
 from typing import Optional
 
+import numpy as np
 import pyaudio
 
 logger = logging.getLogger("grace.audio")
@@ -137,13 +138,18 @@ class AudioCapture:
         return list(struct.unpack(f"<{len(raw) // 2}h", raw))
 
     def get_rms(self, chunk: bytes) -> float:
-        """Calculate RMS energy of a PCM chunk for VAD."""
-        import struct
+        """Calculate RMS energy of a PCM chunk for VAD.
 
-        samples = struct.unpack(f"<{len(chunk) // 2}h", chunk)
-        if not samples:
+        Runs ~31x/second on every captured chunk, so it uses numpy rather than
+        a Python-level sum over unpacked samples. An odd byte count still
+        raises, matching struct.unpack's behaviour.
+        """
+        if len(chunk) % 2 != 0:
+            raise ValueError(f"PCM16 chunk has an odd byte count: {len(chunk)}")
+        samples = np.frombuffer(chunk, dtype=np.int16)
+        if samples.size == 0:
             return 0.0
-        return (sum(s * s for s in samples) / len(samples)) ** 0.5
+        return float(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
 
     def close(self) -> None:
         """Fully clean up resources."""

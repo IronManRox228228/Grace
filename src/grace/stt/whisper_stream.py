@@ -31,6 +31,9 @@ class WhisperStreaming:
         self._buffer = bytearray()
         self._last_transcript = ""
         self._initialized = False
+        # Whisper always resamples to 16 kHz internally; used only to size the
+        # one second of silence fed to warmup().
+        self._sample_rate_hint = 16000
 
     def _initialize(self):
         if self._initialized:
@@ -53,6 +56,27 @@ class WhisperStreaming:
         )
         self._device = device
         self._initialized = True
+
+    def warmup(self) -> bool:
+        """Load the model and run one throwaway inference.
+
+        Without this the user's first utterance pays the full model load plus
+        the first-call CUDA kernel autotune, which is seconds of dead air.
+        Safe to call from a background thread; failures are non-fatal because
+        transcribe() will initialise lazily anyway.
+        """
+        try:
+            self._initialize()
+            silence = np.zeros(self._sample_rate_hint, dtype=np.float32)
+            segments, _info = self._model.transcribe(silence, language="en", beam_size=1, vad_filter=False)
+            # faster-whisper is lazy: the generator must be drained to do work.
+            for _ in segments:
+                pass
+            logger.info(f"Whisper warmed up on {self._device}")
+            return True
+        except Exception as e:
+            logger.warning(f"Whisper warmup failed: {e}")
+            return False
 
     def add_chunk(self, chunk: bytes):
         """Add an audio chunk to the buffer."""
