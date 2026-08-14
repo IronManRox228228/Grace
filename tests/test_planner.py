@@ -8,6 +8,7 @@ target genuinely cannot be named.
 """
 
 import asyncio
+import math
 import os
 import sys
 
@@ -170,7 +171,27 @@ class TestPlannerCalls:
 
 
 class TestPlannerBudget:
-    """The cap is what actually bounds quota use, since the key rate-limits fast."""
+    """Uncapped by default; an explicit positive cap is still enforced.
+
+    The cap used to default to 8, which aborted long goals with "I've used up
+    my planning budget" partway through a real task.
+    """
+
+    def test_default_planner_is_uncapped(self):
+        planner = Planner(FakeLLM([STEP_JSON] * 40))
+        assert planner.is_unlimited is True
+        assert planner.calls_remaining == math.inf
+
+        async def drive():
+            for _ in range(40):
+                assert await planner.plan(goal="g", elements_prompt="[]") is not None
+
+        asyncio.run(drive())
+        assert planner.calls_made == 40
+
+    def test_zero_and_negative_mean_unlimited(self):
+        assert Planner(FakeLLM([]), max_calls=0).is_unlimited is True
+        assert Planner(FakeLLM([]), max_calls=-1).is_unlimited is True
 
     def test_cap_is_enforced(self):
         llm = FakeLLM([STEP_JSON] * 10)

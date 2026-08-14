@@ -361,6 +361,22 @@ class TestGemmaClientBreak:
         result = asyncio.run(client.generate_text("user", "sys"))
         assert result is None
 
+    def test_before_request_hook_runs_before_the_call(self):
+        """Used to hot-swap the GPU model - must fire even if the call fails."""
+        calls = []
+
+        async def hook():
+            calls.append(1)
+
+        client = GemmaClient("http://127.0.0.1:1", before_request=hook)
+        asyncio.run(client.chat(messages=[{"role": "user", "content": "hi"}], stream=False))
+        assert calls == [1]
+
+    def test_no_hook_by_default(self):
+        client = GemmaClient("http://127.0.0.1:1")
+        # Should not raise even though there is nothing to call.
+        asyncio.run(client.chat(messages=[{"role": "user", "content": "hi"}], stream=False))
+
 
 # ─────────────────────────────────────────────
 # INTENT PARSER BREAK TESTS

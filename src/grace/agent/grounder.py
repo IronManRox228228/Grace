@@ -96,7 +96,10 @@ class Grounder:
                 prompt=prompt,
                 system_prompt=GROUNDER_SYSTEM_PROMPT,
                 temperature=0.0,
-                max_tokens=128,
+                # UI-TARS emits a Thought before its Action; 128 tokens clipped
+                # the Action off any reasoning longer than a sentence, and a
+                # truncated response parses as "unrecognized" and burns a turn.
+                max_tokens=2048,
                 image_b64=base64.b64encode(png_bytes).decode("utf-8"),
             )
         except Exception as e:

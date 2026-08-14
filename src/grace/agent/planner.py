@@ -17,6 +17,7 @@ it went wrong instead of blindly retrying.
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -26,9 +27,12 @@ from grace.llm.gemma_client import RateLimitError
 
 logger = logging.getLogger("grace.agent.planner")
 
-# The planner is the only thing that talks to the cloud during a goal, so the
-# cap here is what actually bounds quota use per request.
-DEFAULT_MAX_CALLS = 8
+# Unlimited by default. A cap here aborts a goal mid-way with "I've used up my
+# planning budget", which is worse than the quota risk it was guarding against:
+# a partially-performed task leaves the desktop in a state the user then has to
+# clean up by hand. Set PLANNER_MAX_CALLS_PER_GOAL to a positive number to
+# re-impose a cap; 0 or negative means no limit.
+DEFAULT_MAX_CALLS = 0
 
 
 class PlannerBudgetExceeded(RuntimeError):
@@ -115,16 +119,24 @@ class Planner:
 
     def __init__(self, llm, max_calls: int = DEFAULT_MAX_CALLS):
         self._llm = llm
-        self._max_calls = max_calls
+        # 0 or negative disables the cap entirely.
+        self._max_calls = max_calls if max_calls and max_calls > 0 else math.inf
         self._calls = 0
         self._system_prompt = get_planner_system_prompt()
+
+    @property
+    def is_unlimited(self) -> bool:
+        return self._max_calls == math.inf
 
     @property
     def calls_made(self) -> int:
         return self._calls
 
     @property
-    def calls_remaining(self) -> int:
+    def calls_remaining(self) -> float:
+        """Remaining calls, or math.inf when uncapped."""
+        if self.is_unlimited:
+            return math.inf
         return max(0, self._max_calls - self._calls)
 
     def reset(self) -> None:
@@ -165,8 +177,9 @@ class Planner:
     ) -> Optional[PlannedStep]:
         """Ask for the next step. Returns None if the model gave nothing usable.
 
-        Raises PlannerBudgetExceeded when the per-goal cap is spent, and
-        RateLimitError straight through so the loop can tell the user.
+        Raises PlannerBudgetExceeded only when a positive per-goal cap has been
+        configured and is spent, and RateLimitError straight through so the loop
+        can tell the user.
         """
         if self._calls >= self._max_calls:
             raise PlannerBudgetExceeded(
@@ -189,7 +202,10 @@ class Planner:
             prompt=prompt,
             system_prompt=self._system_prompt,
             temperature=0.1,
-            max_tokens=512,
+            # Generous: a truncated plan is an unparseable plan, which costs a
+            # whole wasted step. Reasoning is never worth clipping to save
+            # output tokens.
+            max_tokens=8192,
         )
         if not raw:
             logger.warning("Planner returned an empty response")

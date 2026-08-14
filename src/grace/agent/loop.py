@@ -47,7 +47,10 @@ _CONVERSATIONAL_PATTERNS = (
 )
 _CONVERSATIONAL_RE = re.compile("|".join(_CONVERSATIONAL_PATTERNS), re.IGNORECASE)
 
-DEFAULT_MAX_ITERATIONS = 12
+# 0 means no step limit. A cap here does not make the agent smarter, it just
+# makes it stop halfway through a real task; set AGENT_MAX_ITERATIONS to a
+# positive number to re-impose one.
+DEFAULT_MAX_ITERATIONS = 0
 
 
 class AgentLoop:
@@ -70,9 +73,13 @@ class AgentLoop:
         self._dispatcher = dispatcher
         self._perception = perception or PerceptionEngine()
         self._ws_server = ws_server
-        self._planner = planner or Planner(gemma, max_calls=_config_int("planner_max_calls_per_goal", 8))
+        self._planner = planner or Planner(gemma, max_calls=_config_int("planner_max_calls_per_goal", 0))
         self._grounder = grounder or Grounder(self._vision_llm, on_demand_start=start_grounding_backend)
-        self._max_iterations = max_iterations or _config_int("agent_max_iterations", DEFAULT_MAX_ITERATIONS)
+        # `is None`, not `or`: 0 is a meaningful value here (unlimited).
+        self._max_iterations = (
+            max_iterations if max_iterations is not None
+            else _config_int("agent_max_iterations", DEFAULT_MAX_ITERATIONS)
+        )
         self._pending: Optional[dict[str, Any]] = None
 
     # -- safety resumption -------------------------------------------------
@@ -121,11 +128,14 @@ class AgentLoop:
 
     async def run(self, user_goal: str, max_iterations: Optional[int] = None) -> dict[str, Any]:
         """Run the autonomous Observe-Plan-Act loop for a given user goal."""
-        limit = max_iterations or self._max_iterations
+        limit = max_iterations if max_iterations is not None else self._max_iterations
         memory = AgentMemory(user_goal=user_goal, max_iterations=limit)
         self._planner.reset()
         self._pending = None
-        logger.info(f"AgentLoop started for goal: '{user_goal}' (max {limit} steps)")
+        logger.info(
+            f"AgentLoop started for goal: '{user_goal}' "
+            f"({'unlimited' if not limit or limit <= 0 else f'max {limit}'} steps)"
+        )
         return await self._continue(memory)
 
     async def _continue(

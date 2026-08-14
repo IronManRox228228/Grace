@@ -14,6 +14,11 @@ class Config:
         r"C:\Users\Ashman Das\Downloads\UI-TARS-1.5-7B.mmproj-Q8_0.gguf",
     )
     use_ui_tars_local: bool = os.getenv("USE_UI_TARS_LOCAL", "true").lower() in ("true", "1", "yes")
+    # A separate local model for the planner role (JSON/tool-calling), used
+    # only when running fully local. UI-TARS is grounding-tuned and a poor fit
+    # for the planner's structured-output job, so this is deliberately a
+    # different gguf from llama_model_path.
+    local_planner_model_path: str = os.getenv("LLAMA_PLANNER_MODEL_PATH", "")
     kokoro_model_path: str = os.getenv(
         "KOKORO_MODEL_PATH",
         r"C:\Users\Ashman Das\.cache\huggingface\hub\models--hexgrad--Kokoro-82M\snapshots\f3ff3571791e39611d31c381e3a41a3af07b4987\kokoro-v1_0.pth",
@@ -76,9 +81,11 @@ class Config:
     kokoro_warmup: bool = os.getenv("KOKORO_WARMUP", "true").lower() in ("true", "1", "yes")
     kokoro_cache_size: int = int(os.getenv("KOKORO_CACHE_SIZE", "32"))
 
-    # Agent loop
-    agent_max_iterations: int = int(os.getenv("AGENT_MAX_ITERATIONS", "12"))
-    planner_max_calls_per_goal: int = int(os.getenv("PLANNER_MAX_CALLS_PER_GOAL", "8"))
+    # Agent loop. Both default to 0 = unlimited: a cap only ever stops a real
+    # task halfway ("I've used up my planning budget"), leaving the desktop in a
+    # half-changed state. Set either to a positive number to re-impose a limit.
+    agent_max_iterations: int = int(os.getenv("AGENT_MAX_ITERATIONS", "0"))
+    planner_max_calls_per_goal: int = int(os.getenv("PLANNER_MAX_CALLS_PER_GOAL", "0"))
     screenshot_max_width: int = int(os.getenv("SCREENSHOT_MAX_WIDTH", "1280"))
 
     # Browser DOM access. Attach-only: Grace never launches a browser with a
@@ -101,3 +108,13 @@ class Config:
     @property
     def llama_server_url(self) -> str:
         return f"http://{self.llama_host}:{self.llama_port}"
+
+    @property
+    def model_swap_enabled(self) -> bool:
+        """True when planner and grounder both need the same local GPU.
+
+        Only relevant when the planner is local too (use_cloud_llm=false) and
+        a distinct planner model has been configured. If the planner stays on
+        Gemini, only UI-TARS ever needs the GPU and there is no contention.
+        """
+        return (not self.use_cloud_llm) and bool(self.local_planner_model_path)

@@ -47,17 +47,34 @@ DONE = '{"action": "converse", "params": {}, "is_completed": true, "final_respon
 
 
 class TestIterationCap:
-    def test_default_cap_is_twelve_not_a_hundred(self):
-        loop, _, _ = make_loop([])
-        assert loop._max_iterations == 12
+    """Uncapped by default; an explicit positive cap is still honoured.
 
-    def test_cap_is_respected(self):
-        # A model that never finishes must stop, not run for 100 screenshots.
+    A step cap only ever abandons a real task halfway, leaving the desktop in a
+    half-changed state the user then has to undo by hand.
+    """
+
+    def test_there_is_no_default_step_limit(self):
+        loop, _, _ = make_loop([])
+        assert loop._max_iterations == 0
+        assert AgentMemory("g", max_iterations=0).is_exceeded is False
+
+    def test_an_explicit_cap_is_still_respected(self):
         click = '{"action": "cua_click", "params": {"x": 1, "y": 2}, "expect": "something"}'
         loop, _, _ = make_loop([click] * 20)
         res = asyncio.run(loop.run(user_goal="click forever", max_iterations=3))
         assert res["status"] in ("max_iterations_reached", "planner_budget_exceeded")
         assert len(res["steps"]) <= 3
+
+    def test_uncapped_loop_runs_past_the_old_twelve_step_limit(self):
+        click = '{"action": "cua_click", "params": {"x": 1, "y": 2}, "expect": "something"}'
+        loop, _, _ = make_loop([click] * 19 + [DONE])
+        res = asyncio.run(loop.run(user_goal="do a long thing"))
+        assert res["status"] == "ok"
+        assert len(res["steps"]) > 12
+
+    def test_planner_is_uncapped_by_default(self):
+        loop, _, _ = make_loop([])
+        assert loop._planner.is_unlimited is True
 
 
 class TestVerification:

@@ -142,7 +142,8 @@ class StepRecord:
 class AgentMemory:
     """State memory for an autonomous task session with SQLite persistence."""
 
-    def __init__(self, user_goal: str, max_iterations: int = 100, persistent_store: Optional[PersistentMemoryStore] = None):
+    def __init__(self, user_goal: str, max_iterations: int = 0, persistent_store: Optional[PersistentMemoryStore] = None):
+        # max_iterations <= 0 means no step limit at all.
         self.user_goal: str = user_goal
         self.max_iterations: int = max_iterations
         self.steps_taken: list[StepRecord] = []
@@ -186,7 +187,13 @@ class AgentMemory:
 
     @property
     def is_exceeded(self) -> bool:
-        """Whether the maximum allowed iteration limit has been reached."""
+        """Whether the maximum allowed iteration limit has been reached.
+
+        Always False when max_iterations is 0 or negative - the loop then runs
+        until the goal is genuinely done.
+        """
+        if not self.max_iterations or self.max_iterations <= 0:
+            return False
         return self.current_iteration >= self.max_iterations
 
     def format_history_markdown(self) -> str:
