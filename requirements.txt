@@ -22,7 +22,18 @@ opencv-python>=4.8.0
 JPype1>=1.5.0
 Pillow>=10.0.0
 comtypes>=1.4.0
-pytesseract>=0.3.10
+pytesseract>=0.3.10   # fallback OCR; needs tesseract.exe installed separately
+# Native Windows OCR, which agent/perception.py prefers and which needs no
+# external binary. Undeclared until now, so it was never installed and every
+# capture fell through to Tesseract - whose binary is also not installed by
+# any setup step, leaving OCR entirely non-functional. That is invisible in
+# normal use and disabling in an app whose controls UIA does not report.
+winrt-Windows.Media.Ocr>=2.0.0
+winrt-Windows.Graphics.Imaging>=2.0.0
+winrt-Windows.Storage.Streams>=2.0.0
+winrt-Windows.Globalization>=2.0.0
+winrt-Windows.Foundation>=2.0.0
+winrt-Windows.Foundation.Collections>=2.0.0
 send2trash>=1.8.0
 # Imported at runtime but previously undeclared:
 scikit-learn>=1.3.0   # rag/retriever.py TF-IDF index

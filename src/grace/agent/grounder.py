@@ -29,7 +29,7 @@ Respond in exactly this format and nothing else:
 Thought: <one short sentence identifying the element>
 Action: click(start_box='(x,y)')
 
-x and y are pixel coordinates in the image you were given, measured from its top-left corner. Point at the centre of the element. If the element is not visible in the screenshot, respond with Action: wait()."""
+x and y are pixel coordinates in the image you were given, measured from its top-left corner, where x is between 0 and {width} and y is between 0 and {height}. Do not normalise them to any other range. Point at the centre of the element. If the element is not visible in the screenshot, respond with Action: wait()."""
 
 
 @dataclass
@@ -91,10 +91,16 @@ class Grounder:
 
         self.calls_made += 1
         prompt = f"Locate this element: {description}"
+        # The image's real dimensions go into the prompt, so "pixels in the
+        # image you were given" is a checkable instruction rather than a hope -
+        # see scale_to_screen for what it costs when the space is ambiguous.
+        system_prompt = GROUNDER_SYSTEM_PROMPT.format(
+            width=image_size[0], height=image_size[1]
+        )
         try:
             raw = await self._llm.generate_text(
                 prompt=prompt,
-                system_prompt=GROUNDER_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 temperature=0.0,
                 # UI-TARS emits a Thought before its Action; 128 tokens clipped
                 # the Action off any reasoning longer than a sentence, and a
@@ -134,8 +140,16 @@ def scale_to_screen(
 ) -> tuple[int, int]:
     """Map a coordinate in the sent image back to the physical screen.
 
-    UI-TARS also emits normalised 0-1000 coordinates in some prompt formats;
-    those are detected by the coordinate exceeding the image it was given.
+    The contract is image pixels, stated in the grounding prompt along with the
+    image's dimensions. That statement is what makes this function decidable:
+    UI-TARS also emits normalised 0-1000 coordinates under some prompt formats,
+    and a normalised (400, 300) is *indistinguishable* from a pixel (400, 300)
+    at 1280x720. Guessing by which is larger, as this used to, silently mangles
+    every prediction that happens to land inside the image bounds - which at
+    1280 wide is most of the screen.
+
+    The overflow branch is kept only as a net for a model that ignores the
+    instruction outright, and says so in the log rather than passing quietly.
     """
     img_w, img_h = image_size
     scr_w, scr_h = screen_size
@@ -143,7 +157,11 @@ def scale_to_screen(
         return x, y
 
     if x > img_w or y > img_h:
-        # 0-1000 normalised space rather than image pixels.
+        logger.warning(
+            f"Grounder returned ({x},{y}) outside the {img_w}x{img_h} image it was "
+            f"given; treating as 0-1000 normalised. The prompt asks for pixels, so "
+            f"this is the model ignoring it."
+        )
         return int(round(x * scr_w / 1000.0)), int(round(y * scr_h / 1000.0))
 
     return int(round(x * scr_w / img_w)), int(round(y * scr_h / img_h))

@@ -87,17 +87,20 @@ def get_planner_system_prompt() -> str:
     """
     return f"""You are the planner for Grace, a voice assistant that operates Windows 11 for a user who cannot use a keyboard or mouse.
 
-You are given the user's goal, a JSON list of the interactive elements currently on screen, what you have already done, and whether the last step did what you expected. You decide the single next step.
+You are given the user's goal, what is currently on screen, what you have already done, and whether the last step did what you expected. You decide the single next step.
 
 Tools:
 {format_tools_for_prompt()}
 
-How to choose a target, in order of preference:
-1. `element_id` - an `id` from the elements list. Always prefer this. It is exact.
-2. `target_name` plus `frame` - when you can name the control but it is not in the list yet.
-3. `x`/`y` - only when you have been given the coordinates. Never invent them.
+The screen is described to you in one of two ways, and you will always get exactly one of them.
 
-If the control you need is not in the elements list, this app is not reporting its contents to Windows and re-reading will not change that. The list being short is the same problem as it being empty: some apps report only their window frame, so a handful of entries that are all title bars and menu buttons means you are working blind. Do not guess `x`/`y` - a made-up coordinate lands somewhere arbitrary. Use `target_name` to describe what you want in plain words ("the search box", "the Chemistry group in the chat list"), which hands it to a visual model that can find it on screen. Keyboard steps are also reliable when you cannot see: shortcuts and typing go to the focused window regardless of what the elements list shows.
+**An element list.** A JSON array of the controls the app reports, each with an `id`. Target them with `element_id`. This is exact - the id you name is the control that gets clicked.
+
+**A marked screenshot.** Some apps report nothing useful to Windows, so instead you get an image with a red numbered badge on every target, and a legend naming them. The badge numbers are element ids: answer with `element_id` exactly as you would from a list. Read the image to decide *which* number; read the legend to check what it is.
+
+You cannot click a position. There is no `x`/`y` - a coordinate you reason out from a picture lands somewhere arbitrary, and this is the single most common way a goal has failed. If what you need has no id and no badge:
+- Use `target_name` to describe it in plain words ("the search box", "the Chemistry group in the chat list"). That hands it to a visual model that locates it properly.
+- Or use the keyboard. Shortcuts and typing go to the focused window whatever the screen description shows, and are often the most reliable route in an app you cannot read.
 
 About `frame`:
 - `"chrome"` is the browser's own UI: address bar, tabs, bookmarks, back button.
@@ -108,8 +111,8 @@ A website's own search box is ALWAYS `frame: "page"`. The browser address bar is
 Rules:
 - One step per response. Do not plan several actions at once.
 - Before typing, make sure the field you want is focused - click it first.
-- `expect` must describe something you will be able to *see* in the next elements list, e.g. "the YouTube search box is focused" or "video result links are listed".
-- Set `is_completed: true` only when the elements list or window title shows the goal is actually achieved. Put the spoken answer in `final_response`, in plain sentences with no JSON or markdown.
+- `expect` must describe something you will be able to *see* in the next screen description, e.g. "the YouTube search box is focused" or "video result links are listed".
+- Set `is_completed: true` only when the screen description or window title shows the goal is actually achieved. Put the spoken answer in `final_response`, in plain sentences with no JSON or markdown.
 - If the last step reports it did not do what you expected, do something different. Do not repeat the same failing action.
 
 Respond with ONLY one JSON object, no code fences, no commentary:
@@ -157,7 +160,10 @@ class Planner:
         sections = [f"### Goal\n{goal}"]
         if window_title:
             sections.append(f"### Active window\n{window_title}")
-        sections.append(f"### Interactive elements on screen\n{elements_prompt}")
+        # Not "interactive elements": in blind mode this section is a legend for
+        # a marked screenshot, and labelling it as a list of elements told the
+        # model to look for a list that was not there.
+        sections.append(f"### What is on screen\n{elements_prompt}")
         if history:
             sections.append(f"### What you have already done\n{history}")
         if scratchpad:
@@ -176,6 +182,7 @@ class Planner:
         scratchpad: str = "",
         expectation_note: str = "",
         window_title: str = "",
+        image_b64: Optional[str] = None,
     ) -> Optional[PlannedStep]:
         """Ask for the next step. Returns None if the model gave nothing usable.
 
@@ -198,11 +205,14 @@ class Planner:
         )
 
         self._calls += 1
-        # No image: this model reasons over the element JSON. Sending a
-        # screenshot as well cost tokens and latency for nothing.
+        # An image only when the caller has one worth sending - a marked
+        # screenshot for a window with no readable element list. When the list
+        # is good the picture adds tokens, latency, and a second account of the
+        # screen for the model to disagree with itself about.
         raw = await self._llm.generate_text(
             prompt=prompt,
             system_prompt=self._system_prompt,
+            image_b64=image_b64,
             temperature=0.1,
             # Generous: a truncated plan is an unparseable plan, which costs a
             # whole wasted step. Reasoning is never worth clipping to save

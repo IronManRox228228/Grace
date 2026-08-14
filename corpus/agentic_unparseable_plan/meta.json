@@ -1,7 +1,7 @@
 {
   "session_id": "agentic_unparseable_plan",
-  "recorded_at": "2026-08-15T01:24:51",
-  "git_sha": "ccccac38d91160789dd39b6b40eb45ac6bbc929e",
+  "recorded_at": "2026-08-15T02:06:36",
+  "git_sha": "de3a76602a777f0047a7b33ee17f565bf4f7dec4",
   "config": {
     "agent_max_consecutive_plan_failures": 3,
     "agent_max_iterations": 0,
@@ -35,6 +35,7 @@
     "mic_sample_rate": 16000,
     "mic_width": 2,
     "model_swap_enabled": false,
+    "observability_min_actionable": 8,
     "planner_max_calls_per_goal": 0,
     "screenshot_max_width": 1280,
     "use_cloud_llm": true,

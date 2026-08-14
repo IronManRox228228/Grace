@@ -98,6 +98,12 @@ class Config:
         os.getenv("AGENT_MAX_REPEATED_ACTIONS", "3")
     )
     screenshot_max_width: int = int(os.getenv("SCREENSHOT_MAX_WIDTH", "1280"))
+    # Fewest actionable controls a window can report and still be planned for
+    # from its element list rather than from a marked screenshot. Raising it
+    # sends more apps down the vision path: slower, and more likely to be right.
+    observability_min_actionable: int = int(
+        os.getenv("OBSERVABILITY_MIN_ACTIONABLE", "8")
+    )
 
     # Browser DOM access. Attach-only: Grace never launches a browser with a
     # debug flag and never touches the user's profile. Unset (0) = disabled,

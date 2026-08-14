@@ -117,6 +117,22 @@ class ComputerUse:
 
         return x, y
 
+    @staticmethod
+    def _foreground_centre() -> Optional[tuple[int, int]]:
+        """Middle of the window currently in front, or None if unknowable."""
+        try:
+            import win32gui
+
+            hwnd = win32gui.GetForegroundWindow()
+            if not hwnd or not win32gui.IsWindow(hwnd):
+                return None
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            if right <= left or bottom <= top:
+                return None
+            return (left + right) // 2, (top + bottom) // 2
+        except Exception:
+            return None
+
     def _click(self, params: dict[str, Any]) -> dict[str, Any]:
         import pyautogui
         from grace.automation.dpi_helper import DPIHelper
@@ -435,6 +451,16 @@ class ComputerUse:
         explicit_coords = (params.get("x") is not None and params.get("y") is not None)
         if explicit_coords and x is not None and y is not None:
             x, y = self._get_abs_coords(window, x, y)
+        else:
+            # The planner no longer supplies scroll coordinates, and a bare
+            # pyautogui.scroll() scrolls whatever happens to be under the
+            # cursor - which for a voice assistant is wherever the pointer was
+            # abandoned, not the window being driven. Aim at the middle of the
+            # foreground window instead.
+            centre = self._foreground_centre()
+            if centre is not None:
+                x, y = centre
+                explicit_coords = True
 
         scroll_x = _to_int(params.get("scrollX")) or 0
         scroll_y = _to_int(params.get("scrollY"))
@@ -465,17 +491,65 @@ class ComputerUse:
             except (ValueError, TypeError):
                 return default
 
-        from_x = _to_int(params.get("from_x"), 0)
-        from_y = _to_int(params.get("from_y"), 0)
-        to_x = _to_int(params.get("to_x"), 0)
-        to_y = _to_int(params.get("to_y"), 0)
+        # Endpoints by element first. A drag assembled from two invented
+        # coordinates is two chances to be wrong, and unlike a stray click it
+        # can rearrange the user's data on the way past.
+        start = self._point_for(params, "from")
+        end = self._point_for(params, "to")
 
+        if start is None or end is None:
+            missing = "start" if start is None else "end"
+            return {
+                "ok": False,
+                "status": "element_not_found",
+                "action": "drag",
+                "error": (
+                    f"Could not resolve the {missing} of the drag. Give "
+                    f"`from_element_id` and `to_element_id` from the element "
+                    f"list or the marked screenshot."
+                ),
+            }
+
+        from_x, from_y = start
+        to_x, to_y = end
         try:
             pyautogui.moveTo(from_x, from_y)
             pyautogui.drag(to_x - from_x, to_y - from_y, duration=0.3)
         except pyautogui.FailSafeException:
             logger.debug("PyAutoGUI failsafe caught during drag")
+        self._invalidate_graph()
         return {"ok": True, "action": "drag", "message": f"Dragged from ({from_x},{from_y}) to ({to_x},{to_y})"}
+
+    def _point_for(self, params: dict[str, Any], end: str) -> Optional[tuple[int, int]]:
+        """Resolve one end of a drag to a screen point.
+
+        ``<end>_element_id`` is the supported form. Raw ``<end>_x``/``<end>_y``
+        are still honoured so an internal caller or a replayed tape keeps
+        working, but they are no longer offered to the model.
+        """
+        element_id = params.get(f"{end}_element_id")
+        if element_id is not None:
+            try:
+                element = self._graph_element(int(element_id))
+            except (TypeError, ValueError):
+                element = None
+            if element is not None:
+                return element.center
+
+        raw_x, raw_y = params.get(f"{end}_x"), params.get(f"{end}_y")
+        if raw_x is None or raw_y is None:
+            return None
+        try:
+            return int(raw_x), int(raw_y)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _graph_element(element_id: int):
+        from grace.agent import perception as perception_mod
+
+        graph = perception_mod.PerceptionEngine.get_graph_builder().get()
+        return graph.by_id(element_id) if graph is not None else None
 
     def _activate(self, params: dict[str, Any]) -> dict[str, Any]:
         import win32gui
@@ -519,7 +593,16 @@ class ComputerUse:
                 except Exception as e:
                     return {"ok": False, "action": "activate", "message": f"Could not focus {window_title}: {e}"}
 
-        return {"ok": True, "action": "activate", "message": "Window activated"}
+        # Nothing matched. This used to report success, which meant the planner
+        # was told the window it asked for was in front and then planned its
+        # next step against a screen belonging to some other app entirely.
+        wanted = window_title or hwnd or "(no window named)"
+        return {
+            "ok": False,
+            "status": "window_not_found",
+            "action": "activate",
+            "error": f"No open window matches {wanted!r}. Use cua_list_windows to see what is open, or launch it first.",
+        }
 
     @staticmethod
     def _process_names_by_pid() -> dict[int, str]:

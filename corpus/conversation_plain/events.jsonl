@@ -1,16 +1,16 @@
-{"i": 0, "t_ms": 353.3, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 353.4, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 1385.6, "event": {"type": "FinalTranscript", "text": "hello grace how are you today"}}
-{"i": 3, "t_ms": 1385.6, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 1385.6, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 1386.1, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 1386.2, "event": {"type": "SpeechStarted"}}
-{"i": 7, "t_ms": 1386.4, "event": {"type": "ResponseChunk", "text": "I'm doing well, thank you."}}
-{"i": 8, "t_ms": 1387.7, "event": {"type": "SpeechChunk"}}
-{"i": 9, "t_ms": 1387.9, "event": {"type": "ResponseChunk", "text": " What can I help with?"}}
-{"i": 10, "t_ms": 1387.9, "event": {"type": "SpeechChunk"}}
-{"i": 11, "t_ms": 1388.3, "event": {"type": "SpeechFinished"}}
-{"i": 12, "t_ms": 1388.4, "event": {"type": "ConversationFinished"}}
-{"i": 13, "t_ms": 1388.5, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1035.6, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1030.1, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 2.0, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.4, "detail": null}, {"name": "speak", "depth": 0, "ms": 2.3, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.1, "detail": "480 bytes"}, {"name": "synth#2", "depth": 1, "ms": 0.1, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.4, "detail": null}], "events": {"route_conversation": 1033.3, "first_audio_out": 1033.6}}}}
-{"i": 14, "t_ms": 1388.5, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
-{"i": 15, "t_ms": 1388.5, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 1014.5, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 1014.9, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 2035.8, "event": {"type": "FinalTranscript", "text": "hello grace how are you today"}}
+{"i": 3, "t_ms": 2035.9, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 2036.0, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 2037.2, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 2037.9, "event": {"type": "SpeechStarted"}}
+{"i": 7, "t_ms": 2038.8, "event": {"type": "ResponseChunk", "text": "I'm doing well, thank you."}}
+{"i": 8, "t_ms": 2040.5, "event": {"type": "SpeechChunk"}}
+{"i": 9, "t_ms": 2041.3, "event": {"type": "ResponseChunk", "text": " What can I help with?"}}
+{"i": 10, "t_ms": 2041.3, "event": {"type": "SpeechChunk"}}
+{"i": 11, "t_ms": 2041.9, "event": {"type": "SpeechFinished"}}
+{"i": 12, "t_ms": 2042.0, "event": {"type": "ConversationFinished"}}
+{"i": 13, "t_ms": 2042.1, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1029.9, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1008.2, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 12.4, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.0, "detail": null}, {"name": "speak", "depth": 0, "ms": 4.6, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.6, "detail": "480 bytes"}, {"name": "synth#2", "depth": 1, "ms": 0.6, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.5, "detail": null}], "events": {"route_conversation": 1025.1, "first_audio_out": 1026.6}}}}
+{"i": 14, "t_ms": 2042.1, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 15, "t_ms": 2042.1, "event": {"type": "Idle"}}

@@ -34,6 +34,15 @@ FRAME_APP = "app"
 SOURCE_UIA = "uia"
 SOURCE_DOM = "dom"
 SOURCE_WIN32 = "win32"
+#: Recognised text, promoted to an element so an app that reports no
+#: accessibility tree still has targets. See ``agent/perception.py``.
+SOURCE_OCR = "ocr"
+
+#: Role given to OCR-derived elements. Deliberately not in INTERACTIVE_ROLES:
+#: recognised text is something to aim at, but it is not evidence that the
+#: window is reporting its controls, and letting it count as such would hide
+#: exactly the blindness it exists to work around.
+ROLE_TEXT = "text"
 
 # Roles that are worth offering to the model as click/type targets.
 INTERACTIVE_ROLES = {
@@ -75,6 +84,18 @@ class ElementNode:
     @property
     def is_interactive(self) -> bool:
         return self.role.lower() in INTERACTIVE_ROLES
+
+    @property
+    def is_actionable(self) -> bool:
+        """Interactive *and* something a step could actually reach right now.
+
+        ``is_interactive`` asks what kind of control this is; this asks whether
+        aiming at it would do anything. A disabled button and a scrolled-out
+        list item are both interactive by role and both useless as targets, and
+        counting them is how a window that reports nothing usable comes to look
+        like one that does.
+        """
+        return self.is_interactive and self.enabled and not self.offscreen
 
     def contains(self, x: int, y: int) -> bool:
         left, top, right, bottom = self.rect
@@ -161,6 +182,11 @@ def elements_to_prompt(
     if limit and len(elements) > limit:
         header.append(f"({len(elements) - limit} further elements not shown)")
     return "\n".join(header)
+
+
+def count_actionable(elements: list[ElementNode]) -> int:
+    """How many of these could a step actually aim at."""
+    return sum(1 for e in elements if e.is_actionable)
 
 
 def find_by_id(elements: list[ElementNode], element_id: int) -> Optional[ElementNode]:

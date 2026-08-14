@@ -32,12 +32,11 @@ class ToolDefinition:
 CUA_TOOLS: list[ToolDefinition] = [
     ToolDefinition(
         name="cua_click",
-        description="Perform mouse clicks at coordinates (relative to window top-left or absolute screen coordinates) or on an accessibility element in a target window.",
+        description="Click a control, identified by its element id or by name. Never by position.",
         params=[
             ToolParam("window", "Window object target (e.g. {'title': 'Edge', 'id': 1234})", True, None, "dict"),
-            ToolParam("x", "X pixel coordinate (e.g. 200 or 633)", False, None, "int"),
-            ToolParam("y", "Y pixel coordinate (e.g. 200 or 280)", False, None, "int"),
-            ToolParam("element_id", "The `id` of an element from the interactive elements list. Prefer this over x/y.", False, None, "int"),
+            ToolParam("element_id", "The `id` of an element from the element list, or the number on a badge in the marked screenshot. The two are the same numbering.", False, None, "int"),
+            ToolParam("target_name", "What to click, in plain words, when it has no id or badge (e.g. 'the search box'). Resolved by a visual model.", False, None, "str"),
             ToolParam("click_count", "Number of clicks (1 for single-click, 2 for double-click)", False, "1", "int"),
         ],
         requires_cua=True,
@@ -79,11 +78,9 @@ CUA_TOOLS: list[ToolDefinition] = [
     ),
     ToolDefinition(
         name="cua_scroll",
-        description="Scroll window contents vertically or horizontally from a coordinate origin.",
+        description="Scroll the contents of the foreground window.",
         params=[
             ToolParam("window", "Target window object", True, None, "dict"),
-            ToolParam("x", "X origin coordinate to scroll from", True, None, "int"),
-            ToolParam("y", "Y origin coordinate to scroll from", True, None, "int"),
             ToolParam("scrollX", "Horizontal scroll distance (positive=right, negative=left)", False, "0", "int"),
             ToolParam("scrollY", "Vertical scroll distance (positive=down, negative=up)", False, "500", "int"),
         ],
@@ -91,13 +88,11 @@ CUA_TOOLS: list[ToolDefinition] = [
     ),
     ToolDefinition(
         name="cua_drag",
-        description="Perform a mouse drag operation from start pixel coordinates to end pixel coordinates.",
+        description="Drag one control onto another, e.g. to reorder a list or move a file.",
         params=[
             ToolParam("window", "Target window object", True, None, "dict"),
-            ToolParam("from_x", "Starting X coordinate", True, None, "int"),
-            ToolParam("from_y", "Starting Y coordinate", True, None, "int"),
-            ToolParam("to_x", "Ending X coordinate", True, None, "int"),
-            ToolParam("to_y", "Ending Y coordinate", True, None, "int"),
+            ToolParam("from_element_id", "The `id` of the element to drag", True, None, "int"),
+            ToolParam("to_element_id", "The `id` of the element to drop it on", True, None, "int"),
         ],
         requires_cua=True,
     ),

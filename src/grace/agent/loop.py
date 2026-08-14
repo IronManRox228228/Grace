@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from grace.agent.grounder import Grounder, describe_target
 from grace.agent.memory import AgentMemory
-from grace.agent.perception import PerceptionEngine
+from grace.agent.perception import PerceptionEngine, observe_for_planner
 from grace.agent.planner import Planner, PlannedStep, PlannerBudgetExceeded, parse_planned_step
 from grace.agent.safety import SafetyGuard
 from grace.agent.ui_tars_parser import UITarsParser
@@ -198,11 +198,15 @@ class AgentLoop:
             async with stage(f"observe#{step_no}"):
                 snapshot = await self._observe()
 
+            # Built once and reused: the mode decides both what the planner is
+            # shown and what counts as "the view changed", and deriving those
+            # from two separate renderings is how they drift apart.
+            view = observe_for_planner(snapshot)
+
             # A changed view means the loop has learned something, so nothing it
             # tried before is a repeat any more.
-            observation = snapshot.to_markdown()
-            if observation != last_observation:
-                last_observation = observation
+            if view.markdown != last_observation:
+                last_observation = view.markdown
                 attempts.clear()
 
             expectation_note = self._expectation_note(last_step, last_result, snapshot)
@@ -211,15 +215,17 @@ class AgentLoop:
                 async with stage(f"plan#{step_no}") as plan_stage:
                     step = await self._planner.plan(
                         goal=memory.user_goal,
-                        elements_prompt=snapshot.to_markdown(),
+                        elements_prompt=view.markdown,
                         history=memory.format_history_markdown(),
                         scratchpad=memory.format_scratchpad_markdown(),
                         expectation_note=expectation_note,
                         window_title=_window_title(snapshot),
+                        image_b64=view.image_b64,
                     )
                     plan_stage.detail(
                         f"{step.action if step else 'unparsed'} "
-                        f"(call {self._planner.calls_made})"
+                        f"(call {self._planner.calls_made}, {view.mode}"
+                        f"{f', {view.marks} marks' if view.marks else ''})"
                     )
             except PlannerBudgetExceeded as e:
                 logger.warning(str(e))
@@ -387,10 +393,9 @@ class AgentLoop:
 
         status = last_result.get("status", "ok")
         inner = last_result.get("result") if isinstance(last_result.get("result"), dict) else {}
-        failed = status == "error" or inner.get("ok") is False
+        reason = _failure_reason(last_result)
 
-        if failed:
-            reason = last_result.get("error") or inner.get("error") or inner.get("message") or "no reason given"
+        if reason:
             lines.append(f"IT FAILED: {reason}")
             lines.append("Do not repeat this action unchanged. Try a different element or a different approach.")
         else:
@@ -410,7 +415,7 @@ class AgentLoop:
         elif last_step.action == "cua_click":
             lines.append("Nothing currently has keyboard focus.")
 
-        lines.append("Judge from the elements list above whether your expectation actually came true.")
+        lines.append("Judge from the screen description above whether your expectation actually came true.")
         return "\n".join(lines)
 
     def _harvest(self, exec_result: dict[str, Any], memory: AgentMemory) -> None:
@@ -530,16 +535,44 @@ class AgentLoop:
     def _verify_goal_completion(self, user_goal: str, snapshot, memory: AgentMemory) -> tuple[bool, Optional[str]]:
         """Block a claimed completion that no action could have produced.
 
-        Questions do not need desktop state to change, so they pass straight
-        through. Anything else must have actually done something.
+        Deliberately a narrow check. It cannot tell whether the goal was
+        *achieved* - that needs to understand the goal - only whether the claim
+        is compatible with what happened. Two things are incompatible with it:
+
+        * nothing was ever done to the desktop;
+        * the last thing done to the desktop reported that it failed, and the
+          screen is readable enough that the planner had no excuse for reading
+          the failure as success.
+
+        The second is the case the loop actually hit: a step returned
+        ``wrong_focus``, the planner announced the goal was complete anyway, and
+        nothing disagreed. ``snapshot`` is consulted rather than ignored,
+        because on a window Grace cannot read a claim of success is not
+        contradicted by anything - and blocking it there would be inventing
+        evidence, which is the mistake that stopped a working run.
         """
         if _CONVERSATIONAL_RE.search(user_goal or ""):
             return True, None
 
-        if not any(s.action in INTERACTIVE_TOOLS for s in memory.steps_taken):
+        interactive = [s for s in memory.steps_taken if s.action in INTERACTIVE_TOOLS]
+        if not interactive:
             return False, (
                 "Goal observation check: no desktop interaction has been performed yet. "
-                "Inspect the elements list and execute the next action."
+                "Inspect what is on screen and execute the next action."
+            )
+
+        if getattr(snapshot, "is_blind", False):
+            # No channel to check against. Trust the claim rather than
+            # manufacture a verdict from an absence of evidence.
+            return True, None
+
+        last = interactive[-1]
+        failure = _failure_reason(last.result)
+        if failure:
+            return False, (
+                f"Goal observation check: your last action (`{last.action}`) reported "
+                f"failure - {failure} - so the goal cannot be complete. Address that "
+                f"before finishing."
             )
 
         return True, None
@@ -557,6 +590,29 @@ class AgentLoop:
 def _window_title(snapshot) -> str:
     window = getattr(snapshot, "active_window", None)
     return getattr(window, "title", "") if window is not None else ""
+
+
+def _failure_reason(result: Optional[dict[str, Any]]) -> Optional[str]:
+    """Why a dispatch failed, or None if it did not.
+
+    One definition of "this failed", because there are two shapes of failure -
+    the dispatcher's ``{"status": "error"}`` envelope and the handler's
+    ``{"ok": False}`` body - and a caller that checks only one of them treats
+    half of all failures as successes.
+    """
+    if not result:
+        return None
+
+    inner = result.get("result") if isinstance(result.get("result"), dict) else {}
+    if result.get("status") != "error" and inner.get("ok") is not False:
+        return None
+
+    return (
+        result.get("error")
+        or inner.get("error")
+        or inner.get("message")
+        or "no reason given"
+    )
 
 
 def _step_signature(step: PlannedStep) -> str:

@@ -1,2 +1,2 @@
-{"i": 0, "t_ms": 1074.1, "tool": "cua_click", "params": {"element_id": 3}, "result": {"status": "error", "error": "element is not enabled", "text": "Action error: element is not enabled"}}
-{"i": 1, "t_ms": 1081.7, "tool": "cua_click", "params": {"element_id": 2}, "result": {"status": "ok", "result": {"ok": true, "message": "clicked"}}}
+{"i": 0, "t_ms": 1037.9, "tool": "cua_click", "params": {"element_id": 3}, "result": {"status": "error", "error": "element is not enabled", "text": "Action error: element is not enabled"}}
+{"i": 1, "t_ms": 1050.3, "tool": "cua_click", "params": {"element_id": 2}, "result": {"status": "ok", "result": {"ok": true, "message": "clicked"}}}

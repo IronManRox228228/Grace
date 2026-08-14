@@ -20,6 +20,7 @@ from typing import Optional
 from grace.perception.elements import (
     FRAME_PAGE,
     ElementNode,
+    count_actionable,
     elements_to_prompt,
     find_at_point,
     find_by_id,
@@ -60,6 +61,19 @@ class ElementGraph:
     @property
     def age_seconds(self) -> float:
         return time.monotonic() - self.built_at
+
+    @property
+    def actionable_count(self) -> int:
+        """Controls a step could actually aim at, ignoring role-only matches.
+
+        ``len(graph)`` counts everything the walker found, which for an app that
+        does not implement UI Automation properly is a handful of window-frame
+        entries. This is the number that decides whether the agent can see.
+        """
+        return count_actionable(self.elements)
+
+    def actionable(self) -> list[ElementNode]:
+        return [e for e in self.elements if e.is_actionable]
 
     def by_id(self, element_id: int) -> Optional[ElementNode]:
         return find_by_id(self.elements, element_id)

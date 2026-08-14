@@ -64,7 +64,20 @@ def _snapshot_tape(snapshot: "ScreenSnapshot") -> dict:
     }
 
 
-def _run_async(coro):
+async def _await(awaitable):
+    """Wrap a WinRT awaitable so ``asyncio.run`` will accept it.
+
+    WinRT projections return ``IAsyncOperation``, which implements
+    ``__await__`` but is not a coroutine - and ``asyncio.run`` checks for a
+    coroutine specifically, raising "a coroutine was expected, got
+    DataWriterStoreOperation". Every WinRT OCR call therefore failed on its
+    first await, was swallowed by the broad ``except`` in ``_perform_ocr``, and
+    fell through to Tesseract.
+    """
+    return await awaitable
+
+
+def _run_async(awaitable):
     """Resolve a WinRT awaitable from either a sync or an async context.
 
     This used to call nest_asyncio.apply() and then re-enter the *running*
@@ -80,13 +93,13 @@ def _run_async(coro):
         running = None
 
     if running is None:
-        return asyncio.run(coro)
+        return asyncio.run(_await(awaitable))
 
     result: dict = {}
 
     def _worker():
         try:
-            result["value"] = asyncio.run(coro)
+            result["value"] = asyncio.run(_await(awaitable))
         except BaseException as e:  # noqa: BLE001 - re-raised on the caller's thread
             result["error"] = e
 
@@ -109,6 +122,103 @@ def _word_rect(word) -> Optional[tuple[int, int, int, int]]:
         return (int(rect.x), int(rect.y), int(rect.width), int(rect.height))
     except Exception:
         return None
+
+
+#: The two ways a window can present itself to the agent.
+OBSERVABILITY_RICH = "rich"
+OBSERVABILITY_BLIND = "blind"
+
+#: Fewest actionable controls a window can report and still be treated as
+#: readable. Overridable via OBSERVABILITY_MIN_ACTIONABLE; see
+#: ``ScreenSnapshot.observability`` for why a count is enough and why this
+#: number leans high.
+#:
+#: Calibrated against real captures rather than guessed. A Windows Terminal
+#: window - whose contents UIA does not expose at all - reports exactly five:
+#: one tab, three scrollbar arrows, and the System menu. Window furniture is
+#: worth about five controls, so five is the wrong side of the line.
+DEFAULT_MIN_ACTIONABLE = 8
+
+
+#: Most OCR lines promoted to elements. The screenshot only has room for so
+#: many legible badges, and MAX_MARKS bounds the drawing anyway.
+MAX_OCR_ELEMENTS = 30
+
+#: Shortest recognised string worth offering as a target. Single characters are
+#: overwhelmingly OCR noise off window borders and icons.
+MIN_OCR_TEXT_LEN = 2
+
+
+def _ocr_elements(
+    ocr_lines: list,
+    screen_size: tuple,
+    image_size: tuple,
+    start_id: int,
+) -> list:
+    """Promote recognised text lines to element nodes.
+
+    An app that does not implement UI Automation - WhatsApp is the case that
+    forced this - reports its window frame and nothing else, so there is nothing
+    to mark and nothing to click by id. Its content is still legible on screen,
+    and OCR already runs for exactly this situation. Promoting those lines gives
+    the rest of the stack something to work with without teaching it a second
+    kind of target: they are ordinary elements with ``source="ocr"``, so marks,
+    the legend, ``by_id`` and the click path all handle them unchanged.
+
+    Boxes arrive in image space, because OCR runs on the downscaled screenshot.
+    They are converted to screen space here, since that is what every element
+    consumer assumes, and converted back down only for drawing.
+    """
+    from grace.perception.elements import ROLE_TEXT, SOURCE_OCR, ElementNode
+
+    screen_w, screen_h = screen_size
+    image_w, image_h = image_size
+    if not image_w or not image_h:
+        return []
+
+    sx = screen_w / float(image_w)
+    sy = screen_h / float(image_h)
+
+    elements = []
+    next_id = start_id
+    for line in ocr_lines:
+        text = (getattr(line, "text", "") or "").strip()
+        if len(text) < MIN_OCR_TEXT_LEN:
+            continue
+
+        x, y, w, h = line.bounding_box
+        if w <= 0 or h <= 0:
+            continue
+
+        left = int(round(x * sx))
+        top = int(round(y * sy))
+        right = int(round((x + w) * sx))
+        bottom = int(round((y + h) * sy))
+
+        elements.append(
+            ElementNode(
+                id=next_id,
+                role=ROLE_TEXT,
+                name=text,
+                rect=(left, top, right, bottom),
+                center=((left + right) // 2, (top + bottom) // 2),
+                source=SOURCE_OCR,
+            )
+        )
+        next_id += 1
+        if len(elements) >= MAX_OCR_ELEMENTS:
+            break
+
+    return elements
+
+
+def _min_actionable() -> int:
+    try:
+        from grace.config import Config
+
+        return int(Config().observability_min_actionable)
+    except Exception:
+        return DEFAULT_MIN_ACTIONABLE
 
 
 @dataclass
@@ -151,14 +261,54 @@ class ScreenSnapshot:
     image_width: int = 0
     image_height: int = 0
 
-    def to_markdown(self) -> str:
-        """Format the screen state into clean markdown for Gemma."""
-        lines = []
+    @property
+    def actionable_count(self) -> int:
+        """Controls on screen a step could actually aim at."""
+        graph = self.graph
+        if graph is not None:
+            count = getattr(graph, "actionable_count", None)
+            if count is not None:
+                return count
+            return len(graph)
+        # The legacy flat list carries no enabled/offscreen flags, so every
+        # entry counts. It is only reached when the graph failed to build.
+        return len(self.ui_elements or [])
 
-        window_title_hint = ""
+    @property
+    def observability(self) -> str:
+        """``rich`` or ``blind`` - whether the agent can see this window.
+
+        This is the one judgement the rest of the loop keys off, instead of each
+        caller re-deriving "does this look like enough elements". It decides
+        which observation the planner is given and which kinds of target are
+        legal, so it has to be a property of the snapshot rather than an opinion
+        formed at each use site.
+
+        The threshold is calibrated, not principled. No purely structural rule
+        separates four window-frame buttons from four real ones - a scrollbar
+        arrow and a Send button are both an enabled, onscreen ``button`` - so
+        this counts, and the number comes from measuring real windows rather
+        than from taste (see DEFAULT_MIN_ACTIONABLE).
+
+        What makes a crude count acceptable is that its two errors do not cost
+        the same. Calling a rich window blind wastes a screenshot and some
+        vision tokens, and the goal still completes. Calling a blind window rich
+        is what produced a 130-step run: the planner is handed the window frame,
+        told it is the screen, and invents coordinates for everything it cannot
+        find. So the threshold sits high enough to catch the second case and is
+        allowed to make the first.
+        """
+        return OBSERVABILITY_RICH if self.actionable_count >= _min_actionable() else OBSERVABILITY_BLIND
+
+    @property
+    def is_blind(self) -> bool:
+        return self.observability == OBSERVABILITY_BLIND
+
+    def header_markdown(self) -> list[str]:
+        """Window identity and geometry. Shared by both observation modes."""
+        lines = []
         if self.active_window:
             w = self.active_window
-            window_title_hint = w.title
             lines.append(f"### Focused Window: '{w.title}' (Class: {w.class_name})")
             lines.append(f"Bounds: [left: {w.rect[0]}, top: {w.rect[1]}, right: {w.rect[2]}, bottom: {w.rect[3]}]")
         else:
@@ -167,6 +317,12 @@ class ScreenSnapshot:
         lines.append(f"Screen Dimensions: {self.width}x{self.height}")
         # Fix Bug #2: surface DPI scale so coordinates predict physical pixels.
         lines.append(f"DPI Scale: {self.dpi_scale:.2f} (logical -> physical)")
+        return lines
+
+    def to_markdown(self) -> str:
+        """Format the screen state into clean markdown for Gemma."""
+        lines = self.header_markdown()
+        window_title_hint = self.active_window.title if self.active_window else ""
 
         # Prefer the structured graph: it carries role, value, placeholder and
         # the chrome/page distinction, none of which the flat list had.
@@ -190,6 +346,82 @@ class ScreenSnapshot:
             lines.append("\n### Screen Text: (No readable text detected)")
 
         return "\n".join(lines)
+
+
+@dataclass
+class Observation:
+    """What the planner is actually shown for one step.
+
+    Carries the mode so the loop and the guards do not each re-derive it, and so
+    a trace can say which one a step was planned in.
+    """
+
+    markdown: str
+    image_b64: Optional[str] = None
+    mode: str = OBSERVABILITY_RICH
+    marks: int = 0
+
+    @property
+    def is_blind(self) -> bool:
+        return self.mode == OBSERVABILITY_BLIND
+
+
+def observe_for_planner(snapshot: "ScreenSnapshot") -> Observation:
+    """Choose an observation that matches what this window will support.
+
+    A textual element list and a screenshot are not interchangeable, and mixing
+    them is where the agent went wrong: it was given a four-entry element list
+    for an app it could not read, and answered with invented coordinates.
+
+    So the two modes are kept whole rather than blended:
+
+    ``rich``
+        The element JSON, as before. No image - a model reasoning over exact
+        ids does not need pixels, and sending both costs tokens and invites the
+        model to trust the picture over the list.
+    ``blind``
+        A screenshot with numbered badges drawn on every target, plus a legend
+        naming them. The badge numbers are element ids, so the answer resolves
+        through the same path a rich-mode answer does.
+
+    Falls back to the rich rendering if the image cannot be marked. That is a
+    worse observation, but it is the one that already existed, and a goal that
+    proceeds badly beats one that cannot proceed.
+    """
+    from grace.automation import som_overlay
+
+    if not snapshot.is_blind:
+        return Observation(markdown=snapshot.to_markdown(), mode=OBSERVABILITY_RICH)
+
+    graph = snapshot.graph
+    elements = list(getattr(graph, "elements", []) or [])
+    image_size = (snapshot.image_width, snapshot.image_height)
+
+    if snapshot.png_bytes and elements and all(image_size):
+        marks = som_overlay.marks_for(
+            elements, (snapshot.width, snapshot.height), image_size
+        )
+        marked = som_overlay.render_or_none(snapshot.png_bytes, marks) if marks else None
+        if marked:
+            import base64
+
+            lines = snapshot.header_markdown()
+            lines.append("")
+            lines.append(
+                "This app does not report its contents to Windows, so there is no "
+                "element list. The screenshot has every target marked."
+            )
+            lines.append("")
+            lines.append(som_overlay.legend(marks))
+            return Observation(
+                markdown="\n".join(lines),
+                image_b64=base64.b64encode(marked).decode("ascii"),
+                mode=OBSERVABILITY_BLIND,
+                marks=len(marks),
+            )
+
+    logger.debug("Blind window but no markable screenshot; using the text rendering")
+    return Observation(markdown=snapshot.to_markdown(), mode=OBSERVABILITY_BLIND)
 
 
 class PerceptionEngine:
@@ -252,12 +484,35 @@ class PerceptionEngine:
         # OCR is only needed where the accessibility tree comes up empty, e.g.
         # canvas-rendered or remote-desktop UIs. Skipping it when the graph is
         # rich removes the most expensive part of an observation.
+        #
+        # The test is the actionable count, not len(graph): a window reporting
+        # four disabled or offscreen entries is as unreadable as one reporting
+        # none, and the raw length said otherwise.
         ocr_lines = []
-        should_ocr = self._run_ocr and img_bytes and (graph is None or len(graph) < 5)
+        actionable = graph.actionable_count if graph is not None else 0
+        should_ocr = self._run_ocr and img_bytes and actionable < _min_actionable()
         if should_ocr:
             with stage("ocr") as ocr_stage:
                 ocr_lines = self._perform_ocr(img_bytes, width, height)
                 ocr_stage.detail(f"{len(ocr_lines)} lines")
+
+            # Promoted into the graph so the ids the model is shown are the ids
+            # the click path resolves. Appended rather than merged: the UIA
+            # entries keep their ids, so a graph that is only partly blind does
+            # not renumber under the planner mid-goal.
+            if graph is not None and ocr_lines and image_width and image_height:
+                promoted = _ocr_elements(
+                    ocr_lines,
+                    (width, height),
+                    (image_width, image_height),
+                    start_id=max((e.id for e in graph.elements), default=0) + 1,
+                )
+                if promoted:
+                    graph.elements.extend(promoted)
+                    logger.debug(
+                        f"Promoted {len(promoted)} OCR lines to elements "
+                        f"({actionable} actionable UIA controls)"
+                    )
 
         # The legacy flat inspector is now only a fallback: when the graph has
         # elements it supersedes this entirely, and running both walked the UIA

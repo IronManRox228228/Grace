@@ -1,4 +1,10 @@
-"""Unit tests for DPIHelper, SoMOverlayGenerator, and Spatial Relative Target Resolution."""
+"""Unit tests for DPIHelper and Spatial Relative Target Resolution.
+
+The Set-of-Mark tests that used to live here have moved to
+``tests/integration/test_som_geometry.py``. What was here asserted only that
+``apply_overlay`` returned some bytes, which its swallow-and-return-the-input
+error path satisfied while drawing nothing at all.
+"""
 
 import sys
 import os
@@ -7,12 +13,11 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from grace.automation.dpi_helper import DPIHelper
-from grace.automation.som_overlay import SoMOverlayGenerator
 from grace.automation.ui_inspector import UIInspector, UIElement
 
 
 class TestDPISOM:
-    """Test suite for DPIHelper and SoMOverlayGenerator."""
+    """Test suite for DPIHelper and relative target resolution."""
 
     def test_dpi_helper_resolution(self):
         DPIHelper.ensure_dpi_aware()
@@ -34,20 +39,6 @@ class TestDPISOM:
         found = inspector.find_relative_element(target_name="Play", relative_to="Bohemian Rhapsody", direction="left")
         assert found is not None
         assert found.center == (365, 310)
-
-    def test_som_overlay_generation(self):
-        from PIL import Image
-        import io
-
-        img = Image.new("RGB", (400, 400), color=(255, 255, 255))
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        raw_bytes = buf.getvalue()
-
-        elem = UIElement(index=1, name="Play", control_type="Button", bounds=(50, 50, 100, 100), center=(75, 75))
-        overlay_bytes = SoMOverlayGenerator.apply_overlay(raw_bytes, [elem])
-        assert isinstance(overlay_bytes, bytes)
-        assert len(overlay_bytes) > 0
 
     def test_dpi_scale_defaults_and_markdown(self):
         """Bug #2 fix: ScreenSnapshot exposes dpi_scale in its markdown."""

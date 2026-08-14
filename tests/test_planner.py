@@ -130,11 +130,24 @@ class TestPlannerCalls:
         step = asyncio.run(Planner(llm).plan(goal="play a video", elements_prompt="[]"))
         assert step.action == "cua_click"
 
-    def test_sends_no_image(self):
-        """The planner reasons over element JSON; a screenshot is the grounder's job."""
+    def test_sends_no_image_when_the_element_list_is_the_observation(self):
+        """Rich mode reasons over element JSON. A screenshot as well would cost
+        tokens and give the model a second account of the screen to disagree
+        with itself about."""
         llm = FakeLLM([STEP_JSON])
         asyncio.run(Planner(llm).plan(goal="g", elements_prompt="[]"))
-        assert "image_b64" not in llm.calls[0]
+        assert llm.calls[0].get("image_b64") is None
+
+    def test_forwards_the_image_when_one_is_given(self):
+        """Blind mode: the marked screenshot *is* the observation, so a planner
+        that quietly dropped it would leave the model answering with mark
+        numbers it was never shown."""
+        llm = FakeLLM([STEP_JSON])
+        asyncio.run(Planner(llm).plan(
+            goal="g", elements_prompt="### Marks\n[3] listitem: Chemistry",
+            image_b64="ZmFrZS1wbmc=",
+        ))
+        assert llm.calls[0].get("image_b64") == "ZmFrZS1wbmc="
 
     def test_prompt_carries_the_element_list_and_goal(self):
         llm = FakeLLM([STEP_JSON])
