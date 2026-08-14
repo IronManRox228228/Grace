@@ -1,16 +1,16 @@
-{"i": 0, "t_ms": 50.9, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 51.1, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 818.2, "event": {"type": "FinalTranscript", "text": "close notepad"}}
-{"i": 3, "t_ms": 818.3, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 818.3, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 819.3, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 819.4, "event": {"type": "ToolExecutionStarted", "label": "Closing notepad…"}}
-{"i": 7, "t_ms": 819.5, "event": {"type": "ToolExecutionFinished"}}
-{"i": 8, "t_ms": 820.3, "event": {"type": "SpeechStarted"}}
-{"i": 9, "t_ms": 820.6, "event": {"type": "ResponseChunk", "text": "I've closed notepad."}}
-{"i": 10, "t_ms": 820.7, "event": {"type": "SpeechChunk"}}
-{"i": 11, "t_ms": 820.9, "event": {"type": "SpeechFinished"}}
-{"i": 12, "t_ms": 821.0, "event": {"type": "ConversationFinished"}}
-{"i": 13, "t_ms": 821.2, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 770.4, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 763.1, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 3.9, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.8, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 0.8, "detail": null}, {"name": "speak", "depth": 0, "ms": 0.8, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.3, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.2, "detail": null}], "events": {"route_fast_path": 768.7, "first_audio_out": 770.0}}}}
-{"i": 14, "t_ms": 821.2, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
-{"i": 15, "t_ms": 821.3, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 22.7, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 22.8, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1057.0, "event": {"type": "FinalTranscript", "text": "close notepad"}}
+{"i": 3, "t_ms": 1057.1, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1057.1, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1057.6, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1057.7, "event": {"type": "ToolExecutionStarted", "label": "Closing notepad…"}}
+{"i": 7, "t_ms": 1057.7, "event": {"type": "ToolExecutionFinished"}}
+{"i": 8, "t_ms": 1059.6, "event": {"type": "SpeechStarted"}}
+{"i": 9, "t_ms": 1060.2, "event": {"type": "ResponseChunk", "text": "I've closed notepad."}}
+{"i": 10, "t_ms": 1060.2, "event": {"type": "SpeechChunk"}}
+{"i": 11, "t_ms": 1060.3, "event": {"type": "SpeechFinished"}}
+{"i": 12, "t_ms": 1060.3, "event": {"type": "ConversationFinished"}}
+{"i": 13, "t_ms": 1060.4, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1037.9, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1029.2, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 4.9, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.4, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 1.9, "detail": null}, {"name": "speak", "depth": 0, "ms": 0.8, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.5, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_fast_path": 1035.2, "first_audio_out": 1037.7}}}}
+{"i": 14, "t_ms": 1060.5, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 15, "t_ms": 1060.5, "event": {"type": "Idle"}}

@@ -33,6 +33,7 @@ from contextlib import ExitStack
 from typing import Optional
 from unittest import mock
 
+from .clock import install_audio_clock_vad
 from .recorder import _digest, llm_request_digest
 from .tape import (
     Diff,
@@ -286,14 +287,15 @@ class TapePump:
     """Replays the recorded microphone chunk sequence at its recorded pace.
 
     Replaying the chunk sequence rather than the concatenated utterance is what
-    lets the real VAD run, and pacing is what makes that meaningful: the VAD
-    accumulates silence against wall-clock time (vad/detector.py:98), so a
-    sequence delivered as fast as it can be read ends the turn at a different
-    chunk than the recording did.
+    lets the real VAD run. Under the harness's audio clock (harness/clock.py)
+    the turn ends on the same chunk however fast the sequence is delivered, so
+    pacing is no longer what makes VAD parity meaningful - the chunk sequence
+    is.
 
-    A replay therefore takes about as long as the listening window it is
-    reproducing. That is the cost of being able to say anything at all about
-    VAD parity.
+    Pacing is kept because the lateness measurement below is the only thing that
+    can tell a replay it did not reproduce the recording's *timing*, which the
+    stage-timing diff is graded on. A replay therefore still takes about as long
+    as the listening window it reproduces.
     """
 
     def __init__(self, tape: Tape):
@@ -662,6 +664,11 @@ async def replay(tape: Tape) -> ReplayResult:
 
         app = GraceApp()
         app._running = True
+        # The same clock the tape was generated under: silence measured in
+        # audio, so the turn ends on the chunk the recording ended on rather
+        # than wherever the scheduler happened to put the 275ms boundary. See
+        # harness/clock.py.
+        install_audio_clock_vad(app)
         app.agent_loop._perception = TapePerception(tape)
 
         # A backstop on the agent loop. The shipped limit is 0 - unlimited -

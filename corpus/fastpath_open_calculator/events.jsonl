@@ -1,16 +1,16 @@
-{"i": 0, "t_ms": 47.0, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 47.1, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 794.9, "event": {"type": "FinalTranscript", "text": "open the calculator"}}
-{"i": 3, "t_ms": 795.0, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 795.1, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 795.8, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 796.0, "event": {"type": "ToolExecutionStarted", "label": "Opening calculator…"}}
-{"i": 7, "t_ms": 796.0, "event": {"type": "ToolExecutionFinished"}}
-{"i": 8, "t_ms": 796.8, "event": {"type": "SpeechStarted"}}
-{"i": 9, "t_ms": 797.0, "event": {"type": "ResponseChunk", "text": "I've opened the calculator."}}
-{"i": 10, "t_ms": 797.1, "event": {"type": "SpeechChunk"}}
-{"i": 11, "t_ms": 797.2, "event": {"type": "SpeechFinished"}}
-{"i": 12, "t_ms": 797.2, "event": {"type": "ConversationFinished"}}
-{"i": 13, "t_ms": 797.4, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 750.5, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 744.7, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 3.1, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.7, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 0.8, "detail": null}, {"name": "speak", "depth": 0, "ms": 0.5, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_fast_path": 749.2, "first_audio_out": 750.3}}}}
-{"i": 14, "t_ms": 797.4, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
-{"i": 15, "t_ms": 797.5, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 35.2, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 35.3, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1079.1, "event": {"type": "FinalTranscript", "text": "open the calculator"}}
+{"i": 3, "t_ms": 1079.2, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1079.3, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1080.3, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1080.5, "event": {"type": "ToolExecutionStarted", "label": "Opening calculator…"}}
+{"i": 7, "t_ms": 1080.6, "event": {"type": "ToolExecutionFinished"}}
+{"i": 8, "t_ms": 1082.8, "event": {"type": "SpeechStarted"}}
+{"i": 9, "t_ms": 1083.2, "event": {"type": "ResponseChunk", "text": "I've opened the calculator."}}
+{"i": 10, "t_ms": 1083.3, "event": {"type": "SpeechChunk"}}
+{"i": 11, "t_ms": 1083.9, "event": {"type": "SpeechFinished"}}
+{"i": 12, "t_ms": 1084.0, "event": {"type": "ConversationFinished"}}
+{"i": 13, "t_ms": 1084.2, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1049.2, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1038.3, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 5.4, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.9, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 2.3, "detail": null}, {"name": "speak", "depth": 0, "ms": 1.3, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.3, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.6, "detail": null}], "events": {"route_fast_path": 1045.6, "first_audio_out": 1048.3}}}}
+{"i": 14, "t_ms": 1084.3, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 15, "t_ms": 1084.4, "event": {"type": "Idle"}}

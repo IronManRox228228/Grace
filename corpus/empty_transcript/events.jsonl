@@ -1,7 +1,7 @@
-{"i": 0, "t_ms": 45.3, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 45.4, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 812.5, "event": {"type": "ConversationFinished"}}
-{"i": 3, "t_ms": 3413.9, "event": {"type": "Idle"}}
-{"i": 4, "t_ms": 3414.1, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 3369.0, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 764.5, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 2.5, "detail": null}], "events": {}}}}
-{"i": 5, "t_ms": 3414.2, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
-{"i": 6, "t_ms": 3443.2, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 22.5, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 22.5, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1052.8, "event": {"type": "ConversationFinished"}}
+{"i": 3, "t_ms": 3655.6, "event": {"type": "Idle"}}
+{"i": 4, "t_ms": 3656.1, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 3633.8, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1025.1, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 5.0, "detail": null}], "events": {}}}}
+{"i": 5, "t_ms": 3656.3, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 6, "t_ms": 3658.1, "event": {"type": "Idle"}}

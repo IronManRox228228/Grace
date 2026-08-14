@@ -1,32 +1,32 @@
-{"i": 0, "t_ms": 42.8, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 42.9, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 769.6, "event": {"type": "FinalTranscript", "text": "open notepad"}}
-{"i": 3, "t_ms": 769.6, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 769.7, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 770.4, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 770.6, "event": {"type": "ToolExecutionStarted", "label": "Opening notepad…"}}
-{"i": 7, "t_ms": 770.6, "event": {"type": "ToolExecutionFinished"}}
-{"i": 8, "t_ms": 771.4, "event": {"type": "SpeechStarted"}}
-{"i": 9, "t_ms": 771.6, "event": {"type": "ResponseChunk", "text": "I've opened Notepad."}}
-{"i": 10, "t_ms": 771.7, "event": {"type": "SpeechChunk"}}
-{"i": 11, "t_ms": 771.8, "event": {"type": "SpeechFinished"}}
-{"i": 12, "t_ms": 771.8, "event": {"type": "ConversationFinished"}}
-{"i": 13, "t_ms": 771.9, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 729.3, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 723.1, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 3.5, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.7, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 0.8, "detail": null}, {"name": "speak", "depth": 0, "ms": 0.4, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_fast_path": 728.0, "first_audio_out": 729.1}}}}
-{"i": 14, "t_ms": 772.0, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 15, "t_ms": 1459.6, "event": {"type": "FinalTranscript", "text": "now turn the volume up"}}
-{"i": 16, "t_ms": 1459.9, "event": {"type": "ToolExecutionStarted", "label": "Adjusting volume…"}}
-{"i": 17, "t_ms": 1460.0, "event": {"type": "ToolExecutionFinished"}}
-{"i": 18, "t_ms": 1460.0, "event": {"type": "SpeechStarted"}}
-{"i": 19, "t_ms": 1460.2, "event": {"type": "ResponseChunk", "text": "Volume set to 60 percent."}}
-{"i": 20, "t_ms": 1460.3, "event": {"type": "SpeechChunk"}}
-{"i": 21, "t_ms": 1460.4, "event": {"type": "SpeechFinished"}}
-{"i": 22, "t_ms": 1460.4, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 23, "t_ms": 2157.6, "event": {"type": "FinalTranscript", "text": "thanks that's all"}}
-{"i": 24, "t_ms": 2157.8, "event": {"type": "SpeechStarted"}}
-{"i": 25, "t_ms": 2158.0, "event": {"type": "ResponseChunk", "text": "Happy to help."}}
-{"i": 26, "t_ms": 2158.0, "event": {"type": "SpeechChunk"}}
-{"i": 27, "t_ms": 2158.1, "event": {"type": "ResponseChunk", "text": " Just say Grace if you need me."}}
-{"i": 28, "t_ms": 2158.1, "event": {"type": "SpeechChunk"}}
-{"i": 29, "t_ms": 2158.2, "event": {"type": "SpeechFinished"}}
-{"i": 30, "t_ms": 2158.3, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 31, "t_ms": 8175.3, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 22.4, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 22.4, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1041.5, "event": {"type": "FinalTranscript", "text": "open notepad"}}
+{"i": 3, "t_ms": 1041.7, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1041.7, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1043.3, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1043.5, "event": {"type": "ToolExecutionStarted", "label": "Opening notepad…"}}
+{"i": 7, "t_ms": 1043.5, "event": {"type": "ToolExecutionFinished"}}
+{"i": 8, "t_ms": 1045.9, "event": {"type": "SpeechStarted"}}
+{"i": 9, "t_ms": 1046.3, "event": {"type": "ResponseChunk", "text": "I've opened Notepad."}}
+{"i": 10, "t_ms": 1046.3, "event": {"type": "SpeechChunk"}}
+{"i": 11, "t_ms": 1046.5, "event": {"type": "SpeechFinished"}}
+{"i": 12, "t_ms": 1046.5, "event": {"type": "ConversationFinished"}}
+{"i": 13, "t_ms": 1046.7, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1024.4, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1014.3, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 4.7, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.3, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 2.4, "detail": null}, {"name": "speak", "depth": 0, "ms": 0.6, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.3, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_fast_path": 1021.3, "first_audio_out": 1024.1}}}}
+{"i": 14, "t_ms": 1046.7, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 15, "t_ms": 2071.9, "event": {"type": "FinalTranscript", "text": "now turn the volume up"}}
+{"i": 16, "t_ms": 2072.5, "event": {"type": "ToolExecutionStarted", "label": "Adjusting volume…"}}
+{"i": 17, "t_ms": 2072.6, "event": {"type": "ToolExecutionFinished"}}
+{"i": 18, "t_ms": 2072.7, "event": {"type": "SpeechStarted"}}
+{"i": 19, "t_ms": 2073.2, "event": {"type": "ResponseChunk", "text": "Volume set to 60 percent."}}
+{"i": 20, "t_ms": 2073.3, "event": {"type": "SpeechChunk"}}
+{"i": 21, "t_ms": 2073.7, "event": {"type": "SpeechFinished"}}
+{"i": 22, "t_ms": 2073.8, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 23, "t_ms": 3105.0, "event": {"type": "FinalTranscript", "text": "thanks that's all"}}
+{"i": 24, "t_ms": 3105.2, "event": {"type": "SpeechStarted"}}
+{"i": 25, "t_ms": 3105.8, "event": {"type": "ResponseChunk", "text": "Happy to help."}}
+{"i": 26, "t_ms": 3105.8, "event": {"type": "SpeechChunk"}}
+{"i": 27, "t_ms": 3105.9, "event": {"type": "ResponseChunk", "text": " Just say Grace if you need me."}}
+{"i": 28, "t_ms": 3105.9, "event": {"type": "SpeechChunk"}}
+{"i": 29, "t_ms": 3106.0, "event": {"type": "SpeechFinished"}}
+{"i": 30, "t_ms": 3106.1, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 31, "t_ms": 9161.7, "event": {"type": "Idle"}}

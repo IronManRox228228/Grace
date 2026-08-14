@@ -61,6 +61,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Union
 from unittest import mock
 
+from .clock import install_audio_clock_vad
+
 logger = logging.getLogger("grace.harness.generate")
 
 
@@ -267,18 +269,20 @@ class ScriptedPump:
     collecting - ``main.py:554`` and ``main.py:709`` - so using it to advance
     the script means the pump never has to be told which turn is in progress.
 
-    Chunks are paced. The VAD accumulates silence against ``time.time()``
-    (``vad/detector.py:98``), so delivering a turn's chunks as fast as they can
-    be produced would end the turn at a different chunk than a real one, and
-    the tape would encode a turn-end the Rust VAD could never reproduce.
+    Chunks are paced, but the VAD no longer depends on that: the harness runs it
+    on an audio clock (``harness/clock.py``), so the turn ends on the same chunk
+    whatever the delivery rate. The pacing that remains is there to keep the
+    recorded chunk offsets resembling a real microphone's, since ``TapePump``
+    replays against them and the timing diff is graded against them.
+
+    It used to be load-bearing, and badly so: silence accumulated against
+    ``time.time()``, 275ms of it at 50ms per chunk was crossed 5.5 chunks in,
+    and a scheduler hiccup either side of that boundary moved the turn-end by a
+    chunk. Two of 27 tapes failed per run, never the same two.
     """
 
-    #: Real delay between chunks. Chosen together with the silence window in
-    #: ``_config_for``: the VAD's threshold has to be crossed in the *middle*
-    #: of a chunk, not at its edge, or the turn ends one chunk earlier or later
-    #: depending on scheduler jitter - and a replay of that tape then reports a
-    #: VAD parity failure that is really a coin flip. 275ms of silence at 50ms
-    #: per chunk is crossed 5.5 chunks in, leaving 25ms of margin either way.
+    #: Real delay between chunks. No longer a correctness constraint - see the
+    #: class docstring - but still what gives the recorded offsets their shape.
     CHUNK_DELAY_S = 0.05
 
     def __init__(self, turns: int, chunk_bytes: int = 1024, speech: int = 6, silence: int = 20):
@@ -517,6 +521,9 @@ async def _drive(
 
         app = main_mod.GraceApp()
         app._running = True
+        # Silence is counted in audio, not wall time, so a turn ends on the same
+        # chunk however loaded the machine is. See harness/clock.py.
+        install_audio_clock_vad(app)
         app.pump = ScriptedPump(turns=len(scenario.turns))
         app.agent_loop._perception = ScriptedPerception(scenario.snapshots)
         app.agent_loop._max_iterations = GENERATION_STEP_CAP

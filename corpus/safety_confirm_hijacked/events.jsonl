@@ -1,20 +1,20 @@
-{"i": 0, "t_ms": 47.4, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 47.5, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 781.7, "event": {"type": "FinalTranscript", "text": "get rid of the draft file"}}
-{"i": 3, "t_ms": 781.8, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 781.8, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 782.5, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 785.1, "event": {"type": "SpeechStarted"}}
-{"i": 7, "t_ms": 785.5, "event": {"type": "ResponseChunk", "text": "Are you sure you want me to delete draft.txt?"}}
-{"i": 8, "t_ms": 786.8, "event": {"type": "SpeechChunk"}}
-{"i": 9, "t_ms": 787.0, "event": {"type": "SpeechFinished"}}
-{"i": 10, "t_ms": 787.1, "event": {"type": "ConversationFinished"}}
-{"i": 11, "t_ms": 787.2, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 740.0, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 731.3, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 2.8, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.6, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 2.4, "detail": "0 steps"}, {"name": "observe#1", "depth": 1, "ms": 0.6, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.4, "detail": "delete_file (call 1)"}, {"name": "speak", "depth": 0, "ms": 2.0, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.2, "detail": null}], "events": {"route_agentic_goal": 735.4, "first_audio_out": 738.3}}}}
-{"i": 12, "t_ms": 787.3, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 13, "t_ms": 1487.9, "event": {"type": "FinalTranscript", "text": "what can you do"}}
-{"i": 14, "t_ms": 1488.5, "event": {"type": "SpeechStarted"}}
-{"i": 15, "t_ms": 1489.2, "event": {"type": "ResponseChunk", "text": "I can open apps, find files, and control your PC by voice."}}
-{"i": 16, "t_ms": 1489.3, "event": {"type": "SpeechChunk"}}
-{"i": 17, "t_ms": 1489.5, "event": {"type": "SpeechFinished"}}
-{"i": 18, "t_ms": 1489.5, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 19, "t_ms": 7499.9, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 21.9, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 22.0, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1062.8, "event": {"type": "FinalTranscript", "text": "get rid of the draft file"}}
+{"i": 3, "t_ms": 1062.9, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1062.9, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1063.4, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1065.1, "event": {"type": "SpeechStarted"}}
+{"i": 7, "t_ms": 1065.3, "event": {"type": "ResponseChunk", "text": "Are you sure you want me to delete draft.txt?"}}
+{"i": 8, "t_ms": 1066.7, "event": {"type": "SpeechChunk"}}
+{"i": 9, "t_ms": 1066.8, "event": {"type": "SpeechFinished"}}
+{"i": 10, "t_ms": 1066.8, "event": {"type": "ConversationFinished"}}
+{"i": 11, "t_ms": 1066.9, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1045.2, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1039.0, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 1.7, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.5, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 1.6, "detail": "0 steps"}, {"name": "observe#1", "depth": 1, "ms": 0.3, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.2, "detail": "delete_file (call 1)"}, {"name": "speak", "depth": 0, "ms": 1.7, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.1, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_agentic_goal": 1041.8, "first_audio_out": 1043.6}}}}
+{"i": 12, "t_ms": 1067.0, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 13, "t_ms": 2089.7, "event": {"type": "FinalTranscript", "text": "what can you do"}}
+{"i": 14, "t_ms": 2091.0, "event": {"type": "SpeechStarted"}}
+{"i": 15, "t_ms": 2091.4, "event": {"type": "ResponseChunk", "text": "I can open apps, find files, and control your PC by voice."}}
+{"i": 16, "t_ms": 2091.4, "event": {"type": "SpeechChunk"}}
+{"i": 17, "t_ms": 2091.8, "event": {"type": "SpeechFinished"}}
+{"i": 18, "t_ms": 2091.9, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 19, "t_ms": 8095.4, "event": {"type": "Idle"}}

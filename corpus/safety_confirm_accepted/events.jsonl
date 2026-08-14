@@ -1,23 +1,23 @@
-{"i": 0, "t_ms": 83.7, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 83.9, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 828.0, "event": {"type": "FinalTranscript", "text": "get rid of the draft file"}}
-{"i": 3, "t_ms": 828.0, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 828.0, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 828.5, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 830.3, "event": {"type": "SpeechStarted"}}
-{"i": 7, "t_ms": 830.5, "event": {"type": "ResponseChunk", "text": "Are you sure you want me to delete draft.txt?"}}
-{"i": 8, "t_ms": 830.7, "event": {"type": "SpeechChunk"}}
-{"i": 9, "t_ms": 830.9, "event": {"type": "SpeechFinished"}}
-{"i": 10, "t_ms": 830.9, "event": {"type": "ConversationFinished"}}
-{"i": 11, "t_ms": 831.0, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 747.6, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 742.4, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 1.6, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.4, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 1.6, "detail": "0 steps"}, {"name": "observe#1", "depth": 1, "ms": 0.4, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.2, "detail": "delete_file (call 1)"}, {"name": "speak", "depth": 0, "ms": 0.7, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.1, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_agentic_goal": 745.2, "first_audio_out": 747.1}}}}
-{"i": 12, "t_ms": 831.1, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 13, "t_ms": 1523.4, "event": {"type": "FinalTranscript", "text": "yes go ahead"}}
-{"i": 14, "t_ms": 1524.0, "event": {"type": "ToolExecutionStarted", "label": "Moving draft.txt to recycle bin…"}}
-{"i": 15, "t_ms": 1524.1, "event": {"type": "ToolExecutionFinished"}}
-{"i": 16, "t_ms": 1566.2, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 2}}
-{"i": 17, "t_ms": 1573.0, "event": {"type": "SpeechStarted"}}
-{"i": 18, "t_ms": 1573.3, "event": {"type": "ResponseChunk", "text": "I've moved draft.txt to the Recycle Bin."}}
-{"i": 19, "t_ms": 1573.3, "event": {"type": "SpeechChunk"}}
-{"i": 20, "t_ms": 1573.4, "event": {"type": "SpeechFinished"}}
-{"i": 21, "t_ms": 1573.5, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 22, "t_ms": 7582.3, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 22.6, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 22.7, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1057.0, "event": {"type": "FinalTranscript", "text": "get rid of the draft file"}}
+{"i": 3, "t_ms": 1057.0, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1057.1, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1057.5, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1059.2, "event": {"type": "SpeechStarted"}}
+{"i": 7, "t_ms": 1059.4, "event": {"type": "ResponseChunk", "text": "Are you sure you want me to delete draft.txt?"}}
+{"i": 8, "t_ms": 1060.8, "event": {"type": "SpeechChunk"}}
+{"i": 9, "t_ms": 1060.9, "event": {"type": "SpeechFinished"}}
+{"i": 10, "t_ms": 1061.0, "event": {"type": "ConversationFinished"}}
+{"i": 11, "t_ms": 1061.1, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1038.7, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1032.6, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 1.7, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.4, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 1.6, "detail": "0 steps"}, {"name": "observe#1", "depth": 1, "ms": 0.4, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.2, "detail": "delete_file (call 1)"}, {"name": "speak", "depth": 0, "ms": 1.8, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.1, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_agentic_goal": 1035.2, "first_audio_out": 1037.0}}}}
+{"i": 12, "t_ms": 1061.1, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 13, "t_ms": 2086.2, "event": {"type": "FinalTranscript", "text": "yes go ahead"}}
+{"i": 14, "t_ms": 2087.9, "event": {"type": "ToolExecutionStarted", "label": "Moving draft.txt to recycle bin…"}}
+{"i": 15, "t_ms": 2088.0, "event": {"type": "ToolExecutionFinished"}}
+{"i": 16, "t_ms": 2097.0, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 2}}
+{"i": 17, "t_ms": 2102.5, "event": {"type": "SpeechStarted"}}
+{"i": 18, "t_ms": 2102.7, "event": {"type": "ResponseChunk", "text": "I've moved draft.txt to the Recycle Bin."}}
+{"i": 19, "t_ms": 2102.8, "event": {"type": "SpeechChunk"}}
+{"i": 20, "t_ms": 2102.9, "event": {"type": "SpeechFinished"}}
+{"i": 21, "t_ms": 2102.9, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 22, "t_ms": 8128.9, "event": {"type": "Idle"}}

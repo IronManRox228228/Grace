@@ -1,7 +1,7 @@
 {
   "session_id": "agentic_unparseable_plan",
-  "recorded_at": "2026-08-15T00:35:30",
-  "git_sha": "769f4f315908605d34549532ff579be69dfa2cff",
+  "recorded_at": "2026-08-15T01:24:51",
+  "git_sha": "ccccac38d91160789dd39b6b40eb45ac6bbc929e",
   "config": {
     "agent_max_consecutive_plan_failures": 3,
     "agent_max_iterations": 0,

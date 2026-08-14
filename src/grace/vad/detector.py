@@ -24,19 +24,60 @@ class VadDetector:
 
     Monitors audio chunks and tracks whether the user is speaking.
     Emits a callback when silence is detected after speech (turn end).
+
+    Two clocks
+    ----------
+    By default silence accumulates against ``time.time()``, which is what a live
+    microphone wants: the wall is the only clock a dropped chunk cannot hide
+    from.
+
+    Pass ``sample_rate`` to accumulate against *audio* time instead - the
+    duration of the samples actually handed to :meth:`process_chunk`, which
+    advances by exactly ``len(chunk) / (rate * width * channels)`` seconds per
+    chunk regardless of how fast they arrive. The tape harness uses this, and it
+    is the difference between a deterministic oracle and a coin flip: replay
+    feeds a recorded chunk sequence as fast as the scheduler allows, so under a
+    wall clock the ~300ms silence tail of a generated turn can land inside a
+    275ms window and the audio runs out before the turn closes. That surfaced as
+    "recorded audio ended before the VAD closed the turn" on roughly 2 of 27
+    tapes, varying run to run on an unchanged corpus.
+
+    Audio time is arguably the more correct clock for the live path too - it
+    cannot truncate a speaker because the capture thread was descheduled - but
+    that is a behavioural change to the listening window and is deliberately not
+    made here.
     """
 
     def __init__(
         self,
         threshold: float = 0.5,
         silence_duration_ms: int = 1200,
+        sample_rate: Optional[int] = None,
+        sample_width: int = 2,
+        channels: int = 1,
     ) -> None:
         self._threshold = threshold
         self._silence_duration_ms = silence_duration_ms
+        self._bytes_per_second: Optional[float] = (
+            float(sample_rate * sample_width * channels) if sample_rate else None
+        )
+        self._audio_seconds = 0.0
         self._state = SilenceState()
+        if self._bytes_per_second:
+            self._state.silence_start = 0.0
         self._on_silence: Optional[Callable[[SilenceState], None]] = None
         self._on_speech: Optional[Callable[[SilenceState], None]] = None
         self._has_detected_speech = False
+
+    @property
+    def uses_audio_clock(self) -> bool:
+        return self._bytes_per_second is not None
+
+    def _now(self) -> float:
+        """Seconds elapsed, on whichever clock this detector was built with."""
+        if self._bytes_per_second is not None:
+            return self._audio_seconds
+        return time.time()
 
     @property
     def is_speaking(self) -> bool:
@@ -73,7 +114,13 @@ class VadDetector:
                 samples = struct.unpack(f"<{len(chunk) // 2}h", chunk)
                 normalized_rms = (sum(s * s for s in samples) / len(samples)) ** 0.5 / 32767.0
 
-        now = time.time()
+        # Advanced before the chunk is judged, so a chunk's own duration counts
+        # towards the silence it is part of - the same way wall-clock time has
+        # already passed by the time a live chunk is handed over.
+        if self._bytes_per_second is not None:
+            self._audio_seconds += len(chunk) / self._bytes_per_second
+
+        now = self._now()
 
         if normalized_rms >= self._threshold:
             # Speech detected
@@ -107,6 +154,13 @@ class VadDetector:
         return False
 
     def reset(self) -> None:
-        """Reset detection state."""
+        """Reset detection state.
+
+        The audio clock keeps running across turns. It measures elapsed audio,
+        not elapsed turn, and rewinding it would make the second turn of a
+        session start from a silence window the first turn had already filled.
+        """
         self._state = SilenceState()
+        if self._bytes_per_second:
+            self._state.silence_start = self._audio_seconds
         self._has_detected_speech = False
