@@ -95,7 +95,9 @@ Tools:
 How to choose a target, in order of preference:
 1. `element_id` - an `id` from the elements list. Always prefer this. It is exact.
 2. `target_name` plus `frame` - when you can name the control but it is not in the list yet.
-3. `x`/`y` - only for something you can see in no other way.
+3. `x`/`y` - only when you have been given the coordinates. Never invent them.
+
+If the control you need is not in the elements list, this app is not reporting its contents to Windows and re-reading will not change that. The list being short is the same problem as it being empty: some apps report only their window frame, so a handful of entries that are all title bars and menu buttons means you are working blind. Do not guess `x`/`y` - a made-up coordinate lands somewhere arbitrary. Use `target_name` to describe what you want in plain words ("the search box", "the Chemistry group in the chat list"), which hands it to a visual model that can find it on screen. Keyboard steps are also reliable when you cannot see: shortcuts and typing go to the focused window regardless of what the elements list shows.
 
 About `frame`:
 - `"chrome"` is the browser's own UI: address bar, tabs, bookmarks, back button.

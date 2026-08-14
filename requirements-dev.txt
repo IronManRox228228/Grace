@@ -1,0 +1,10 @@
+# Test-only dependencies, kept out of requirements.txt so a runtime install
+# stays lean.
+#
+# pytest-asyncio is not optional. Without it every `@pytest.mark.asyncio` test
+# fails, and it fails as eleven broken audio-pump assertions plus an
+# easily-missed PytestUnknownMarkWarning - which reads like a regression in the
+# code rather than a missing plugin. The migration grades itself against this
+# suite, so a silently-degraded baseline is the worst thing it could have.
+pytest>=8.0
+pytest-asyncio>=1.0

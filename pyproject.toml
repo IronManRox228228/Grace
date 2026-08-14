@@ -13,3 +13,21 @@ grace = "grace.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Strict is what the suite already assumes: only test_audio_pump.py marks
+# coroutines, everything else drives async code through asyncio.run(). Making it
+# explicit stops a future pytest-asyncio default from silently changing which
+# tests run.
+asyncio_mode = "strict"
+markers = [
+    # A unit test checks one module against its own contract. An integration
+    # test checks that two modules agree about a contract they share - tool
+    # names, parameter names, event shapes, config wiring. Every seam defect
+    # found so far has been of the second kind, and none of the ~600 unit tests
+    # could have caught one: each side is individually correct.
+    "unit: exercises a single module in isolation (the default; rarely needs stating)",
+    "integration: exercises the agreement between two or more modules",
+    "slow: takes seconds, not milliseconds - builds a real GraceApp or drives a full turn",
+]

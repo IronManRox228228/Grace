@@ -29,7 +29,21 @@ class TaskComplexity(Enum):
 
 
 class CapabilityRouter:
-    """Routes voice intents to either the fast deterministic executor or the agentic loop."""
+    """Routes voice intents to either the fast deterministic executor or the agentic loop.
+
+    The agentic loop is the default and the fast path is the exception, because
+    the two ways of being wrong do not cost the same. Sending a one-step request
+    to the loop costs a screenshot and a planner call - a few seconds, and the
+    right outcome, since the loop can call the same deterministic tools as its
+    first step. Sending a multi-step request down the fast path runs the first
+    tool, discards the rest of the sentence, and reports success: the user is
+    told "I've opened WhatsApp" when they asked for a file inside it.
+
+    This used to be the other way round, with a whitelist of verbs ("click",
+    "play", "scroll") promoting a request to the loop. Any verb missing from
+    that list - "search" was - silently truncated the request, and no list of
+    verbs is ever finished.
+    """
 
     # Tools that complete in one deterministic pass. No screen state is read,
     # so there is nothing for the agentic loop to add.
@@ -61,15 +75,19 @@ class CapabilityRouter:
         "summarize_pdf",
     }
 
-    # Multi-step phrasings that genuinely need the agentic loop even when the
-    # intent model produced a single tool call. Deliberately much smaller than
-    # the old ~80-keyword list, which caught the word "app" in "happy".
-    AGENTIC_KEYWORDS = {
-        "click", "press", "type", "select", "choose", "tap",
-        "scroll", "drag", "hover", "play", "pause", "watch",
-        "navigate", "fill", "summarize", "extract", "organize",
-        "then", "after that", "and then",
-    }
+    # Words that join a second clause onto the first. A second clause is a
+    # second action, whatever verb it happens to use.
+    CLAUSE_SEPARATORS = {"and", "then", "also", "next", "after that", "plus"}
+
+    # Longest utterance still treated as a single deterministic command.
+    #
+    # A backstop for the case the separators miss: speech often drops the
+    # conjunction ("open whatsapp search for the pdf"), and the intent model
+    # answers such a sentence with the first tool it recognises, silently
+    # discarding the rest. Length is a crude proxy for "there is more here than
+    # one tool call", but it fails in the safe direction - the longest genuinely
+    # atomic command in the recorded corpus is six words.
+    MAX_FAST_PATH_WORDS = 8
 
     CONVERSATION_KEYWORDS = {
         "hello", "hi", "hey", "thanks", "thank you", "goodbye", "bye",
@@ -86,6 +104,23 @@ class CapabilityRouter:
         return False
 
     @classmethod
+    def _not_atomic(cls, text: str) -> Optional[str]:
+        """Why this utterance is more than one command, or None if it isn't.
+
+        Returns a reason string so the routing decision is legible in the log;
+        a bare bool makes "why did that go agentic?" unanswerable after the
+        fact.
+        """
+        if cls._mentions(text, cls.CLAUSE_SEPARATORS):
+            return "the request has a second clause"
+
+        words = len(text.split())
+        if words > cls.MAX_FAST_PATH_WORDS:
+            return f"the request is {words} words, longer than one command"
+
+        return None
+
+    @classmethod
     def classify(cls, prompt_text: str, parsed_intent: Optional[Intent] = None) -> TaskComplexity:
         """Determine task complexity path."""
         prompt_lower = (prompt_text or "").lower().strip()
@@ -100,13 +135,16 @@ class CapabilityRouter:
                 return TaskComplexity.AGENTIC_GOAL
 
             if tool in cls.FAST_PATH_TOOLS:
-                # A single-tool intent still goes agentic if the utterance
-                # clearly chains more work onto it ("open YouTube and play...").
-                if cls._mentions(prompt_lower, cls.AGENTIC_KEYWORDS):
-                    logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL (multi-step phrasing around '{tool}')")
-                    return TaskComplexity.AGENTIC_GOAL
-                logger.info(f"CapabilityRouter: Route -> FAST_PATH (tool '{tool}')")
-                return TaskComplexity.FAST_PATH
+                # The fast path is opt-in, and the utterance has to earn it by
+                # being one short command. Anything else goes to the loop, which
+                # can call this very tool as its first step if that is all the
+                # request needed.
+                reason = cls._not_atomic(prompt_lower)
+                if reason is None:
+                    logger.info(f"CapabilityRouter: Route -> FAST_PATH (tool '{tool}')")
+                    return TaskComplexity.FAST_PATH
+                logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL ('{tool}' but {reason})")
+                return TaskComplexity.AGENTIC_GOAL
 
             if parsed_intent.is_conversation:
                 logger.info("CapabilityRouter: Route -> CONVERSATION (intent)")
@@ -117,10 +155,6 @@ class CapabilityRouter:
         if cls._mentions(prompt_lower, cls.CONVERSATION_KEYWORDS):
             logger.info("CapabilityRouter: Route -> CONVERSATION (phrasing)")
             return TaskComplexity.CONVERSATION
-
-        if cls._mentions(prompt_lower, cls.AGENTIC_KEYWORDS):
-            logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL (keyword match: '{prompt_text}')")
-            return TaskComplexity.AGENTIC_GOAL
 
         logger.info(f"CapabilityRouter: Route -> AGENTIC_GOAL (default for '{prompt_text}')")
         return TaskComplexity.AGENTIC_GOAL

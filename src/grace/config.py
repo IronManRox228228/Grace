@@ -86,6 +86,17 @@ class Config:
     # half-changed state. Set either to a positive number to re-impose a limit.
     agent_max_iterations: int = int(os.getenv("AGENT_MAX_ITERATIONS", "0"))
     planner_max_calls_per_goal: int = int(os.getenv("PLANNER_MAX_CALLS_PER_GOAL", "0"))
+    # Not unlimited, unlike the two above. Those bound a task that is making
+    # progress; this bounds one that is making none, and "unlimited" there means
+    # an unreachable LLM freezes Grace mid-task with no way to interrupt it.
+    agent_max_consecutive_plan_failures: int = int(
+        os.getenv("AGENT_MAX_CONSECUTIVE_PLAN_FAILURES", "3")
+    )
+    # Likewise bounded: a planner retrying one action against one unchanging
+    # view is not making progress, it is just spending quota.
+    agent_max_repeated_actions: int = int(
+        os.getenv("AGENT_MAX_REPEATED_ACTIONS", "3")
+    )
     screenshot_max_width: int = int(os.getenv("SCREENSHOT_MAX_WIDTH", "1280"))
 
     # Browser DOM access. Attach-only: Grace never launches a browser with a

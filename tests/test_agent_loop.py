@@ -7,6 +7,7 @@ the model no signal that it had failed.
 """
 
 import asyncio
+import itertools
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock
@@ -37,10 +38,31 @@ def make_loop(responses, dispatch_result=None, **kwargs):
     dispatcher = AsyncMock()
     dispatcher.execute.return_value = dispatch_result or {"status": "ok"}
     perception = MagicMock()
-    perception.capture_snapshot.return_value = snapshot()
+    # A task that is getting somewhere changes the screen, and the loop treats
+    # an unchanging screen as evidence that it isn't (TestNoProgressGuard). So
+    # the shared fixture hands back a different snapshot each time; tests that
+    # want the frozen-screen pathology ask for it with freeze_screen().
+    screens = (snapshot(title=f"Untitled - Notepad [{i}]") for i in itertools.count())
+    perception.capture_snapshot.side_effect = lambda *a, **k: next(screens)
     perception.capture_snapshot_async.return_value = snapshot()
     loop = AgentLoop(gemma=gemma, dispatcher=dispatcher, perception=perception, **kwargs)
     return loop, gemma, dispatcher
+
+
+def pin_snapshot(loop, snap):
+    """Make perception return exactly this snapshot every time.
+
+    Clearing `side_effect` first is required: make_loop sets one to vary the
+    screen, and a mock's side_effect takes precedence over its return_value.
+    """
+    loop._perception.capture_snapshot.side_effect = None
+    loop._perception.capture_snapshot.return_value = snap
+    loop._perception.capture_snapshot_async.return_value = snap
+
+
+def freeze_screen(loop, title="Untitled - Notepad", graph=None):
+    """Pin perception to one unchanging snapshot: a blind or frozen app."""
+    pin_snapshot(loop, snapshot(title=title, graph=graph))
 
 
 DONE = '{"action": "converse", "params": {}, "is_completed": true, "final_response": "All done."}'
@@ -75,6 +97,108 @@ class TestIterationCap:
     def test_planner_is_uncapped_by_default(self):
         loop, _, _ = make_loop([])
         assert loop._planner.is_unlimited is True
+
+
+class TestPlannerFailureCircuitBreaker:
+    """An unreachable planner must end the turn, not retry forever.
+
+    The loop is uncapped by default, and that cap-less-ness used to apply to
+    failing steps too: with the LLM unreachable or the API key rejected, the
+    planner returned nothing on every call and the loop retried several times a
+    second indefinitely, leaving the overlay stuck mid-task. For a user who
+    cannot reach a keyboard to kill it, that is a lockout rather than a slow
+    response.
+    """
+
+    def test_a_planner_that_never_answers_gives_up(self):
+        # What an unreachable LLM looks like from here: generate_text returns
+        # None every time, so no plan ever parses.
+        loop, _, _ = make_loop([None] * 200)
+        res = asyncio.run(loop.run(user_goal="open my browser"))
+
+        assert res["status"] == "planner_failed"
+        assert len(res["steps"]) == loop._max_consecutive_failures
+
+    def test_it_says_the_fault_is_graces_not_the_users(self):
+        loop, _, _ = make_loop([None] * 200)
+        res = asyncio.run(loop.run(user_goal="open my browser"))
+        assert "language model" in res["final_response"]
+
+    def test_isolated_failures_do_not_end_a_working_goal(self):
+        # One bad plan between good ones must not count towards the breaker,
+        # or a single malformed response would abandon a healthy task.
+        click = '{"action": "cua_click", "params": {"x": 1, "y": 2}, "expect": "something"}'
+        loop, _, _ = make_loop([click, None, click, None, click, None, DONE])
+        res = asyncio.run(loop.run(user_goal="do a thing with hiccups"))
+        assert res["status"] == "ok"
+
+
+class TestNoProgressGuard:
+    """A planner that repeats itself must stop; one making progress must not.
+
+    Against WhatsApp - which reports four elements, its window frame, and the
+    same four whatever happens inside - the loop once ran 130 steps and twelve
+    minutes cycling Ctrl+F / type / Enter, and stopped only when the LLM
+    provider began returning 429s.
+
+    The obvious measure is wrong, and cost a working run: judging by "the
+    observation did not change" killed a sequence that had correctly opened
+    WhatsApp, searched for a group and opened it, because none of that success
+    was visible through UIA. Repetition is the signal, not stillness.
+    """
+
+    CLICK = '{"action": "cua_click", "params": {"x": 1, "y": 2}, "expect": "something"}'
+
+    def test_repeating_one_action_ends_the_loop(self):
+        loop, _, _ = make_loop([self.CLICK] * 200)
+        freeze_screen(loop)
+        res = asyncio.run(loop.run(user_goal="find the pdf in my chemistry group"))
+
+        assert res["status"] == "no_progress"
+        # Bounded by the guard, not by the 200 plans it was offered.
+        assert len(res["steps"]) < loop._max_repeated_actions + 2
+
+    def test_distinct_actions_on_a_blind_app_are_not_interrupted(self):
+        # Exactly the run that was wrongly killed: WhatsApp's four-element
+        # frame never changes, but every step is different and productive.
+        steps = [
+            '{"action": "cua_click", "params": {"x": 300, "y": 300}, "expect": "focus"}',
+            '{"action": "cua_press_key", "params": {"key": "Control_L+f"}, "expect": "search"}',
+            '{"action": "cua_type_text", "params": {"text": "chemistry"}, "expect": "typed"}',
+            '{"action": "cua_press_key", "params": {"key": "Return"}, "expect": "opened"}',
+            DONE,
+        ]
+        loop, _, _ = make_loop(steps)
+        freeze_screen(loop, title="WhatsApp")
+
+        res = asyncio.run(loop.run(user_goal="open my chemistry group"))
+        assert res["status"] == "ok"
+        assert len(res["steps"]) == 5
+
+    def test_the_same_key_twice_is_still_allowed(self):
+        # One retry is reasonable - a window may not have been ready yet.
+        key = '{"action": "cua_press_key", "params": {"key": "Return"}, "expect": "x"}'
+        loop, _, _ = make_loop([key, key, DONE])
+        freeze_screen(loop)
+
+        res = asyncio.run(loop.run(user_goal="press enter twice"))
+        assert res["status"] == "ok"
+
+    def test_it_names_the_app_it_cannot_read(self):
+        loop, _, _ = make_loop([self.CLICK] * 200)
+        freeze_screen(loop, title="WhatsApp")
+
+        res = asyncio.run(loop.run(user_goal="open my chemistry group"))
+        assert "WhatsApp" in res["final_response"]
+        assert "doesn't report its contents" in res["final_response"]
+
+    def test_a_changing_screen_resets_the_repeat_count(self):
+        # The same action against a screen that keeps changing is not a repeat:
+        # each result taught the loop something.
+        loop, _, _ = make_loop([self.CLICK] * 19 + [DONE])
+        res = asyncio.run(loop.run(user_goal="do a long thing"))
+        assert res["status"] == "ok"
+        assert len(res["steps"]) > 12
 
 
 class TestVerification:
@@ -252,8 +376,7 @@ class TestGrounding:
             active_window=None, ocr_lines=[], width=1920, height=1080,
             png_bytes=b"png", image_width=1280, image_height=720,
         )
-        loop._perception.capture_snapshot.return_value = with_image
-        loop._perception.capture_snapshot_async.return_value = with_image
+        pin_snapshot(loop, with_image)
 
         asyncio.run(loop.run(user_goal="play the video"))
         assert grounder.locate.await_count == 1

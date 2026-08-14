@@ -43,6 +43,62 @@ class TestIntentIsTrustedFirst:
         assert route("open YouTube and play a lo-fi video", intent) == TaskComplexity.AGENTIC_GOAL
 
 
+class TestFastPathIsOptIn:
+    """Agentic is the default; a request has to be one short command to skip it.
+
+    The old rule promoted a fast-path intent to the loop only if the utterance
+    contained a listed verb. "search" was not listed, so "open chemistry group
+    in WhatsApp and search for the PDF" ran open_app, dropped the rest, and
+    said "I've opened WhatsApp."
+    """
+
+    def test_the_search_request_that_used_to_be_truncated(self):
+        intent = Intent(tool="open_app", params={"name": "WhatsApp"})
+        assert route(
+            "open chemistry group in WhatsApp and search for the PDF called electrochemistry",
+            intent,
+        ) == TaskComplexity.AGENTIC_GOAL
+
+    @pytest.mark.parametrize("text", [
+        "open Edge and search for cat videos",
+        "open notepad then save it",
+        "open the folder also rename the file",
+        "open Spotify next play my playlist",
+    ])
+    def test_a_second_clause_always_escalates(self, text):
+        intent = Intent(tool="open_app", params={"name": "X"})
+        assert route(text, intent) == TaskComplexity.AGENTIC_GOAL
+
+    def test_verbs_no_list_would_have_contained_still_escalate(self):
+        # The point of the rewrite: this works without "download" being known.
+        intent = Intent(tool="open_app", params={"name": "Edge"})
+        assert route("open Edge and download the attachment", intent) == TaskComplexity.AGENTIC_GOAL
+
+    def test_a_long_request_escalates_even_without_a_conjunction(self):
+        # Speech drops conjunctions; the intent model still answers with the
+        # first tool it recognises.
+        intent = Intent(tool="open_app", params={"name": "WhatsApp"})
+        assert route(
+            "open whatsapp find the electrochemistry pdf in my chemistry group",
+            intent,
+        ) == TaskComplexity.AGENTIC_GOAL
+
+    @pytest.mark.parametrize("text,tool", [
+        ("open notepad", "open_app"),
+        ("close notepad", "close_app"),
+        ("turn the volume up a bit", "adjust_volume"),
+        ("lock my computer", "lock_computer"),
+        ("find my tax return", "search_files"),
+        ("list my open windows", "cua_list_windows"),
+        ("get rid of the draft file", "delete_file"),
+        ("open the budget spreadsheet", "open_file"),
+    ])
+    def test_genuinely_atomic_commands_keep_the_fast_path(self, text, tool):
+        # Every fast-path utterance in the recorded corpus. Escalating these
+        # would trade the whole latency benefit for nothing.
+        assert route(text, Intent(tool=tool, params={})) == TaskComplexity.FAST_PATH
+
+
 class TestConversationShortCircuit:
     @pytest.mark.parametrize("text", ["hello", "hi there", "hey Grace", "thanks", "goodbye"])
     def test_greetings_do_not_take_the_agentic_path(self, text):

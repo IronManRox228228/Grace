@@ -29,6 +29,11 @@ from grace.harness.generate import (
 from grace.harness.recorder import reset_recorder_for_tests
 from grace.harness.tape import Tape
 
+# Every test here builds a real GraceApp and drives real listening windows, so
+# this is an integration suite that happens to predate the marker. It is also
+# the slowest file in the run by a wide margin.
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
 
 @pytest.fixture(autouse=True)
 def _no_leaked_recorder():

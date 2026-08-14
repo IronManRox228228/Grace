@@ -1,2 +1,2 @@
-{"i": 0, "t_ms": 817.3, "tool": "open_app", "params": {"name": "notepad"}, "result": {"status": "ok", "text": "I've opened Notepad."}}
-{"i": 1, "t_ms": 1588.2, "tool": "adjust_volume", "params": {"amount": 10, "mode": "increase"}, "result": {"status": "ok", "text": "Volume set to 60 percent.", "volume": 60}}
+{"i": 0, "t_ms": 771.3, "tool": "open_app", "params": {"name": "notepad"}, "result": {"status": "ok", "text": "I've opened Notepad."}}
+{"i": 1, "t_ms": 1460.0, "tool": "adjust_volume", "params": {"amount": 10, "mode": "increase"}, "result": {"status": "ok", "text": "Volume set to 60 percent.", "volume": 60}}

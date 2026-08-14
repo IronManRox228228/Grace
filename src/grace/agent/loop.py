@@ -52,6 +52,43 @@ _CONVERSATIONAL_RE = re.compile("|".join(_CONVERSATIONAL_PATTERNS), re.IGNORECAS
 # positive number to re-impose one.
 DEFAULT_MAX_ITERATIONS = 0
 
+# How many plans in a row may fail to parse before the loop gives up.
+#
+# `AGENT_MAX_ITERATIONS=0` means unlimited, which is the right default for real
+# goals - some legitimately need many steps. But "unlimited" also applied to
+# *failing* steps, so anything that made the planner return nothing on every
+# call (LLM unreachable, rejected API key, an outage mid-goal) turned into an
+# infinite retry at a few hundred milliseconds a lap, with the overlay stuck
+# mid-task and no way to interrupt it. For a user who navigates by voice and
+# cannot reach a keyboard, that is not a degraded response, it is a lockout.
+#
+# This bounds *consecutive* failures only. A goal that keeps making progress is
+# still unlimited; the counter resets the moment one plan parses.
+DEFAULT_MAX_CONSECUTIVE_PLAN_FAILURES = 3
+
+# How many times the loop may issue the *same action with the same parameters*
+# while the screen it can see stays identical, before concluding it is stuck.
+#
+# The failure this exists for is not a planner that breaks, but one that works:
+# against an app whose accessibility tree never changes, the planner reasons
+# soundly about a stale observation, acts, sees the same thing, and reasons
+# again. One session ran 130 steps and nearly twelve minutes that way, cycling
+# Ctrl+F / type / Enter roughly ten times over, and stopped only because the LLM
+# provider began returning 429s.
+#
+# Note carefully what is counted, because the obvious measure is wrong. "The
+# observation did not change" is *not* evidence of failure: WhatsApp reports
+# four elements - its window frame - and reports the same four whatever happens
+# inside it. Judging by that alone killed a run that had correctly opened the
+# app, searched for a group and opened it, because none of that success was
+# visible through UIA. What actually distinguishes stuck from working is
+# repetition: a loop that is getting somewhere issues *different* actions, even
+# when it cannot see the results.
+#
+# So the repeat counter resets the moment the observation changes, and only
+# accumulates for an identical action retried against an identical view.
+DEFAULT_MAX_REPEATED_ACTIONS = 3
+
 
 class AgentLoop:
     """Autonomous ReAct Execution Engine for complex multi-step tasks."""
@@ -79,6 +116,12 @@ class AgentLoop:
         self._max_iterations = (
             max_iterations if max_iterations is not None
             else _config_int("agent_max_iterations", DEFAULT_MAX_ITERATIONS)
+        )
+        self._max_consecutive_failures = _config_int(
+            "agent_max_consecutive_plan_failures", DEFAULT_MAX_CONSECUTIVE_PLAN_FAILURES
+        )
+        self._max_repeated_actions = _config_int(
+            "agent_max_repeated_actions", DEFAULT_MAX_REPEATED_ACTIONS
         )
         self._pending: Optional[dict[str, Any]] = None
 
@@ -145,11 +188,22 @@ class AgentLoop:
         last_result: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Drive the loop until completion, the step cap, or a confirmation."""
+        consecutive_failures = 0
+        last_observation: Optional[str] = None
+        attempts: dict[str, int] = {}
+
         while not memory.is_completed and not memory.is_exceeded:
             step_no = memory.current_iteration + 1
 
             async with stage(f"observe#{step_no}"):
                 snapshot = await self._observe()
+
+            # A changed view means the loop has learned something, so nothing it
+            # tried before is a repeat any more.
+            observation = snapshot.to_markdown()
+            if observation != last_observation:
+                last_observation = observation
+                attempts.clear()
 
             expectation_note = self._expectation_note(last_step, last_result, snapshot)
 
@@ -184,7 +238,32 @@ class AgentLoop:
                 memory.set_scratchpad("last_error", "The previous plan could not be parsed.")
                 memory.add_step("", "converse", {}, {"status": "error", "error": "unparseable plan"}, "Rethinking…")
                 last_step, last_result = None, None
+
+                # Consuming budget is only a brake when the budget is finite,
+                # and the shipped default is unlimited. Without this, a planner
+                # that fails every call never stops being retried.
+                consecutive_failures += 1
+                if consecutive_failures >= self._max_consecutive_failures:
+                    logger.error(
+                        f"AgentLoop: giving up after {consecutive_failures} consecutive "
+                        f"plans that could not be used."
+                    )
+                    return self._plan_failure_result(memory)
                 continue
+
+            consecutive_failures = 0
+
+            # Retrying the identical action against the identical view. Doing
+            # it once more is reasonable - a window may not have been ready -
+            # but past that the loop is just spending time and quota.
+            signature = _step_signature(step)
+            attempts[signature] = attempts.get(signature, 0) + 1
+            if attempts[signature] >= self._max_repeated_actions:
+                logger.error(
+                    f"AgentLoop: giving up - tried {step.action} with the same "
+                    f"parameters {attempts[signature]} times and nothing changed."
+                )
+                return self._no_progress_result(memory, snapshot)
 
             logger.info(f"AgentLoop step {step_no}: [{step.action}] {step.thought}")
 
@@ -391,6 +470,53 @@ class AgentLoop:
             "steps": [s.to_dict() for s in memory.steps_taken],
         }
 
+    def _no_progress_result(self, memory: AgentMemory, snapshot) -> dict[str, Any]:
+        """Stop, and name the reason the screen was not changing.
+
+        The two causes need different answers from the user, so they get
+        different sentences. An app that reports no elements at all cannot be
+        driven by the accessibility path however long the loop runs, and saying
+        "I couldn't do that" invites them to simply ask again; naming the app
+        tells them to try a different route.
+        """
+        app = _window_title(snapshot) or "that window"
+
+        if not _has_elements(snapshot):
+            response = (
+                f"I can't read anything inside {app} - it doesn't report its "
+                f"contents to Windows, so I can't see what to click. I've "
+                f"stopped rather than keep guessing."
+            )
+        else:
+            response = (
+                f"I've tried the same thing several times in {app} without "
+                f"getting anywhere, so I've stopped."
+            )
+
+        return {
+            "status": "no_progress",
+            "final_response": memory.final_response or response,
+            "steps": [s.to_dict() for s in memory.steps_taken],
+        }
+
+    def _plan_failure_result(self, memory: AgentMemory) -> dict[str, Any]:
+        """Stop and say so, rather than retrying a planner that is not answering.
+
+        Deliberately says the trouble is on Grace's side: the usual cause is the
+        LLM being unreachable or refusing the API key, and "I couldn't
+        understand you" would send the user off rewording a request that was
+        never the problem.
+        """
+        response = memory.final_response or (
+            "I'm having trouble planning that right now - I can't reach my "
+            "language model. Please check the connection and try again."
+        )
+        return {
+            "status": "planner_failed",
+            "final_response": response,
+            "steps": [s.to_dict() for s in memory.steps_taken],
+        }
+
     async def _emit(self, event: dict[str, Any]) -> None:
         if not self._ws_server:
             return
@@ -431,6 +557,31 @@ class AgentLoop:
 def _window_title(snapshot) -> str:
     window = getattr(snapshot, "active_window", None)
     return getattr(window, "title", "") if window is not None else ""
+
+
+def _step_signature(step: PlannedStep) -> str:
+    """Identifies "the same action again".
+
+    The window the step names is excluded: its handle and title wobble between
+    snapshots of the same application, and treating that as a different action
+    would let an identical retry loop slip through the repeat check.
+    """
+    params = {k: v for k, v in sorted(step.params.items()) if k != "window"}
+    return f"{step.action}:{params}"
+
+
+def _has_elements(snapshot) -> bool:
+    """Whether the snapshot describes anything the planner could act on.
+
+    Mirrors the choice `ScreenSnapshot.to_markdown` makes: the element graph if
+    it has anything in it, the legacy UIA list otherwise. False means the window
+    reported no contents at all, which is the signature of an app that does not
+    implement UI Automation rather than one that is merely busy.
+    """
+    graph = getattr(snapshot, "graph", None)
+    if graph is not None and len(graph):
+        return True
+    return bool(getattr(snapshot, "ui_elements", None))
 
 
 def _config_int(field: str, default: int) -> int:

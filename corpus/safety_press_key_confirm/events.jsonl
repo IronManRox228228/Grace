@@ -1,22 +1,22 @@
-{"i": 0, "t_ms": 23.4, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 23.4, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 778.4, "event": {"type": "FinalTranscript", "text": "press alt f4"}}
-{"i": 3, "t_ms": 778.5, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 778.5, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 779.4, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 782.2, "event": {"type": "SpeechStarted"}}
-{"i": 7, "t_ms": 782.5, "event": {"type": "ResponseChunk", "text": "Closing windows can cause loss of unsaved work."}}
-{"i": 8, "t_ms": 782.8, "event": {"type": "SpeechChunk"}}
-{"i": 9, "t_ms": 783.0, "event": {"type": "ResponseChunk", "text": " Should I proceed?"}}
-{"i": 10, "t_ms": 783.1, "event": {"type": "SpeechChunk"}}
-{"i": 11, "t_ms": 783.3, "event": {"type": "SpeechFinished"}}
-{"i": 12, "t_ms": 783.4, "event": {"type": "ConversationFinished"}}
-{"i": 13, "t_ms": 783.5, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 760.3, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 752.2, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 2.6, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.8, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 2.6, "detail": "0 steps"}, {"name": "observe#1", "depth": 1, "ms": 0.8, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.5, "detail": "cua_press_key (call 1)"}, {"name": "speak", "depth": 0, "ms": 1.2, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.3, "detail": "480 bytes"}, {"name": "synth#2", "depth": 1, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.2, "detail": null}], "events": {"route_agentic_goal": 756.4, "first_audio_out": 759.3}}}}
-{"i": 14, "t_ms": 783.6, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 15, "t_ms": 1536.6, "event": {"type": "FinalTranscript", "text": "no cancel that"}}
-{"i": 16, "t_ms": 1543.6, "event": {"type": "SpeechStarted"}}
-{"i": 17, "t_ms": 1544.0, "event": {"type": "ResponseChunk", "text": "Alright, I won't do that."}}
-{"i": 18, "t_ms": 1544.0, "event": {"type": "SpeechChunk"}}
-{"i": 19, "t_ms": 1544.1, "event": {"type": "SpeechFinished"}}
-{"i": 20, "t_ms": 1544.2, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 21, "t_ms": 7596.4, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 54.0, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 54.1, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 819.4, "event": {"type": "FinalTranscript", "text": "press alt f4"}}
+{"i": 3, "t_ms": 819.5, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 819.5, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 820.4, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 823.3, "event": {"type": "SpeechStarted"}}
+{"i": 7, "t_ms": 823.6, "event": {"type": "ResponseChunk", "text": "Closing windows can cause loss of unsaved work."}}
+{"i": 8, "t_ms": 823.9, "event": {"type": "SpeechChunk"}}
+{"i": 9, "t_ms": 824.2, "event": {"type": "ResponseChunk", "text": " Should I proceed?"}}
+{"i": 10, "t_ms": 824.3, "event": {"type": "SpeechChunk"}}
+{"i": 11, "t_ms": 824.5, "event": {"type": "SpeechFinished"}}
+{"i": 12, "t_ms": 824.6, "event": {"type": "ConversationFinished"}}
+{"i": 13, "t_ms": 824.7, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 771.1, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 762.0, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 3.1, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.8, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 2.7, "detail": "0 steps"}, {"name": "observe#1", "depth": 1, "ms": 0.7, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.4, "detail": "cua_press_key (call 1)"}, {"name": "speak", "depth": 0, "ms": 1.4, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.3, "detail": "480 bytes"}, {"name": "synth#2", "depth": 1, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.2, "detail": null}], "events": {"route_agentic_goal": 766.9, "first_audio_out": 770.0}}}}
+{"i": 14, "t_ms": 824.8, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 15, "t_ms": 1552.4, "event": {"type": "FinalTranscript", "text": "no cancel that"}}
+{"i": 16, "t_ms": 1586.4, "event": {"type": "SpeechStarted"}}
+{"i": 17, "t_ms": 1586.8, "event": {"type": "ResponseChunk", "text": "Alright, I won't do that."}}
+{"i": 18, "t_ms": 1586.9, "event": {"type": "SpeechChunk"}}
+{"i": 19, "t_ms": 1587.1, "event": {"type": "SpeechFinished"}}
+{"i": 20, "t_ms": 1587.2, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 21, "t_ms": 7619.8, "event": {"type": "Idle"}}

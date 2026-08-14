@@ -183,6 +183,37 @@ class ComputerUse:
         return self._click_at(resolved.x, resolved.y, click_count, resolved.method,
                               getattr(resolved.element, "name", None))
 
+    @staticmethod
+    def _target_from_params(params: dict[str, Any]) -> tuple[Optional[int], Optional[str]]:
+        """Extract "which element" from a plan, under any of its spellings.
+
+        The planner prompt asks for `element_id`; the tool schema historically
+        advertised `element_index`; the model, shown both, emits either. Every
+        handler used to pick its own subset, and the ones that read only
+        `element_index` treated an `element_id` plan as having named no target
+        at all - which in `_set_value` meant falling past the not-found guard
+        into a blind select-all-and-type.
+
+        Names are accepted here rather than normalised at the boundary because
+        the same dict reaches `perform()` through four hops that none of them
+        validate; one reader is the only place a spelling can be forgotten.
+        """
+        raw_id = params.get("element_id")
+        if raw_id is None:
+            raw_id = params.get("element_index")
+        try:
+            element_id = int(raw_id) if raw_id is not None else None
+        except (TypeError, ValueError):
+            element_id = None
+
+        target_name = (
+            params.get("target_name")
+            or params.get("name")
+            or params.get("label")
+            or params.get("into")
+        )
+        return element_id, target_name
+
     def _resolve_from_graph(self, params: dict[str, Any], element_index, target_name):
         """Look the target up in the cached element graph, if we have one."""
         try:
@@ -263,7 +294,7 @@ class ComputerUse:
         # search query into the wrong box is visible in the result instead of
         # silently succeeding.
         focus_note = ""
-        target_name = params.get("target_name") or params.get("into")
+        _, target_name = self._target_from_params(params)
         try:
             from grace.agent.perception import PerceptionEngine
 
@@ -294,6 +325,16 @@ class ComputerUse:
             logger.debug(f"Focus check skipped: {e}")
 
         try:
+            # Typing appends. A field that already holds text therefore ends up
+            # with both, which is how a second search for "Coordination
+            # Compounds" became "ChemistryCoordination Compounds" and returned
+            # nothing. The planner cannot see a field's contents in an app that
+            # does not report them, so it has to be able to say "replace" rather
+            # than having to check first.
+            if params.get("replace"):
+                pyautogui.hotkey("ctrl", "a")
+                pyautogui.press("delete")
+
             pyautogui.write(text, interval=0.01)
         except pyautogui.FailSafeException:
             logger.debug("PyAutoGUI failsafe caught during type_text")
@@ -648,20 +689,30 @@ class ComputerUse:
         import pyautogui
 
         value = str(params.get("value", ""))
-        element_index = params.get("element_index")
-        target_name = params.get("target_name") or params.get("name")
+        element_id, target_name = self._target_from_params(params)
 
-        target = self._resolve_from_graph(params, element_index, target_name)
+        target = self._resolve_from_graph(params, element_id, target_name)
         if target is not None:
             self._click_at(target.center[0], target.center[1], 1,
                            f"graph:{target.role}", target.name)
             time.sleep(0.05)
-        elif element_index is not None or target_name:
+        elif element_id is not None or target_name:
             return {
                 "ok": False,
                 "status": "element_not_found",
                 "action": "set_value",
-                "error": f"Could not locate '{target_name or element_index}' to set its value.",
+                "error": f"Could not locate '{target_name or element_id}' to set its value.",
+            }
+        else:
+            # No target named at all. The body below is select-all, delete,
+            # type - destructive against whatever holds focus - so it must not
+            # run on a plan that never said where to put the value.
+            return {
+                "ok": False,
+                "status": "no_target",
+                "action": "set_value",
+                "error": "set_value needs an element_id or target_name; refusing "
+                         "to overwrite whatever currently has focus.",
             }
 
         try:
@@ -708,14 +759,13 @@ class ComputerUse:
         DPIHelper.ensure_dpi_aware()
 
         window = _normalize_window(params.get("window"))
-        target_name = params.get("target_name") or params.get("name")
-        element_index = params.get("element_index")
+        element_id, target_name = self._target_from_params(params)
         requested = str(params.get("action") or "context menu").strip().lower()
         kind = self._SECONDARY_ACTIONS.get(requested, "right_click")
 
         x, y = params.get("x"), params.get("y")
 
-        target = self._resolve_from_graph(params, element_index, target_name)
+        target = self._resolve_from_graph(params, element_id, target_name)
         if target is not None:
             x, y = target.center
         elif x is None or y is None:

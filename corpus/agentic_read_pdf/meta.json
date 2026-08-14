@@ -1,9 +1,11 @@
 {
   "session_id": "agentic_read_pdf",
-  "recorded_at": "2026-08-14T19:32:42",
-  "git_sha": "ed38d314425c3bdc66323abaa0b80b5a469306bb",
+  "recorded_at": "2026-08-15T00:35:34",
+  "git_sha": "769f4f315908605d34549532ff579be69dfa2cff",
   "config": {
+    "agent_max_consecutive_plan_failures": 3,
     "agent_max_iterations": 0,
+    "agent_max_repeated_actions": 3,
     "cdp_port": 0,
     "followup_timeout_seconds": 0,
     "gemini_api_key": "<redacted>",

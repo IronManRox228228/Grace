@@ -1,21 +1,21 @@
-{"i": 0, "t_ms": 36.2, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 36.3, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 799.2, "event": {"type": "FinalTranscript", "text": "open notepad then type a note"}}
-{"i": 3, "t_ms": 799.2, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 799.3, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 800.0, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 800.1, "event": {"type": "ToolExecutionStarted", "label": "Opening notepad…"}}
-{"i": 7, "t_ms": 800.2, "event": {"type": "ToolExecutionFinished"}}
-{"i": 8, "t_ms": 2807.2, "event": {"type": "ToolExecutionStarted", "label": "Typing…", "tool": "cua_type_text", "step": 1}}
-{"i": 9, "t_ms": 2807.3, "event": {"type": "ToolExecutionStarted", "label": "Typing…"}}
-{"i": 10, "t_ms": 2807.6, "event": {"type": "ToolExecutionFinished"}}
-{"i": 11, "t_ms": 2814.1, "event": {"type": "ToolExecutionFinished", "tool": "cua_type_text", "status": "ok"}}
-{"i": 12, "t_ms": 2814.6, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 2}}
-{"i": 13, "t_ms": 2819.6, "event": {"type": "SpeechStarted"}}
-{"i": 14, "t_ms": 2819.7, "event": {"type": "ResponseChunk", "text": "I've typed the note."}}
-{"i": 15, "t_ms": 2819.8, "event": {"type": "SpeechChunk"}}
-{"i": 16, "t_ms": 2819.9, "event": {"type": "SpeechFinished"}}
-{"i": 17, "t_ms": 2819.9, "event": {"type": "ConversationFinished"}}
-{"i": 18, "t_ms": 2820.0, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 2784.1, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 760.8, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 1.9, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.6, "detail": null}, {"name": "pre_exec", "depth": 0, "ms": 2004.8, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 14.6, "detail": "2 steps"}, {"name": "observe#1", "depth": 1, "ms": 0.6, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.3, "detail": "cua_type_text (call 1)"}, {"name": "dispatch:cua_type_text", "depth": 1, "ms": 0.5, "detail": null}, {"name": "observe#2", "depth": 1, "ms": 0.1, "detail": null}, {"name": "plan#2", "depth": 1, "ms": 0.3, "detail": "converse (call 2)"}, {"name": "speak", "depth": 0, "ms": 0.4, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.1, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_agentic_goal": 764.3, "first_audio_out": 2783.9}}}}
-{"i": 19, "t_ms": 2820.1, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
-{"i": 20, "t_ms": 2820.1, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 54.1, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 54.3, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 820.3, "event": {"type": "FinalTranscript", "text": "open notepad then type a note"}}
+{"i": 3, "t_ms": 820.3, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 820.4, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 820.9, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 821.0, "event": {"type": "ToolExecutionStarted", "label": "Opening notepad…"}}
+{"i": 7, "t_ms": 821.0, "event": {"type": "ToolExecutionFinished"}}
+{"i": 8, "t_ms": 2828.8, "event": {"type": "ToolExecutionStarted", "label": "Typing…", "tool": "cua_type_text", "step": 1}}
+{"i": 9, "t_ms": 2828.9, "event": {"type": "ToolExecutionStarted", "label": "Typing…"}}
+{"i": 10, "t_ms": 2829.3, "event": {"type": "ToolExecutionFinished"}}
+{"i": 11, "t_ms": 2863.5, "event": {"type": "ToolExecutionFinished", "tool": "cua_type_text", "status": "ok"}}
+{"i": 12, "t_ms": 2864.1, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 2}}
+{"i": 13, "t_ms": 2871.5, "event": {"type": "SpeechStarted"}}
+{"i": 14, "t_ms": 2871.7, "event": {"type": "ResponseChunk", "text": "I've typed the note."}}
+{"i": 15, "t_ms": 2871.8, "event": {"type": "SpeechChunk"}}
+{"i": 16, "t_ms": 2871.9, "event": {"type": "SpeechFinished"}}
+{"i": 17, "t_ms": 2871.9, "event": {"type": "ConversationFinished"}}
+{"i": 18, "t_ms": 2872.0, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 2818.2, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 763.7, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 2.2, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.5, "detail": null}, {"name": "pre_exec", "depth": 0, "ms": 2003.9, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 46.6, "detail": "2 steps"}, {"name": "observe#1", "depth": 1, "ms": 1.0, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.5, "detail": "cua_type_text (call 1)"}, {"name": "dispatch:cua_type_text", "depth": 1, "ms": 0.6, "detail": null}, {"name": "observe#2", "depth": 1, "ms": 0.2, "detail": null}, {"name": "plan#2", "depth": 1, "ms": 0.3, "detail": "converse (call 2)"}, {"name": "speak", "depth": 0, "ms": 0.5, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_agentic_goal": 767.2, "first_audio_out": 2818.0}}}}
+{"i": 19, "t_ms": 2872.1, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 20, "t_ms": 2872.1, "event": {"type": "Idle"}}
