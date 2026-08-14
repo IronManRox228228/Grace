@@ -1,0 +1,19 @@
+{"i": 0, "t_ms": 21.3, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 21.4, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 786.3, "event": {"type": "FinalTranscript", "text": "click the refresh button"}}
+{"i": 3, "t_ms": 786.3, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 786.4, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 787.2, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 797.2, "event": {"type": "ToolExecutionStarted", "label": "Refreshing…", "tool": "cua_click", "step": 2}}
+{"i": 7, "t_ms": 797.2, "event": {"type": "ToolExecutionStarted", "label": "Clicking…"}}
+{"i": 8, "t_ms": 797.7, "event": {"type": "ToolExecutionFinished"}}
+{"i": 9, "t_ms": 803.3, "event": {"type": "ToolExecutionFinished", "tool": "cua_click", "status": "ok"}}
+{"i": 10, "t_ms": 803.9, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 3}}
+{"i": 11, "t_ms": 808.2, "event": {"type": "SpeechStarted"}}
+{"i": 12, "t_ms": 808.5, "event": {"type": "ResponseChunk", "text": "I've refreshed the page."}}
+{"i": 13, "t_ms": 808.5, "event": {"type": "SpeechChunk"}}
+{"i": 14, "t_ms": 808.6, "event": {"type": "SpeechFinished"}}
+{"i": 15, "t_ms": 808.6, "event": {"type": "ConversationFinished"}}
+{"i": 16, "t_ms": 808.8, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 787.6, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 762.7, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 2.1, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.7, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 20.9, "detail": "3 steps"}, {"name": "observe#1", "depth": 1, "ms": 1.8, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.5, "detail": "unparsed (call 1)"}, {"name": "observe#2", "depth": 1, "ms": 0.2, "detail": null}, {"name": "plan#2", "depth": 1, "ms": 0.4, "detail": "cua_click (call 2)"}, {"name": "dispatch:cua_click", "depth": 1, "ms": 1.2, "detail": null}, {"name": "observe#3", "depth": 1, "ms": 0.2, "detail": null}, {"name": "plan#3", "depth": 1, "ms": 0.3, "detail": "converse (call 3)"}, {"name": "speak", "depth": 0, "ms": 0.5, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_agentic_goal": 766.2, "first_audio_out": 787.4}}}}
+{"i": 17, "t_ms": 808.8, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 18, "t_ms": 808.9, "event": {"type": "Idle"}}

@@ -1,0 +1,2 @@
+{"i": 0, "t_ms": 786.5, "tool": "cua_click", "params": {"element_id": 3}, "result": {"status": "error", "error": "element is not enabled", "text": "Action error: element is not enabled"}}
+{"i": 1, "t_ms": 792.4, "tool": "cua_click", "params": {"element_id": 2}, "result": {"status": "ok", "result": {"ok": true, "message": "clicked"}}}

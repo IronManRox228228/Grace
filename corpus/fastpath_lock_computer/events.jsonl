@@ -1,0 +1,16 @@
+{"i": 0, "t_ms": 22.4, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 22.5, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 773.3, "event": {"type": "FinalTranscript", "text": "lock my computer"}}
+{"i": 3, "t_ms": 773.4, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 773.4, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 773.9, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 774.0, "event": {"type": "ToolExecutionStarted", "label": "Locking computer…"}}
+{"i": 7, "t_ms": 774.0, "event": {"type": "ToolExecutionFinished"}}
+{"i": 8, "t_ms": 774.4, "event": {"type": "SpeechStarted"}}
+{"i": 9, "t_ms": 774.5, "event": {"type": "ResponseChunk", "text": "I've locked your computer."}}
+{"i": 10, "t_ms": 774.5, "event": {"type": "SpeechChunk"}}
+{"i": 11, "t_ms": 774.7, "event": {"type": "SpeechFinished"}}
+{"i": 12, "t_ms": 774.7, "event": {"type": "ConversationFinished"}}
+{"i": 13, "t_ms": 774.8, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 752.5, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 749.3, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 1.4, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.4, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 0.4, "detail": null}, {"name": "speak", "depth": 0, "ms": 0.4, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.1, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_fast_path": 751.7, "first_audio_out": 752.3}}}}
+{"i": 14, "t_ms": 774.8, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 15, "t_ms": 774.9, "event": {"type": "Idle"}}

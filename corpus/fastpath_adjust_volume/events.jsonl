@@ -1,0 +1,16 @@
+{"i": 0, "t_ms": 25.2, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 25.3, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 790.1, "event": {"type": "FinalTranscript", "text": "turn the volume up a bit"}}
+{"i": 3, "t_ms": 790.2, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 790.2, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 791.1, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 791.3, "event": {"type": "ToolExecutionStarted", "label": "Adjusting volume…"}}
+{"i": 7, "t_ms": 791.4, "event": {"type": "ToolExecutionFinished"}}
+{"i": 8, "t_ms": 792.3, "event": {"type": "SpeechStarted"}}
+{"i": 9, "t_ms": 792.6, "event": {"type": "ResponseChunk", "text": "Volume set to 60 percent."}}
+{"i": 10, "t_ms": 792.6, "event": {"type": "SpeechChunk"}}
+{"i": 11, "t_ms": 792.8, "event": {"type": "SpeechFinished"}}
+{"i": 12, "t_ms": 792.9, "event": {"type": "ConversationFinished"}}
+{"i": 13, "t_ms": 793.0, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 768.0, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 762.2, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 2.5, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.8, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 0.9, "detail": null}, {"name": "speak", "depth": 0, "ms": 0.6, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_fast_path": 766.4, "first_audio_out": 767.7}}}}
+{"i": 14, "t_ms": 793.1, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 15, "t_ms": 793.1, "event": {"type": "Idle"}}

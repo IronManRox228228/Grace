@@ -1,0 +1,20 @@
+{"i": 0, "t_ms": 31.2, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 31.3, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 797.1, "event": {"type": "FinalTranscript", "text": "get rid of the draft file"}}
+{"i": 3, "t_ms": 797.1, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 797.2, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 797.6, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 799.8, "event": {"type": "SpeechStarted"}}
+{"i": 7, "t_ms": 800.3, "event": {"type": "ResponseChunk", "text": "Are you sure you want me to delete draft.txt?"}}
+{"i": 8, "t_ms": 800.7, "event": {"type": "SpeechChunk"}}
+{"i": 9, "t_ms": 801.0, "event": {"type": "SpeechFinished"}}
+{"i": 10, "t_ms": 801.1, "event": {"type": "ConversationFinished"}}
+{"i": 11, "t_ms": 801.4, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 770.2, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 764.0, "detail": "12288 bytes"}, {"name": "whisper", "depth": 0, "ms": 1.7, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.4, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 2.0, "detail": "0 steps"}, {"name": "observe#1", "depth": 1, "ms": 0.6, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.6, "detail": "delete_file (call 1)"}, {"name": "speak", "depth": 0, "ms": 1.4, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.4, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.2, "detail": null}], "events": {"route_agentic_goal": 766.7, "first_audio_out": 769.3}}}}
+{"i": 12, "t_ms": 801.4, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 13, "t_ms": 1560.9, "event": {"type": "FinalTranscript", "text": "what can you do"}}
+{"i": 14, "t_ms": 1561.3, "event": {"type": "SpeechStarted"}}
+{"i": 15, "t_ms": 1561.5, "event": {"type": "ResponseChunk", "text": "I can open apps, find files, and control your PC by voice."}}
+{"i": 16, "t_ms": 1561.6, "event": {"type": "SpeechChunk"}}
+{"i": 17, "t_ms": 1561.7, "event": {"type": "SpeechFinished"}}
+{"i": 18, "t_ms": 1561.7, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 19, "t_ms": 7584.5, "event": {"type": "Idle"}}
