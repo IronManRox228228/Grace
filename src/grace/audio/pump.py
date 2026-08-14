@@ -17,7 +17,22 @@ import queue
 import threading
 from typing import Optional
 
+from ..harness import get_recorder
+
 logger = logging.getLogger("grace.audio.pump")
+
+
+def _tape(chunk: Optional[bytes]) -> Optional[bytes]:
+    """Record a chunk on its way to the consumer, then hand it back unchanged.
+
+    Taped here, on the consumer side, so the recorded sequence is exactly what
+    the VAD and the wake-word detector saw - including chunks the queue dropped.
+    """
+    if chunk:
+        recorder = get_recorder()
+        if recorder is not None and recorder.record_audio:
+            recorder.record_audio_chunk(chunk)
+    return chunk
 
 # ~2 seconds of 512-sample chunks at 16 kHz. Enough to absorb a slow turn of
 # the event loop, small enough that nothing badly stale survives.
@@ -107,9 +122,9 @@ class AudioPump:
         if q is None:
             return None
         if timeout is None:
-            return await q.get()
+            return _tape(await q.get())
         try:
-            return await asyncio.wait_for(q.get(), timeout=timeout)
+            return _tape(await asyncio.wait_for(q.get(), timeout=timeout))
         except asyncio.TimeoutError:
             return None
 
@@ -139,7 +154,7 @@ class SyncChunkSource:
         self._capture = capture
 
     async def get(self, timeout: Optional[float] = None) -> Optional[bytes]:
-        return await asyncio.to_thread(self._capture.get_chunk)
+        return _tape(await asyncio.to_thread(self._capture.get_chunk))
 
     def drain(self) -> int:
         return 0

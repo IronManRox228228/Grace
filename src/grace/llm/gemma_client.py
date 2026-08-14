@@ -8,9 +8,12 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Optional, AsyncIterator, Any
 
 import aiohttp
+
+from ..harness import get_recorder
 
 logger = logging.getLogger("grace.gemma")
 
@@ -18,6 +21,52 @@ logger = logging.getLogger("grace.gemma")
 # quickly, and silently retrying forever just moves the stall somewhere else.
 RATE_LIMIT_RETRIES = 2
 RATE_LIMIT_BACKOFF_SECONDS = (1.0, 4.0)
+
+
+def _redact_images(messages: list[dict]) -> list[dict]:
+    """Copy *messages* with base64 image payloads replaced by their size.
+
+    A grounding turn's screenshot is megabytes of base64. Keeping the length
+    preserves the one property a replay cares about - that an image was present
+    and how large it was - without making tapes unreadable or unstoreable.
+    """
+    redacted = []
+    for message in messages:
+        copy = dict(message)
+        image = copy.get("image_b64")
+        if image:
+            copy["image_b64"] = f"<image {len(image)} b64 chars>"
+        redacted.append(copy)
+    return redacted
+
+
+async def _record_stream(recorder, kind: str, request: Any, stream: AsyncIterator[str]):
+    """Pass *stream* through unchanged while taping each chunk as it arrives.
+
+    Chunks are recorded individually and never joined. response/generator.py
+    splits sentences off the token stream *as it arrives*, so the emitted
+    ResponseChunk/SpeechChunk pairs depend on where those boundaries land. A
+    Rust SSE reader that buffers differently would produce identical final text
+    but a different chunk sequence - a real UI and TTS regression that a joined
+    recording would destroy the evidence of.
+    """
+    started = time.perf_counter()
+    chunks: list[str] = []
+    try:
+        async for chunk in stream:
+            chunks.append(chunk)
+            yield chunk
+    except Exception as exc:
+        recorder.record_llm(
+            kind=kind, request=request, chunks=chunks, error=f"{type(exc).__name__}: {exc}",
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+        )
+        raise
+    else:
+        recorder.record_llm(
+            kind=kind, request=request, chunks=chunks,
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+        )
 
 
 class RateLimitError(RuntimeError):
@@ -36,11 +85,23 @@ class GemmaClient:
         base_url: str = "http://127.0.0.1:8080",
         api_key: Optional[str] = None,
         model_name: str = "gemini-3.1-flash-lite",
+        before_request=None,
     ):
         self._base_url = base_url
         self._api_key = api_key
         self._model_name = model_name or "gemini-3.1-flash-lite"
         self._http = None
+        # Called before every local request. Used to hot-swap the model
+        # resident on the GPU when the planner and grounder share one card -
+        # see grace.llm.model_swap. None (the default) means no swap is needed.
+        self._before_request = before_request
+
+    async def _prepare(self) -> None:
+        if self._before_request is None:
+            return
+        result = self._before_request()
+        if asyncio.iscoroutine(result):
+            await result
 
     async def _get_http(self):
         if self._http is None or self._http.closed:
@@ -69,14 +130,30 @@ class GemmaClient:
         self,
         messages: list[dict],
         temperature: float = 0.7,
-        max_tokens: int = 1024,
+        max_tokens: int = 8192,
         stream: bool = True,
     ):
         """Send a chat completion request."""
+        await self._prepare()
         logger.info(f"LLM request ({self._model_name if self._api_key else 'llama.cpp'}): {len(messages)} messages, max_tokens={max_tokens}, temperature={temperature}")
 
+        recorder = get_recorder()
+        request = None
+        if recorder is not None:
+            request = {
+                "backend": "gemini" if self._api_key else "llama.cpp",
+                "model": self._model_name,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": stream,
+                "messages": _redact_images(messages),
+            }
+
         if self._api_key:
-            return self._stream_gemini_response(messages, temperature=temperature, max_tokens=max_tokens)
+            gemini = self._stream_gemini_response(messages, temperature=temperature, max_tokens=max_tokens)
+            if recorder is None:
+                return gemini
+            return _record_stream(recorder, "chat", request, gemini)
 
         formatted_messages = []
         for msg in messages:
@@ -100,8 +177,12 @@ class GemmaClient:
 
 
         if stream:
-            return self._stream_response(payload)
+            local = self._stream_response(payload)
+            if recorder is None:
+                return local
+            return _record_stream(recorder, "chat", request, local)
         else:
+            started = time.perf_counter()
             http = await self._get_http()
             try:
                 async with http.post(
@@ -112,14 +193,30 @@ class GemmaClient:
                     if resp.status == 200:
                         data = await resp.json()
                         choices = data.get("choices", [])
+                        content = None
                         if choices and isinstance(choices, list):
-                            return choices[0].get("message", {}).get("content")
-                        return None
+                            content = choices[0].get("message", {}).get("content")
+                        if recorder is not None:
+                            recorder.record_llm(
+                                kind="chat", request=request, response=content,
+                                duration_ms=(time.perf_counter() - started) * 1000.0,
+                            )
+                        return content
                     else:
                         logger.error(f"LLM request failed with status {resp.status}")
+                        if recorder is not None:
+                            recorder.record_llm(
+                                kind="chat", request=request, error=f"HTTP {resp.status}",
+                                duration_ms=(time.perf_counter() - started) * 1000.0,
+                            )
                         return None
             except Exception as e:
                 logger.error(f"LLM request error: {e}")
+                if recorder is not None:
+                    recorder.record_llm(
+                        kind="chat", request=request, error=str(e),
+                        duration_ms=(time.perf_counter() - started) * 1000.0,
+                    )
                 return None
 
     async def _stream_gemini_response(
@@ -274,7 +371,7 @@ class GemmaClient:
         ]
         tokens = []
         try:
-            stream = await self.chat(messages, temperature=0.1, max_tokens=256, stream=True)
+            stream = await self.chat(messages, temperature=0.1, max_tokens=4096, stream=True)
             if stream is not None:
                 async for token in stream:
                     tokens.append(token)
@@ -292,7 +389,7 @@ class GemmaClient:
         prompt: str,
         system_prompt: str,
         temperature: float = 0.2,
-        max_tokens: int = 512,
+        max_tokens: int = 8192,
         messages: Optional[list[dict]] = None,
         image_b64: Optional[str] = None,
     ) -> Optional[str]:

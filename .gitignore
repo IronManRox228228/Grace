@@ -39,3 +39,9 @@ logs/
 llama cpp/
 
 libs/*.jar
+
+# Migration session tapes (GRACE_RECORD_DIR). The JSONL streams are the
+# regression oracle and are committed under corpus/ deliberately; the raw PCM
+# they reference is large and lives alongside the repo, not in it.
+recordings/
+corpus/**/pcm/

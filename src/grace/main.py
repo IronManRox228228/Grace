@@ -37,6 +37,7 @@ from grace.audio.wake_word import WakeWordDetector
 from grace.vad.detector import VadDetector
 from grace.stt.whisper_stream import WhisperStreaming
 from grace.llm.gemma_client import GemmaClient, RateLimitError
+from grace.llm.model_swap import ModelSwapManager, LocalModelSpec
 from grace.intent.prompt import get_system_prompt
 from grace.intent.parser import IntentParser
 from grace.automation.computer_use import ComputerUse
@@ -47,6 +48,7 @@ from grace.tts.player import TTSPlayer
 from grace.response.generator import ResponseGenerator
 from grace.response.feedback import FeedbackSounds
 from grace.util.timing import start_turn
+from grace.harness import get_recorder
 
 # Configure logging. DEBUG formats an f-string per 32ms audio chunk, so it is
 # opt-in via GRACE_LOG_LEVEL rather than the production default.
@@ -105,18 +107,50 @@ class GraceApp:
             compute_type="float16",
         )
 
+        # Model hot-swap: only needed when the planner is ALSO local, since
+        # then it and UI-TARS both want the one GPU. When the planner stays on
+        # Gemini, only UI-TARS ever needs the GPU and nothing has to swap.
+        self._model_swap: Optional[ModelSwapManager] = None
+        if self.config.model_swap_enabled:
+            self._model_swap = ModelSwapManager(
+                host=self.config.llama_host,
+                port=self.config.llama_port,
+                llama_server_exe=self.config.llama_server_exe,
+                specs={
+                    "planner": LocalModelSpec(
+                        name="planner",
+                        model_path=self.config.local_planner_model_path,
+                        context_window=self.config.llama_context_window,
+                        ngl=self.config.llama_ngl,
+                        cache_type_k=self.config.llama_cache_type_k,
+                        cache_type_v=self.config.llama_cache_type_v,
+                    ),
+                    "grounder": LocalModelSpec(
+                        name="grounder",
+                        model_path=self.config.llama_model_path,
+                        mmproj_path=self.config.llama_mmproj_path,
+                        context_window=self.config.llama_context_window,
+                        ngl=self.config.llama_ngl,
+                        cache_type_k=self.config.llama_cache_type_k,
+                        cache_type_v=self.config.llama_cache_type_v,
+                    ),
+                },
+            )
+
         # LLM (Cloud Gemini 3.6 Flash or local llama-server)
         api_key = self.config.gemini_api_key if self.config.use_cloud_llm else None
         self.gemma = GemmaClient(
             base_url=self.config.llama_server_url,
             api_key=api_key,
             model_name=self.config.gemini_model_name,
+            before_request=(lambda: self._model_swap.swap_to("planner")) if self._model_swap else None,
         )
 
         # Dedicated UI-TARS Vision LLM client for AgentLoop CUA steps (local llama-server)
         self.ui_tars_client = GemmaClient(
             base_url=self.config.llama_server_url,
             api_key=None,  # Forces local llama-server for UI-TARS GUI vision
+            before_request=(lambda: self._model_swap.swap_to("grounder")) if self._model_swap else None,
         ) if self.config.use_ui_tars_local else self.gemma
 
         # Intent
@@ -146,7 +180,11 @@ class GraceApp:
             dispatcher=self.dispatcher,
             ws_server=self.ws_server,
             vision_llm=self.ui_tars_client,
-            start_grounding_backend=self._ensure_grounding_backend,
+            # When model_swap is active, the grounder's GemmaClient already
+            # swaps the GPU to UI-TARS on every request via before_request, so
+            # the old "start llama-server on first grounding call" path would
+            # just fight the swap manager over the same process.
+            start_grounding_backend=None if self._model_swap else self._ensure_grounding_backend,
         )
 
         # TTS
@@ -305,11 +343,25 @@ class GraceApp:
         log.info("Grace v0.0.1 - Offline Voice Accessibility Assistant")
         log.info("=" * 60)
 
+        # A tape is only useful if you know what produced it. Written before
+        # any work happens so a session that crashes at startup still leaves an
+        # identifiable, if short, tape behind.
+        recorder = get_recorder()
+        if recorder is not None:
+            log.info(f"Session recording ACTIVE: {recorder.dir}")
+            recorder.write_meta(self.config)
+
         # llama-server only has to be up at boot when it *is* the main LLM.
         # When it is only the grounder, starting it here cost up to 120s of
         # startup for a model most requests never touch - it now starts on the
         # first grounding call instead.
-        if not self.config.use_cloud_llm:
+        if self._model_swap is not None:
+            log.info("Model-swap mode ACTIVE: loading the local planner model onto the GPU...")
+            if not await self._model_swap.swap_to("planner"):
+                log.error("Failed to start the local planner model. Exiting.")
+                await self.shutdown()
+                return
+        elif not self.config.use_cloud_llm:
             log.info("Initializing local llama-server as the primary LLM...")
             self._start_llama_server()
             if not await self._wait_for_llama_server(timeout=120):
@@ -530,9 +582,18 @@ class GraceApp:
 
         # 3. Transcribe. GPU inference is seconds of blocking work, so it goes
         # to a worker thread rather than stalling the WebSocket server.
-        async with trace.stage("whisper"):
-            self.whisper.add_buffer(audio_buffer)
-            transcript = await asyncio.to_thread(self.whisper.transcribe)
+        # A transcription failure ends the turn; it must never end the process,
+        # which is what an unhandled model-load error used to do.
+        try:
+            async with trace.stage("whisper"):
+                self.whisper.add_buffer(audio_buffer)
+                transcript = await asyncio.to_thread(self.whisper.transcribe)
+        except Exception as e:
+            log.error(f"Transcription failed: {e}", exc_info=True)
+            self.whisper.reset_buffer()
+            await self.ws_server.emit({"type": "ConversationFinished"})
+            await self.ws_server.emit({"type": "Idle"})
+            return
 
         if not transcript.strip():
             log.info("No speech detected.")
@@ -785,7 +846,16 @@ class GraceApp:
         self.kokoro.shutdown()
 
         log.info("Shutdown: stopping llama-server...")
-        self._stop_llama_server()
+        if self._model_swap is not None:
+            await self._model_swap.shutdown()
+        else:
+            self._stop_llama_server()
+
+        # Last, so anything the shutdown path itself emits still lands on the tape.
+        recorder = get_recorder()
+        if recorder is not None:
+            log.info(f"Shutdown: closing session tape {recorder.dir}")
+            recorder.close()
 
         log.info("Grace stopped.")
 

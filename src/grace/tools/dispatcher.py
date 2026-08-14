@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from grace.intent.parser import Intent
 from grace.automation.computer_use import ComputerUse
+from grace.harness import get_recorder
 from grace.ws_server import WsEventServer
 
 logger = logging.getLogger("grace.dispatcher")
@@ -116,11 +117,22 @@ class Dispatcher:
         self._app_indexer = indexer
 
     async def execute(self, intent: Intent) -> dict[str, Any]:
-        """Execute a parsed intent.
+        """Execute a parsed intent, taping the call when recording is on.
 
-        Routes to CUA for cua_* tools, or to hardcoded tools for
-        system tools. Returns a result dict with status and output.
+        This is the outermost side-effecting boundary in the backend. In a
+        replay it is asserted rather than performed: what must match is that
+        the Rust port asked for the same tool with the same parameters, in the
+        same order - "Grace did the right thing on screen" is not enough if it
+        took a different route to get there.
         """
+        recorder = get_recorder()
+        result = await self._execute(intent)
+        if recorder is not None:
+            recorder.record_dispatch(intent.tool, intent.params, result)
+        return result
+
+    async def _execute(self, intent: Intent) -> dict[str, Any]:
+        """Route to CUA for cua_* tools, or to a hardcoded system tool."""
         tool = intent.tool
         params = intent.params
 

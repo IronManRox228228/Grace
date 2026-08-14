@@ -5,13 +5,63 @@ and Win32 UI control hierarchy context to feed Gemma's reasoning loop.
 """
 
 import asyncio
+import hashlib
 import io
 import logging
 import threading
 from dataclasses import dataclass
 from typing import Any, Optional, List
 
+from grace.harness import get_recorder
+
 logger = logging.getLogger("grace.agent.perception")
+
+
+def _snapshot_tape(snapshot: "ScreenSnapshot") -> dict:
+    """Serialise a snapshot for a session tape.
+
+    The full element list is recorded in order and uncompacted: this is the
+    parity surface for the Rust UIA walker, and ``compact=True`` drops exactly
+    the fields (source, container, focus, offscreen) most likely to reveal a
+    tree-walk difference. The PNG is reduced to a digest and its dimensions -
+    replay never needs the pixels, only the guarantee that the same image was
+    produced, and full screenshots would make tapes unstoreable.
+    """
+    graph = snapshot.graph
+    window = snapshot.active_window
+
+    return {
+        "window": (
+            None if window is None
+            else {
+                # hwnd is a per-run handle value and would defeat tape diffing;
+                # the identity that matters is title + class.
+                "title": window.title,
+                "class_name": window.class_name,
+                "rect": list(window.rect),
+            }
+        ),
+        "width": snapshot.width,
+        "height": snapshot.height,
+        "image_width": snapshot.image_width,
+        "image_height": snapshot.image_height,
+        "dpi_scale": snapshot.dpi_scale,
+        "png_digest": (
+            hashlib.sha256(snapshot.png_bytes).hexdigest()[:16]
+            if snapshot.png_bytes else None
+        ),
+        "png_bytes": len(snapshot.png_bytes) if snapshot.png_bytes else 0,
+        "graph_sources": list(graph.sources) if graph is not None else [],
+        "elements": (
+            [element.to_dict() for element in graph.elements]
+            if graph is not None else []
+        ),
+        "ocr_lines": [
+            {"text": line.text, "bounding_box": list(line.bounding_box)}
+            for line in (snapshot.ocr_lines or [])
+        ],
+        "legacy_ui_elements": len(snapshot.ui_elements or []),
+    }
 
 
 def _run_async(coro):
@@ -232,7 +282,7 @@ class PerceptionEngine:
         except Exception as e:
             logger.debug(f"DPI scale detection skipped: {e}")
 
-        return ScreenSnapshot(
+        snapshot = ScreenSnapshot(
             active_window=active_window,
             ocr_lines=ocr_lines,
             width=width,
@@ -244,6 +294,16 @@ class PerceptionEngine:
             image_width=image_width,
             image_height=image_height,
         )
+
+        # Element IDs are positional - assigned by index after overlap dedup -
+        # and the planner prompt refers to them by number. If the Rust UIA
+        # walker orders the tree even slightly differently, every ID shifts and
+        # the agent confidently clicks the wrong control. That failure is
+        # silent, so the whole ordered node list is taped, not a summary.
+        recorder = get_recorder()
+        if recorder is not None:
+            recorder.record_snapshot(_snapshot_tape(snapshot))
+        return snapshot
 
     async def capture_snapshot_async(self) -> ScreenSnapshot:
         """Asynchronously capture desktop perception snapshot without blocking the event loop."""

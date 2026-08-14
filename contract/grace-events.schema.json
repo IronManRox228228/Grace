@@ -1,0 +1,199 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://grace.local/contract/grace-events.schema.json",
+  "title": "GraceEvent",
+  "description": "The complete backend -> frontend event contract. This is the ONE seam between the Grace backend (Python today, Rust after the migration) and the React renderer. It is FROZEN: additive-only, and only for genuinely new UI features. If a port cannot reproduce an existing event at the right moment, that is a bug in the port, not a reason to change this file.\n\nSource of truth for: frontend/renderer/src/state/types.ts (generated), the Rust grace-proto event enum (generated), and the runtime validating tap in src/grace/ws_server.py.",
+  "oneOf": [
+    { "$ref": "#/definitions/Idle" },
+    { "$ref": "#/definitions/WakeWordDetected" },
+    { "$ref": "#/definitions/ListeningStarted" },
+    { "$ref": "#/definitions/FollowupListeningStarted" },
+    { "$ref": "#/definitions/FinalTranscript" },
+    { "$ref": "#/definitions/ListeningStopped" },
+    { "$ref": "#/definitions/UnderstandingStarted" },
+    { "$ref": "#/definitions/UnderstandingFinished" },
+    { "$ref": "#/definitions/ToolExecutionStarted" },
+    { "$ref": "#/definitions/ToolExecutionFinished" },
+    { "$ref": "#/definitions/ResponseChunk" },
+    { "$ref": "#/definitions/SpeechStarted" },
+    { "$ref": "#/definitions/SpeechChunk" },
+    { "$ref": "#/definitions/SpeechFinished" },
+    { "$ref": "#/definitions/ConversationFinished" },
+    { "$ref": "#/definitions/TurnTrace" },
+    { "$ref": "#/definitions/Error" }
+  ],
+  "definitions": {
+    "Idle": {
+      "description": "Turn is over; the overlay resets to its resting state. Emitted at main.py:586,593,738.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "Idle" } }
+    },
+    "WakeWordDetected": {
+      "description": "Vosk matched the wake word, or the UI/global-hotkey forced a wake. main.py:531.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "WakeWordDetected" } }
+    },
+    "ListeningStarted": {
+      "description": "Mic is open for the primary utterance of a turn. main.py:534.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "ListeningStarted" } }
+    },
+    "FollowupListeningStarted": {
+      "description": "The post-response follow-up window has opened. main.py:697. `timeout` is the window length in whole seconds (config.followup_timeout_seconds, default 10).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "timeout"],
+      "properties": {
+        "type": { "const": "FollowupListeningStarted" },
+        "timeout": { "type": "number", "minimum": 0 }
+      }
+    },
+    "FinalTranscript": {
+      "description": "Whisper's transcript for the utterance just captured. main.py:597,743. Grace has no partial/streaming transcript: Whisper runs once on the whole buffered utterance after VAD closes the turn.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "FinalTranscript" },
+        "text": { "type": "string" }
+      }
+    },
+    "ListeningStopped": {
+      "description": "Mic closed for this utterance. main.py:598.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "ListeningStopped" } }
+    },
+    "UnderstandingStarted": {
+      "description": "Intent inference began. main.py:607. `label` is user-facing prose, e.g. \"Understanding request…\".",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "label"],
+      "properties": {
+        "type": { "const": "UnderstandingStarted" },
+        "label": { "type": "string" }
+      }
+    },
+    "UnderstandingFinished": {
+      "description": "Intent inference ended (success or failure). main.py:617,635.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "UnderstandingFinished" } }
+    },
+    "ToolExecutionStarted": {
+      "description": "A tool is about to run. `label` is the only field the renderer consumes; `tool` and `step` are emitted by the agent loop (loop.py:211) for tracing and are absent on the fast-path dispatcher's emissions (dispatcher.py:182,209).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "label"],
+      "properties": {
+        "type": { "const": "ToolExecutionStarted" },
+        "label": { "type": "string" },
+        "tool": { "type": "string" },
+        "step": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "ToolExecutionFinished": {
+      "description": "The tool finished. `tool` and `status` are emitted by the agent loop (loop.py:237) and absent from the dispatcher's emission (dispatcher.py:186).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "ToolExecutionFinished" },
+        "tool": { "type": "string" },
+        "status": { "type": "string" }
+      }
+    },
+    "ResponseChunk": {
+      "description": "One sentence-shaped slice of the assistant's response, split off the LLM token stream as it arrives (response/generator.py:127,142,218). The renderer CONCATENATES these; the leading-space rule (\" \" prefix for i > 0) lives on the emitting side, so chunk boundaries are part of the contract, not an implementation detail.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "ResponseChunk" },
+        "text": { "type": "string" }
+      }
+    },
+    "SpeechStarted": {
+      "description": "TTS playback began for this response. generator.py:95,190.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "SpeechStarted" } }
+    },
+    "SpeechChunk": {
+      "description": "One synthesized sentence was handed to the player. Paired 1:1 with ResponseChunk. generator.py:128,143,219.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "SpeechChunk" } }
+    },
+    "SpeechFinished": {
+      "description": "TTS playback drained. generator.py:150,228.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "SpeechFinished" } }
+    },
+    "ConversationFinished": {
+      "description": "The turn's work is done; the follow-up window may still be open. main.py:585,591,603,682.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "ConversationFinished" } }
+    },
+    "TurnTrace": {
+      "description": "Per-turn latency instrumentation. main.py:520. Diagnostic only - the renderer ignores it. Shape is util/timing.py TurnTrace.to_dict().",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "trace"],
+      "properties": {
+        "type": { "const": "TurnTrace" },
+        "trace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "total_ms", "stages", "events"],
+          "properties": {
+            "label": { "type": "string" },
+            "total_ms": { "type": "number" },
+            "stages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "depth", "ms", "detail"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "depth": { "type": "integer", "minimum": 0 },
+                  "ms": { "type": ["number", "null"] },
+                  "detail": { "type": ["string", "null"] }
+                }
+              }
+            },
+            "events": {
+              "type": "object",
+              "additionalProperties": { "type": "number" }
+            }
+          }
+        }
+      }
+    },
+    "Error": {
+      "description": "A turn failed in a way the user must be told about. RESERVED: the Python backend never emits this today (it logs and falls through to ConversationFinished + Idle). The renderer has always handled it, and the Rust port needs it for sidecar-unavailable and supervisor-failure paths, so it stays in the contract. Emitting it from Python would be a behavior change and is out of scope for the migration.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "message"],
+      "properties": {
+        "type": { "const": "Error" },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

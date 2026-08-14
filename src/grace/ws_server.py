@@ -1,11 +1,18 @@
 import asyncio
 import json
 import logging
+import os
 from typing import Optional, Callable
 
 from aiohttp import web
 
+from .harness import ContractViolation, get_recorder, validate_event
+
 logger = logging.getLogger("grace.ws")
+
+# Raise on a contract violation instead of logging it. On in dev and CI; off in
+# production, where a malformed diagnostic event must never abort a user's turn.
+_CONTRACT_STRICT = os.getenv("GRACE_CONTRACT_STRICT", "").lower() in ("1", "true", "yes")
 
 
 class WsEventServer:
@@ -87,9 +94,28 @@ class WsEventServer:
         logger.info("WebSocket server stopped")
 
     async def emit(self, event: dict) -> None:
-        """Send a GraceEvent dict to all connected frontends."""
+        """Send a GraceEvent dict to all connected frontends.
+
+        This is the single seam between the backend and the UI, so it is also
+        where the frozen contract is enforced and where session tapes are
+        recorded. Both taps run before the connected-clients check: an event is
+        part of the contract whether or not anyone is listening, and a tape
+        recorded with no frontend attached must still be complete.
+        """
         event_type = event.get("type", "unknown")
         logger.debug(f"WS emit: {event_type}")
+
+        try:
+            validate_event(event)
+        except ContractViolation as exc:
+            if _CONTRACT_STRICT:
+                raise
+            logger.error(f"Contract violation on emit: {exc}")
+
+        recorder = get_recorder()
+        if recorder is not None:
+            recorder.record_event(event)
+
         if not self._clients:
             return
 
