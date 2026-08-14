@@ -1,13 +1,36 @@
-"""Unit tests for 5-Pass CoordinateResolver."""
+"""Unit tests for the CoordinateResolver cascade."""
 
 import unittest
 from grace.automation.coordinate_resolver import CoordinateResolver
+from grace.automation.ui_inspector import UIInspector
+
+
+class _EmptyInspector(UIInspector):
+    """An inspector that reports an empty screen and never touches the desktop.
+
+    Without this these tests consulted the real foreground window. `resolve()`
+    with a bare x/y runs the UIA point-snap pass, and `find_element_at_point`
+    calls `inspect_active_window()` whenever its cache is empty - so a small
+    control happening to sit within 30px of the asserted coordinate on whoever's
+    machine is running the suite would snap the result somewhere else.
+
+    It passed for a long time and then failed once, mid-suite, because a window
+    had moved. A unit test that reads the developer's screen is not testing the
+    resolver.
+    """
+
+    def inspect_active_window(self, *args, **kwargs):
+        self._last_elements = []
+        return []
+
+    def find_element_at_point(self, *args, **kwargs):
+        return None
 
 
 class TestCoordinateResolver(unittest.TestCase):
 
     def setUp(self):
-        self.resolver = CoordinateResolver()
+        self.resolver = CoordinateResolver(inspector=_EmptyInspector())
 
     def test_explicit_coordinate_resolution(self):
         target = self.resolver.resolve(x=100, y=200)
