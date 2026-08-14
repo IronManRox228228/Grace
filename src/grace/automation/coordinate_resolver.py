@@ -1,11 +1,26 @@
 """Unified Coordinate Resolution Pipeline for Project Grace.
 
-Implements the 5-pass cascade priority order:
-1. UIA Accessibility Tree (element_index or target_name)
-2. OculiX template matching (Java JVM bridge + dynamic template generator)
-3. Pure OpenCV template matching (Python fallback, multi-font variants)
-4. Multi-Engine OCR search (OculiX OCR / WinRT / PyTesseract)
-5. Explicit (x, y) coordinates (with DPI transform and window relative offset calculation)
+The cascade, as actually implemented by ``resolve()``:
+
+1. **UIA tree** - by ``element_index``, ``target_name`` or ``relative_to``.
+2. **UIA point-snap** - given a coordinate, snap it onto a small control within
+   30px. Skipped for anything larger than 200px, since snapping to the centre
+   of a full-width panel is worse than the original coordinate.
+3. **OculiX template match**, then **OculiX OCR** - both only when a
+   ``target_name`` is given *and* the JVM bridge is available. It is off by
+   default (``USE_OCULIX=false``), so in the shipped configuration neither runs.
+4. **Explicit coordinates**, clamped to the window.
+
+This docstring used to describe a five-pass cascade including "Pure OpenCV
+template matching" and "Multi-Engine OCR search (WinRT / PyTesseract)". Neither
+exists: ``vision_engine.py`` implements both, but ``_get_vision_engine`` is
+never called from anywhere, so ``self._vision`` stays None for the life of the
+process. With OculiX off, the real cascade is UIA -> point-snap -> raw
+coordinates. Documenting fallbacks that do not run made every failure here look
+like bad luck rather than a missing stage.
+
+``ResolvedTarget.method`` still advertises ``"opencv"`` and ``"ocr"`` for the
+same reason; ``resolve()`` cannot emit either.
 """
 
 import logging
