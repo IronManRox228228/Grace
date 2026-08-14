@@ -1,0 +1,27 @@
+[package]
+name = "grace-shell"
+description = "The Tauri 2 overlay shell for Grace."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+# Named distinctly from the package so the binary below can depend on it
+# without the two shadowing each other on Windows.
+name = "grace_shell_lib"
+crate-type = ["lib"]
+
+[build-dependencies]
+tauri-build = { workspace = true, features = [] }
+
+[dependencies]
+tauri = { workspace = true, features = [] }
+tauri-plugin-global-shortcut.workspace = true
+serde.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }

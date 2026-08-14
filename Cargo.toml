@@ -1,0 +1,25 @@
+[workspace]
+members = ["src-tauri"]
+resolver = "2"
+
+# Shared across every crate the migration adds. Phase 2 onwards puts the ported
+# backend under crates/, which joins `members` above; the versions pinned here
+# are what those crates inherit, so the shell and the backend can never end up
+# on two different tauri or windows-crate ABIs.
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+
+[workspace.dependencies]
+tauri = "2.11"
+tauri-build = "2.6"
+tauri-plugin-global-shortcut = "2.3"
+serde = { version = "1", features = ["derive"] }
+windows = "0.62"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

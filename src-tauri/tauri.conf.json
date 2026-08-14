@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Grace",
+  "version": "0.1.0",
+  "identifier": "com.grace.assistant",
+  "build": {
+    "beforeDevCommand": {
+      "script": "npm run dev:renderer",
+      "cwd": "../frontend",
+      "wait": false
+    },
+    "beforeBuildCommand": {
+      "script": "npm run build:renderer",
+      "cwd": "../frontend"
+    },
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../frontend/renderer/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "grace",
+        "title": "Grace",
+        "width": 620,
+        "height": 420,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "fullscreen": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "focus": false,
+        "focusable": false,
+        "visible": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/128x128.png", "icons/icon.ico"],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    }
+  }
+}

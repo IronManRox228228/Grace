@@ -2,15 +2,7 @@ import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { graceReducer } from './graceReducer';
 import { INITIAL_SNAPSHOT } from './types';
 import { createWsClient } from '../backend/wsClient';
-
-declare global {
-  interface Window {
-    grace?: {
-      onSimulateWake: (callback: () => void) => () => void;
-      setIgnoreMouseEvents: (ignore: boolean, options?: { forward?: boolean }) => void;
-    };
-  }
-}
+import { onWakeRequested } from '../shell';
 
 export function useGraceState() {
   const [snapshot, dispatch] = useReducer(graceReducer, INITIAL_SNAPSHOT);
@@ -26,25 +18,22 @@ export function useGraceState() {
     };
   }, []);
 
-  // Ctrl+Alt+G (registered in electron/main.js) or clicking the idle
-  // pill sends a {"type":"wake"} message to the backend over WebSocket,
-  // which triggers the same activation pipeline as the real wake word.
+  // Ctrl+Alt+G (registered by the shell) or clicking the idle pill sends
+  // {"type":"wake"} to the backend over the WebSocket, which triggers the same
+  // activation pipeline as the real wake word.
   const wake = useCallback(() => {
     if (snapshot.state !== 'idle' && snapshot.state !== 'completed') return;
     wsClientRef.current?.sendWake();
   }, [snapshot.state]);
 
-  useEffect(() => {
-    const unsubscribe = window.grace?.onSimulateWake(() => wake());
-    return () => unsubscribe?.();
-  }, [wake]);
+  // Held in a ref so the subscription itself is created once. Re-subscribing
+  // whenever `wake` changes identity would mean tearing down and rebuilding an
+  // asynchronously-registered listener on every state transition, and a
+  // shortcut pressed in that gap would be dropped.
+  const wakeRef = useRef(wake);
+  wakeRef.current = wake;
 
-  const enterInteractive = useCallback(() => {
-    window.grace?.setIgnoreMouseEvents(false);
-  }, []);
-  const leaveInteractive = useCallback(() => {
-    window.grace?.setIgnoreMouseEvents(true, { forward: true });
-  }, []);
+  useEffect(() => onWakeRequested(() => wakeRef.current()), []);
 
-  return { snapshot, wake, enterInteractive, leaveInteractive };
+  return { snapshot, wake };
 }

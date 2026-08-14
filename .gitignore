@@ -9,7 +9,11 @@ __pycache__/
 .vscode/
 
 # Environment
+# .env.* covers the backups made when rotating a key - .env.bak held a live
+# GEMINI_API_KEY and was not matched by the bare `.env` line.
 .env
+.env.*
+!.env.example
 
 # AI Models
 models/
@@ -25,9 +29,13 @@ Thumbs.db
 # Node
 node_modules/
 
-# Electron build
+# Renderer build
 dist/
 out/
+
+# Rust / Tauri
+/target/
+src-tauri/gen/
 
 # Logs
 logs/

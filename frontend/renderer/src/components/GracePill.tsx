@@ -1,11 +1,15 @@
 import { motion } from 'framer-motion';
-import { ReactNode } from 'react';
+import { ReactNode, Ref } from 'react';
 
 interface GracePillProps {
   expanded: boolean;
   onClick: () => void;
-  onMouseEnter: () => void;
-  onMouseLeave: () => void;
+  /**
+   * Reported to the shell as the one region of the overlay that the pointer is
+   * allowed to reach; see `shell/useHoverRegion`. Without it the pill is drawn
+   * but not touchable, because the window ignores the cursor everywhere else.
+   */
+  hoverRef?: Ref<HTMLDivElement>;
   children?: ReactNode;
 }
 
@@ -13,13 +17,12 @@ interface GracePillProps {
 // Expanded: the same surface grows upward into a conversation card.
 // Framer's `layout` animation handles the shape change with one
 // physically believable spring — no separate "modal" ever mounts.
-export function GracePill({ expanded, onClick, onMouseEnter, onMouseLeave, children }: GracePillProps) {
+export function GracePill({ expanded, onClick, hoverRef, children }: GracePillProps) {
   return (
     <motion.div
       layout
+      ref={hoverRef}
       onClick={!expanded ? onClick : undefined}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
       transition={{ type: 'spring', stiffness: 260, damping: 30, mass: 0.9 }}
       className={[
         'mx-auto flex flex-col justify-end overflow-hidden',

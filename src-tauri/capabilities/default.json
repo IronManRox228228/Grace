@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the Grace renderer is allowed to ask the shell for. It listens for the wake event and reports which region of the overlay should respond to the pointer; everything else it needs arrives over the WebSocket.",
+  "windows": ["grace"],
+  "permissions": ["core:default"]
+}
