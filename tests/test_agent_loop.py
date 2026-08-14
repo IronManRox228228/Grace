@@ -299,6 +299,92 @@ class TestExpectationFeedback:
         assert "IT FAILED" in second_prompt
 
 
+class TestActionVerdict:
+    """`sent` and `verified` are two claims, and `null` is not failure."""
+
+    def note_for(self, inner):
+        loop, _, _ = make_loop([])
+        return loop._expectation_note(
+            PlannedStep(action="cua_click", params={}, expect="the menu opens"),
+            {"status": "ok", "result": inner},
+            snapshot(),
+        )
+
+    def test_a_confirmed_effect_is_reported(self):
+        note = self.note_for({"ok": True, "sent": True, "verified": True,
+                              "evidence": "keyboard focus moved to 'Search'"})
+        assert "EFFECT CONFIRMED" in note
+        assert "Search" in note
+
+    def test_no_effect_is_reported_as_no_effect(self):
+        note = self.note_for({"ok": True, "sent": True, "verified": False,
+                              "evidence": "nothing changed after settling"})
+        assert "NO EFFECT" in note
+        assert "IT FAILED" not in note, (
+            "the input was dispatched; calling that a failed action tells the "
+            "planner to stop using a tool that works"
+        )
+
+    def test_unknown_is_not_reported_as_failure(self):
+        # The distinction the whole of A2 exists for. An app that reports
+        # nothing cannot contradict a claim, and treating silence as a negative
+        # verdict is what stopped a run that was succeeding.
+        note = self.note_for({"ok": True, "sent": True, "verified": None,
+                              "evidence": "this window does not report its contents"})
+        assert "EFFECT UNKNOWN" in note
+        assert "Do not treat that as failure" in note
+        assert "NO EFFECT" not in note and "IT FAILED" not in note
+
+    def test_a_refused_action_is_still_a_failure(self):
+        note = self.note_for({"ok": False, "sent": False, "verified": False,
+                              "error": "Focus is on 'Address bar'",
+                              "evidence": "no keystrokes were sent"})
+        assert "IT FAILED" in note
+        assert "NO EFFECT" not in note, (
+            "an action that never left the building has no effect to report on"
+        )
+
+
+class TestWallClockBudget:
+    """Time is the only budget a stuck loop cannot spend slowly."""
+
+    def test_a_goal_stops_when_it_runs_out_of_time(self):
+        click = '{"action": "cua_click", "params": {"element_id": 1}, "expect": "something"}'
+        loop, _, _ = make_loop([click] * 50)
+        # Already over budget when the first iteration is checked.
+        loop._max_seconds = 1
+        memory = AgentMemory("do a slow thing", max_seconds=1)
+        memory._started -= 5
+
+        res = asyncio.run(loop._continue(memory))
+        assert res["status"] == "timed_out"
+        assert "stopped" in res["final_response"]
+
+    def test_the_clock_does_not_run_while_waiting_for_an_answer(self):
+        # A safety question is answered by voice. Counting the user's thinking
+        # time against their budget would mean the slower they speak, the less
+        # of their task gets done.
+        memory = AgentMemory("delete something", max_seconds=60)
+        memory.pause_clock()
+        memory._paused_at -= 30
+        memory.resume_clock()
+        assert memory.elapsed_seconds < 1
+
+    def test_zero_disables_the_clock(self):
+        memory = AgentMemory("g", max_seconds=0)
+        memory._started -= 10_000
+        assert memory.is_out_of_time is False
+
+    def test_the_default_is_not_unlimited(self):
+        # The twelve-minute run crossed no limit because there was none to
+        # cross. If this ever reverts to 0 the whole of A4 is inert.
+        from grace.agent.loop import DEFAULT_MAX_SECONDS
+
+        assert DEFAULT_MAX_SECONDS > 0
+        loop, _, _ = make_loop([])
+        assert loop._max_seconds > 0
+
+
 class TestSafetyResumption:
     """SafetyGuard parked the step and nothing could ever un-park it."""
 
@@ -341,6 +427,36 @@ class TestSafetyResumption:
         loop, _, _ = make_loop([])
         res = asyncio.run(loop.resume_pending(approved=True))
         assert res["status"] == "error"
+
+    def test_a_fast_path_intent_can_be_parked_and_confirmed(self):
+        # The fast path has no goal, no memory and no plan behind it - one tool
+        # call - so it parks as itself. Before the guard moved to the dispatch
+        # boundary there was nothing to park, because nothing asked.
+        from grace.intent.parser import Intent
+
+        loop, _, dispatcher = make_loop([])
+        loop.park_intent(Intent(tool="delete_file", params={"name": "x.txt"}), "Sure?")
+        assert loop.has_pending_confirmation is True
+        assert loop.pending_prompt == "Sure?"
+
+        res = asyncio.run(loop.resume_pending(approved=True))
+        assert res["status"] == "ok"
+        call = dispatcher.execute.call_args
+        assert call.args[0].tool == "delete_file"
+        assert call.kwargs.get("confirmed") is True, (
+            "the parked action must be dispatched as confirmed, or the guard "
+            "refuses it a second time and 'yes' silently does nothing"
+        )
+        assert loop.has_pending_confirmation is False
+
+    def test_a_declined_fast_path_intent_never_runs(self):
+        from grace.intent.parser import Intent
+
+        loop, _, dispatcher = make_loop([])
+        loop.park_intent(Intent(tool="delete_file", params={"name": "x.txt"}), "Sure?")
+        res = asyncio.run(loop.resume_pending(approved=False))
+        assert dispatcher.execute.call_count == 0
+        assert "won't" in res["final_response"]
 
     def test_cancel_clears_the_parked_step(self):
         loop, _, _ = make_loop(['{"action": "delete_file", "params": {"name": "x"}}'])

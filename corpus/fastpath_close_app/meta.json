@@ -1,13 +1,14 @@
 {
   "session_id": "fastpath_close_app",
-  "recorded_at": "2026-08-15T02:06:23",
-  "git_sha": "de3a76602a777f0047a7b33ee17f565bf4f7dec4",
+  "recorded_at": "2026-08-15T02:56:51",
+  "git_sha": "be49f6898f8b754a80f2e1c132f005e85586ce17",
   "config": {
     "agent_max_consecutive_plan_failures": 3,
     "agent_max_iterations": 0,
     "agent_max_repeated_actions": 3,
+    "agent_max_seconds": 180,
     "cdp_port": 0,
-    "followup_timeout_seconds": 0,
+    "followup_timeout_seconds": 6,
     "gemini_api_key": "<redacted>",
     "gemini_model_name": "gemini-3.1-flash-lite",
     "kokoro_cache_size": 32,
@@ -54,6 +55,6 @@
   },
   "synthetic": true,
   "scenario": "fastpath_close_app",
-  "covers": "close_app via FAST_PATH. Note what this pins down: the fast path does not consult SafetyGuard, so a close_app the intent model resolves in one shot runs unconfirmed. Only the agentic path asks. That is current behaviour and the port must reproduce it - changing it is a product decision, not a migration one.",
+  "covers": "close_app via FAST_PATH, asked about first. This scenario used to record the opposite: the guard lived inside AgentLoop, so a close_app the intent model resolved in one shot ran unconfirmed, and the tape pinned that as intended behaviour. The guard now sits on the dispatch boundary, which both paths cross, so the question is asked and the answer resumes it.",
   "generator": "grace.harness.generate"
 }

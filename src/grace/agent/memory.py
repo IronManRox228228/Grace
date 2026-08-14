@@ -142,10 +142,20 @@ class StepRecord:
 class AgentMemory:
     """State memory for an autonomous task session with SQLite persistence."""
 
-    def __init__(self, user_goal: str, max_iterations: int = 0, persistent_store: Optional[PersistentMemoryStore] = None):
+    def __init__(self, user_goal: str, max_iterations: int = 0,
+                 persistent_store: Optional[PersistentMemoryStore] = None,
+                 max_seconds: float = 0):
         # max_iterations <= 0 means no step limit at all.
         self.user_goal: str = user_goal
         self.max_iterations: int = max_iterations
+        # The real ceiling. A step cap stops a task that is making progress
+        # (and the shipped default is deliberately unlimited); a clock stops one
+        # that is not, and it is the only bound the twelve-minute run would have
+        # crossed - it stayed under any plausible step cap for its first several
+        # minutes while achieving nothing.
+        self.max_seconds: float = max_seconds
+        self._started: float = time.monotonic()
+        self._paused_at: Optional[float] = None
         self.steps_taken: list[StepRecord] = []
         self.scratchpad: dict[str, Any] = {}
         self.current_iteration: int = 0
@@ -195,6 +205,33 @@ class AgentMemory:
         if not self.max_iterations or self.max_iterations <= 0:
             return False
         return self.current_iteration >= self.max_iterations
+
+    @property
+    def elapsed_seconds(self) -> float:
+        """Time spent working on this goal, excluding time spent waiting on us.
+
+        A safety confirmation is answered by voice, which can take as long as
+        the user takes. Counting that against the budget would mean the slower
+        someone speaks, the less of their task gets done.
+        """
+        end = self._paused_at if self._paused_at is not None else time.monotonic()
+        return end - self._started
+
+    @property
+    def is_out_of_time(self) -> bool:
+        if not self.max_seconds or self.max_seconds <= 0:
+            return False
+        return self.elapsed_seconds >= self.max_seconds
+
+    def pause_clock(self) -> None:
+        """Stop the budget clock while waiting for the user to answer."""
+        if self._paused_at is None:
+            self._paused_at = time.monotonic()
+
+    def resume_clock(self) -> None:
+        if self._paused_at is not None:
+            self._started += time.monotonic() - self._paused_at
+            self._paused_at = None
 
     def format_history_markdown(self) -> str:
         """Format recent action history as clean markdown for LLM context (last 3 steps)."""

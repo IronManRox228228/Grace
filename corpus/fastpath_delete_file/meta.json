@@ -1,13 +1,14 @@
 {
   "session_id": "fastpath_delete_file",
-  "recorded_at": "2026-08-15T02:06:29",
-  "git_sha": "de3a76602a777f0047a7b33ee17f565bf4f7dec4",
+  "recorded_at": "2026-08-15T02:56:42",
+  "git_sha": "be49f6898f8b754a80f2e1c132f005e85586ce17",
   "config": {
     "agent_max_consecutive_plan_failures": 3,
     "agent_max_iterations": 0,
     "agent_max_repeated_actions": 3,
+    "agent_max_seconds": 180,
     "cdp_port": 0,
-    "followup_timeout_seconds": 0,
+    "followup_timeout_seconds": 6,
     "gemini_api_key": "<redacted>",
     "gemini_model_name": "gemini-3.1-flash-lite",
     "kokoro_cache_size": 32,
@@ -54,6 +55,6 @@
   },
   "synthetic": true,
   "scenario": "fastpath_delete_file",
-  "covers": "delete_file via FAST_PATH, which likewise skips SafetyGuard.",
+  "covers": "delete_file via FAST_PATH. The one that mattered most: this used to reach the recycle bin without anyone being asked, because the request was simple enough to route directly.",
   "generator": "grace.harness.generate"
 }

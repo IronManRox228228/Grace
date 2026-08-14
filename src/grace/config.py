@@ -81,11 +81,18 @@ class Config:
     kokoro_warmup: bool = os.getenv("KOKORO_WARMUP", "true").lower() in ("true", "1", "yes")
     kokoro_cache_size: int = int(os.getenv("KOKORO_CACHE_SIZE", "32"))
 
-    # Agent loop. Both default to 0 = unlimited: a cap only ever stops a real
-    # task halfway ("I've used up my planning budget"), leaving the desktop in a
-    # half-changed state. Set either to a positive number to re-impose a limit.
+    # Agent loop. The step cap stays 0 = unlimited: capping steps only ever
+    # stops a real task halfway ("I've used up my planning budget"), leaving the
+    # desktop in a half-changed state, and a task that is making progress should
+    # be allowed to take the steps it needs.
     agent_max_iterations: int = int(os.getenv("AGENT_MAX_ITERATIONS", "0"))
-    planner_max_calls_per_goal: int = int(os.getenv("PLANNER_MAX_CALLS_PER_GOAL", "0"))
+    # Time and quota are the real ceilings, and unlike steps they bound the
+    # failure mode rather than the task: a goal that is getting somewhere does
+    # not spend three minutes or forty planner calls doing it, and one that is
+    # not will spend both without ever tripping a step cap. This is what makes
+    # the twelve-minute run structurally impossible rather than merely unlikely.
+    agent_max_seconds: int = int(os.getenv("AGENT_MAX_SECONDS", "180"))
+    planner_max_calls_per_goal: int = int(os.getenv("PLANNER_MAX_CALLS_PER_GOAL", "40"))
     # Not unlimited, unlike the two above. Those bound a task that is making
     # progress; this bounds one that is making none, and "unlimited" there means
     # an unreachable LLM freezes Grace mid-task with no way to interrupt it.

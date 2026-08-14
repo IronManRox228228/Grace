@@ -1,23 +1,23 @@
-{"i": 0, "t_ms": 20.7, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 20.8, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 1031.1, "event": {"type": "FinalTranscript", "text": "click the submit button"}}
-{"i": 3, "t_ms": 1031.2, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 1031.3, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 1032.4, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 1036.2, "event": {"type": "ToolExecutionStarted", "label": "Clicking…", "tool": "cua_click", "step": 1}}
-{"i": 7, "t_ms": 1036.3, "event": {"type": "ToolExecutionStarted", "label": "Clicking…"}}
-{"i": 8, "t_ms": 1037.3, "event": {"type": "ToolExecutionFinished"}}
-{"i": 9, "t_ms": 1048.5, "event": {"type": "ToolExecutionFinished", "tool": "cua_click", "status": "error"}}
-{"i": 10, "t_ms": 1049.8, "event": {"type": "ToolExecutionStarted", "label": "Trying another way…", "tool": "cua_click", "step": 2}}
-{"i": 11, "t_ms": 1049.9, "event": {"type": "ToolExecutionStarted", "label": "Clicking…"}}
-{"i": 12, "t_ms": 1050.3, "event": {"type": "ToolExecutionFinished"}}
-{"i": 13, "t_ms": 1059.2, "event": {"type": "ToolExecutionFinished", "tool": "cua_click", "status": "ok"}}
-{"i": 14, "t_ms": 1059.8, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 3}}
-{"i": 15, "t_ms": 1067.3, "event": {"type": "SpeechStarted"}}
-{"i": 16, "t_ms": 1067.6, "event": {"type": "ResponseChunk", "text": "I've submitted the form."}}
-{"i": 17, "t_ms": 1067.6, "event": {"type": "SpeechChunk"}}
-{"i": 18, "t_ms": 1067.7, "event": {"type": "SpeechFinished"}}
-{"i": 19, "t_ms": 1067.7, "event": {"type": "ConversationFinished"}}
-{"i": 20, "t_ms": 1067.9, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1047.3, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1006.1, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 4.2, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.0, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 34.8, "detail": "3 steps"}, {"name": "observe#1", "depth": 1, "ms": 1.0, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.5, "detail": "cua_click (call 1, blind)"}, {"name": "dispatch:cua_click", "depth": 1, "ms": 1.8, "detail": null}, {"name": "observe#2", "depth": 1, "ms": 0.3, "detail": null}, {"name": "plan#2", "depth": 1, "ms": 0.7, "detail": "cua_click (call 2, blind)"}, {"name": "dispatch:cua_click", "depth": 1, "ms": 0.6, "detail": null}, {"name": "observe#3", "depth": 1, "ms": 0.2, "detail": null}, {"name": "plan#3", "depth": 1, "ms": 0.3, "detail": "converse (call 3, blind)"}, {"name": "speak", "depth": 0, "ms": 0.5, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_agentic_goal": 1012.0, "first_audio_out": 1047.1}}}}
-{"i": 21, "t_ms": 1067.9, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
-{"i": 22, "t_ms": 1067.9, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 35.5, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 35.6, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1035.0, "event": {"type": "FinalTranscript", "text": "click the submit button"}}
+{"i": 3, "t_ms": 1035.2, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1035.2, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1036.5, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1041.5, "event": {"type": "ToolExecutionStarted", "label": "Clicking…", "tool": "cua_click", "step": 1}}
+{"i": 7, "t_ms": 1041.6, "event": {"type": "ToolExecutionStarted", "label": "Clicking…"}}
+{"i": 8, "t_ms": 1044.0, "event": {"type": "ToolExecutionFinished"}}
+{"i": 9, "t_ms": 1055.4, "event": {"type": "ToolExecutionFinished", "tool": "cua_click", "status": "error"}}
+{"i": 10, "t_ms": 1056.8, "event": {"type": "ToolExecutionStarted", "label": "Trying another way…", "tool": "cua_click", "step": 2}}
+{"i": 11, "t_ms": 1056.9, "event": {"type": "ToolExecutionStarted", "label": "Clicking…"}}
+{"i": 12, "t_ms": 1057.6, "event": {"type": "ToolExecutionFinished"}}
+{"i": 13, "t_ms": 1068.9, "event": {"type": "ToolExecutionFinished", "tool": "cua_click", "status": "ok"}}
+{"i": 14, "t_ms": 1070.6, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 3}}
+{"i": 15, "t_ms": 1082.1, "event": {"type": "SpeechStarted"}}
+{"i": 16, "t_ms": 1082.8, "event": {"type": "ResponseChunk", "text": "I've submitted the form."}}
+{"i": 17, "t_ms": 1082.8, "event": {"type": "SpeechChunk"}}
+{"i": 18, "t_ms": 1083.2, "event": {"type": "SpeechFinished"}}
+{"i": 19, "t_ms": 1083.3, "event": {"type": "ConversationFinished"}}
+{"i": 20, "t_ms": 1083.7, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1048.2, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 995.1, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 4.2, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.1, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 45.3, "detail": "3 steps"}, {"name": "observe#1", "depth": 1, "ms": 1.3, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.6, "detail": "cua_click (call 1, blind)"}, {"name": "dispatch:cua_click", "depth": 1, "ms": 3.5, "detail": null}, {"name": "observe#2", "depth": 1, "ms": 0.3, "detail": null}, {"name": "plan#2", "depth": 1, "ms": 0.7, "detail": "cua_click (call 2, blind)"}, {"name": "dispatch:cua_click", "depth": 1, "ms": 0.9, "detail": null}, {"name": "observe#3", "depth": 1, "ms": 0.5, "detail": null}, {"name": "plan#3", "depth": 1, "ms": 0.8, "detail": "converse (call 3, blind)"}, {"name": "speak", "depth": 0, "ms": 1.3, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.5, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.3, "detail": null}], "events": {"route_agentic_goal": 1001.4, "first_audio_out": 1047.5}}}}
+{"i": 21, "t_ms": 1083.9, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 22, "t_ms": 1084.0, "event": {"type": "Idle"}}

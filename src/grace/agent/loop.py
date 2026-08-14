@@ -89,6 +89,19 @@ DEFAULT_MAX_CONSECUTIVE_PLAN_FAILURES = 3
 # accumulates for an identical action retried against an identical view.
 DEFAULT_MAX_REPEATED_ACTIONS = 3
 
+# The wall-clock ceiling for one goal, in seconds.
+#
+# This is the bound the twelve-minute run needed and did not have. Every other
+# limit here counts something the loop does - steps, plans, repeats - and a loop
+# that is failing usefully-differently each time passes all of them while the
+# user sits and waits. Time is the one budget that cannot be spent slowly.
+#
+# Three minutes is chosen to be longer than any goal observed to succeed
+# (the working chemistry-group run took about 40 seconds) and far shorter than
+# the failure. Set AGENT_MAX_SECONDS=0 to disable, at the cost of restoring the
+# state where nothing structurally prevents an unbounded run.
+DEFAULT_MAX_SECONDS = 180
+
 
 class AgentLoop:
     """Autonomous ReAct Execution Engine for complex multi-step tasks."""
@@ -123,6 +136,7 @@ class AgentLoop:
         self._max_repeated_actions = _config_int(
             "agent_max_repeated_actions", DEFAULT_MAX_REPEATED_ACTIONS
         )
+        self._max_seconds = _config_int("agent_max_seconds", DEFAULT_MAX_SECONDS)
         self._pending: Optional[dict[str, Any]] = None
 
     # -- safety resumption -------------------------------------------------
@@ -144,15 +158,31 @@ class AgentLoop:
     def cancel_pending(self) -> None:
         self._pending = None
 
+    def park_intent(self, intent: Intent, prompt: str) -> None:
+        """Hold a fast-path tool call until the user answers the question.
+
+        A fast-path intent has no goal, no memory and no plan behind it - it is
+        one tool call - so it parks as itself. It lives here rather than in
+        `main.py` because this is where `has_pending_confirmation` is already
+        consulted, and two places tracking "is something waiting for a yes"
+        is how one of them comes to be missed.
+        """
+        self._pending = {"intent": intent, "prompt": prompt}
+
     async def resume_pending(self, approved: bool) -> dict[str, Any]:
-        """Continue a goal that stopped for a safety confirmation."""
+        """Continue whatever stopped for a safety confirmation."""
         if not self._pending:
             return {"status": "error", "error": "Nothing is waiting for confirmation."}
 
         pending = self._pending
         self._pending = None
+
+        if "intent" in pending:
+            return await self._resume_intent(pending["intent"], approved)
+
         memory: AgentMemory = pending["memory"]
         step: PlannedStep = pending["step"]
+        memory.resume_clock()
 
         if not approved:
             memory.safety_pending = None
@@ -163,21 +193,36 @@ class AgentLoop:
 
         logger.info(f"Resuming confirmed action '{step.action}'")
         memory.safety_pending = None
-        exec_result = await self._dispatch(step, memory)
+        exec_result = await self._dispatch(step, memory, confirmed=True)
         memory.add_step(step.thought, step.action, step.params, exec_result, step.user_update)
         return await self._continue(memory, last_step=step, last_result=exec_result)
+
+    async def _resume_intent(self, intent: Intent, approved: bool) -> dict[str, Any]:
+        """Run, or drop, a parked fast-path tool call."""
+        if not approved:
+            return {"status": "ok", "final_response": "Alright, I won't do that.", "steps": []}
+
+        logger.info(f"Resuming confirmed fast-path action '{intent.tool}'")
+        result = await self._dispatcher.execute(intent, confirmed=True)
+        return {
+            "status": result.get("status", "ok"),
+            "final_response": result.get("text") or "Done.",
+            "steps": [],
+        }
 
     # -- main entry point --------------------------------------------------
 
     async def run(self, user_goal: str, max_iterations: Optional[int] = None) -> dict[str, Any]:
         """Run the autonomous Observe-Plan-Act loop for a given user goal."""
         limit = max_iterations if max_iterations is not None else self._max_iterations
-        memory = AgentMemory(user_goal=user_goal, max_iterations=limit)
+        memory = AgentMemory(user_goal=user_goal, max_iterations=limit,
+                             max_seconds=self._max_seconds)
         self._planner.reset()
         self._pending = None
         logger.info(
             f"AgentLoop started for goal: '{user_goal}' "
-            f"({'unlimited' if not limit or limit <= 0 else f'max {limit}'} steps)"
+            f"({'unlimited' if not limit or limit <= 0 else f'max {limit}'} steps, "
+            f"{f'{self._max_seconds}s' if self._max_seconds > 0 else 'no time limit'})"
         )
         return await self._continue(memory)
 
@@ -193,6 +238,13 @@ class AgentLoop:
         attempts: dict[str, int] = {}
 
         while not memory.is_completed and not memory.is_exceeded:
+            if memory.is_out_of_time:
+                logger.error(
+                    f"AgentLoop: out of time after {memory.elapsed_seconds:.0f}s "
+                    f"and {memory.current_iteration} steps."
+                )
+                return self._timeout_result(memory)
+
             step_no = memory.current_iteration + 1
 
             async with stage(f"observe#{step_no}"):
@@ -281,6 +333,7 @@ class AgentLoop:
                     "params": step.params,
                     "prompt": confirm_prompt,
                 }
+                memory.pause_clock()
                 self._pending = {"memory": memory, "step": step, "prompt": confirm_prompt}
                 return {
                     "status": "safety_confirmation_required",
@@ -342,12 +395,13 @@ class AgentLoop:
             return await snap_res
         return self._perception.capture_snapshot()
 
-    async def _dispatch(self, step: PlannedStep, memory: AgentMemory) -> dict[str, Any]:
+    async def _dispatch(self, step: PlannedStep, memory: AgentMemory,
+                        confirmed: bool = False) -> dict[str, Any]:
         if step.action == "converse":
             return {"status": "ok"}
         intent = Intent(tool=step.action, params=step.params)
         async with stage(f"dispatch:{step.action}"):
-            return await self._dispatcher.execute(intent)
+            return await self._dispatcher.execute(intent, confirmed=confirmed)
 
     async def _ground(self, step: PlannedStep, snapshot) -> None:
         """Fill in x/y for a target the element graph could not resolve."""
@@ -400,6 +454,22 @@ class AgentLoop:
             lines.append("Do not repeat this action unchanged. Try a different element or a different approach.")
         else:
             lines.append(f"The tool reported: {inner.get('message') or status}")
+
+        # The A2 verdict. `sent` and `verified` are separate claims, and the
+        # third value is the one that matters: "I could not tell" is a different
+        # instruction to the planner than "it did not work", and before this
+        # they were the same string.
+        verified = inner.get("verified")
+        evidence = inner.get("evidence") or ""
+        if verified is True:
+            lines.append(f"EFFECT CONFIRMED: {evidence}")
+        elif verified is False and not reason:
+            lines.append(f"NO EFFECT: {evidence}")
+            lines.append("The input was sent but changed nothing. Try a different target.")
+        elif verified is None and inner.get("sent"):
+            lines.append(f"EFFECT UNKNOWN: {evidence}")
+            lines.append("Do not treat that as failure. Look at the screen description "
+                         "below and judge for yourself.")
 
         title = _window_title(snapshot)
         if title:
@@ -501,6 +571,25 @@ class AgentLoop:
         return {
             "status": "no_progress",
             "final_response": memory.final_response or response,
+            "steps": [s.to_dict() for s in memory.steps_taken],
+        }
+
+    def _timeout_result(self, memory: AgentMemory) -> dict[str, Any]:
+        """Stop on the clock, and say what was reached rather than what failed.
+
+        Named terminal states are the point of A4: "I ran out of time" with no
+        account of where it got to is barely better than the loop never stopping,
+        because the user still has to go and look at the screen to find out what
+        state their desktop was left in - and this user navigates by voice.
+        """
+        last = memory.steps_taken[-1] if memory.steps_taken else None
+        where = f" The last thing I did was `{last.action}`." if last is not None else ""
+        return {
+            "status": "timed_out",
+            "final_response": memory.final_response or (
+                f"I spent {memory.elapsed_seconds:.0f} seconds on that without "
+                f"finishing, so I've stopped.{where}"
+            ),
             "steps": [s.to_dict() for s in memory.steps_taken],
         }
 

@@ -645,15 +645,19 @@ def _catalogue() -> list[Scenario]:
         Scenario(
             name="fastpath_close_app",
             covers=(
-                "close_app via FAST_PATH. Note what this pins down: the fast "
-                "path does not consult SafetyGuard, so a close_app the intent "
-                "model resolves in one shot runs unconfirmed. Only the agentic "
-                "path asks. That is current behaviour and the port must "
-                "reproduce it - changing it is a product decision, not a "
-                "migration one."
+                "close_app via FAST_PATH, asked about first. This scenario used "
+                "to record the opposite: the guard lived inside AgentLoop, so a "
+                "close_app the intent model resolved in one shot ran "
+                "unconfirmed, and the tape pinned that as intended behaviour. "
+                "The guard now sits on the dispatch boundary, which both paths "
+                "cross, so the question is asked and the answer resumes it."
             ),
-            turns=[Turn("close notepad", [_intent("close_app", name="notepad")])],
+            turns=[
+                Turn("close notepad", [_intent("close_app", name="notepad")]),
+                Turn("yes", []),
+            ],
             tool_results={"close_app": {"status": "ok", "text": "I've closed notepad."}},
+            followup_timeout=6,
         ),
         Scenario(
             name="fastpath_search_files",
@@ -682,9 +686,13 @@ def _catalogue() -> list[Scenario]:
         ),
         Scenario(
             name="fastpath_lock_computer",
-            covers="lock_computer via FAST_PATH - again without a confirmation.",
-            turns=[Turn("lock my computer", [_intent("lock_computer")])],
+            covers="lock_computer via FAST_PATH - confirmed, then run.",
+            turns=[
+                Turn("lock my computer", [_intent("lock_computer")]),
+                Turn("yes", []),
+            ],
             tool_results={"lock_computer": {"status": "ok", "text": "I've locked your computer."}},
+            followup_timeout=6,
         ),
         Scenario(
             name="fastpath_open_calculator",
@@ -694,12 +702,20 @@ def _catalogue() -> list[Scenario]:
         ),
         Scenario(
             name="fastpath_delete_file",
-            covers="delete_file via FAST_PATH, which likewise skips SafetyGuard.",
-            turns=[Turn("delete old notes", [_intent("delete_file", name="old notes.txt")])],
+            covers=(
+                "delete_file via FAST_PATH. The one that mattered most: this "
+                "used to reach the recycle bin without anyone being asked, "
+                "because the request was simple enough to route directly."
+            ),
+            turns=[
+                Turn("delete old notes", [_intent("delete_file", name="old notes.txt")]),
+                Turn("yes", []),
+            ],
             tool_results={"delete_file": {
                 "status": "ok", "action": "delete_file",
                 "text": "I've moved 'old notes.txt' to the Recycle Bin.",
             }},
+            followup_timeout=6,
         ),
         Scenario(
             name="fastpath_cua_list_windows",

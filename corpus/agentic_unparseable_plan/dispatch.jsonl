@@ -1,1 +1,1 @@
-{"i": 0, "t_ms": 1040.2, "tool": "cua_click", "params": {"element_id": 1}, "result": {"status": "ok", "result": {"ok": true, "message": "clicked"}}}
+{"i": 0, "t_ms": 1034.9, "tool": "cua_click", "params": {"element_id": 1}, "result": {"status": "ok", "result": {"ok": true, "message": "clicked"}}}

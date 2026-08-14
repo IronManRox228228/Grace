@@ -559,9 +559,18 @@ class TestDispatcherBreak:
         assert result["status"] == "error"
 
     def test_close_app_missing_name(self):
+        # `confirmed=True` because close_app is now gated on the dispatch
+        # boundary and the guard runs before the handler sees the params. What
+        # is under test here is the handler's own validation, so the question
+        # is answered first; that the question is asked at all is covered by
+        # tests/integration/test_safety_boundary.py.
         intent = Intent(tool="close_app", params={})
-        result = asyncio.run(self.dispatcher.execute(intent))
+        result = asyncio.run(self.dispatcher.execute(intent, confirmed=True))
         assert result["status"] == "error"
+
+    def test_close_app_missing_name_is_asked_about_first(self):
+        result = asyncio.run(self.dispatcher.execute(Intent(tool="close_app", params={})))
+        assert result["status"] == "confirmation_required"
 
     def test_search_files_missing_query(self):
         intent = Intent(tool="search_files", params={})
@@ -574,8 +583,10 @@ class TestDispatcherBreak:
         assert result["status"] == "error"
 
     def test_delete_file_missing_name(self):
+        # See test_close_app_missing_name: the guard is answered so the
+        # handler's validation is what gets exercised.
         intent = Intent(tool="delete_file", params={})
-        result = asyncio.run(self.dispatcher.execute(intent))
+        result = asyncio.run(self.dispatcher.execute(intent, confirmed=True))
         assert result["status"] == "error"
 
     def test_read_pdf_missing_path(self):
@@ -627,7 +638,7 @@ class TestDispatcherBreak:
 
     def test_delete_file_empty_name(self):
         intent = Intent(tool="delete_file", params={"name": ""})
-        result = asyncio.run(self.dispatcher.execute(intent))
+        result = asyncio.run(self.dispatcher.execute(intent, confirmed=True))
         assert result["status"] == "error"
 
 

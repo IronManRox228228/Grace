@@ -24,6 +24,180 @@ def _invalidate_graph() -> None:
         logger.debug(f"Element graph invalidation skipped: {e}")
 
 
+# How long to let the UI repaint before an effect probe reads it.
+#
+# The survey's Appendix E names the hidden premise this exists for: systems
+# assume "the environment remains static between actions" and screenshot only
+# post-action, while real applications are dynamic. Judging a slow-painting app
+# the instant the input is sent produces "it did not work" for something that
+# worked. So: settle, re-observe, and only then form a verdict.
+#
+# This costs no extra observation in the loop. Acting invalidates the cached
+# element graph, so the loop's next capture would rebuild it anyway; the probe
+# rebuilds it slightly earlier and leaves it warm inside the cache TTL.
+SETTLE_SECONDS = 0.25
+
+
+def _graph_builder():
+    from grace.agent.perception import PerceptionEngine
+
+    return PerceptionEngine.get_graph_builder()
+
+
+def _screen_state() -> Optional[dict[str, Any]]:
+    """A comparable summary of the current screen, or None if unreadable.
+
+    None is not a failure. It is the answer for a window with no accessibility
+    tree, and it must stay distinguishable from "read it, nothing changed" -
+    conflating the two is what turned an absence of evidence into a verdict and
+    stopped a run that was working.
+    """
+    try:
+        graph = _graph_builder().get()
+    except Exception as e:
+        logger.debug(f"Screen state unavailable: {e}")
+        return None
+    if graph is None:
+        return None
+
+    try:
+        from grace.agent.perception import _min_actionable
+
+        blind = graph.actionable_count < _min_actionable()
+    except Exception:
+        blind = not len(graph)
+
+    focused = graph.focused()
+    return {
+        "window": getattr(graph.window, "title", "") or "",
+        "elements": len(graph),
+        "focus_id": focused.id if focused is not None else None,
+        "focus_name": (focused.name or focused.placeholder) if focused is not None else "",
+        "focus_value": focused.value if focused is not None else "",
+        "blind": blind,
+    }
+
+
+def _settled_state() -> Optional[dict[str, Any]]:
+    """Let the UI catch up, then read it again."""
+    try:
+        builder = _graph_builder()
+    except Exception:
+        return None
+    time.sleep(SETTLE_SECONDS)
+    try:
+        builder.invalidate()
+    except Exception:
+        return None
+    return _screen_state()
+
+
+def _change_verdict(
+    before: Optional[dict[str, Any]],
+    after: Optional[dict[str, Any]],
+) -> tuple[Optional[bool], str]:
+    """Whether the screen changed, in the three-valued sense `verified` needs."""
+    if before is None or after is None:
+        return None, ("the input was sent, but this window reports nothing that "
+                      "could confirm it - check visually or by its side effects")
+
+    changes = []
+    if after["window"] != before["window"]:
+        changes.append(f"the active window is now '{after['window']}'")
+    if after["focus_id"] != before["focus_id"]:
+        changes.append(f"keyboard focus moved to '{after['focus_name']}'")
+    elif after["focus_value"] != before["focus_value"]:
+        changes.append(f"the focused field now reads '{after['focus_value'][:60]}'")
+    if after["elements"] != before["elements"]:
+        changes.append(
+            f"the window went from {before['elements']} to {after['elements']} elements"
+        )
+
+    if changes:
+        return True, "; ".join(changes)
+    if before["blind"] or after["blind"]:
+        return None, ("nothing observable changed, but this window does not report "
+                      "its contents, so that is not evidence either way")
+    return False, ("nothing changed after settling: same window, same focus, "
+                   "same elements")
+
+
+def _contract(result: dict[str, Any]) -> dict[str, Any]:
+    """Give every action result the same three claims.
+
+    `ok` meant two different things at once - "the input was dispatched" and
+    "the input did what was intended" - and callers could not tell which they
+    were being told. They are separated here:
+
+    * ``sent``      - the input reached the desktop.
+    * ``verified``  - True, False, or None for "there was no way to check".
+    * ``evidence``  - what the check actually saw, in words the planner can act
+      on.
+
+    Handlers that ran a probe fill these in themselves; this only supplies the
+    default, so an action with no probe reports `verified: null` rather than
+    implying a check that never happened.
+    """
+    if not isinstance(result, dict):
+        return result
+    if "sent" not in result:
+        result["sent"] = bool(result.get("ok", "error" not in result))
+    if "verified" not in result:
+        result["verified"] = None
+    if "evidence" not in result:
+        result["evidence"] = (
+            "not checked - this action has no effect probe"
+            if result["verified"] is None else ""
+        )
+    return result
+
+
+def _foreground_title() -> str:
+    try:
+        import win32gui
+
+        return win32gui.GetWindowText(win32gui.GetForegroundWindow()) or ""
+    except Exception:
+        return ""
+
+
+def _wrong_window(params: dict[str, Any], action: str) -> Optional[dict[str, Any]]:
+    """Refuse an action aimed at a window that is not in front.
+
+    Modelled on the `wrong_focus` guard `_type_text` already had, which is the
+    one precondition in the file that ever worked: it names both sides, and
+    because `ok is False` the loop turns it into an explicit correction on the
+    very next planner call at no extra cost.
+
+    Only fires when the plan actually named a window. A missing or unmatched
+    name means "wherever we are", which is how most steps are written and must
+    keep working.
+    """
+    wanted = _normalize_window(params.get("window")).get("title") or ""
+    wanted = str(wanted).strip()
+    if not wanted:
+        return None
+
+    actual = _foreground_title()
+    if not actual:
+        return None
+
+    a, b = wanted.lower(), actual.lower()
+    if a in b or b in a:
+        return None
+
+    return {
+        "ok": False,
+        "sent": False,
+        "verified": False,
+        "status": "wrong_window",
+        "action": action,
+        "error": (f"You aimed at '{wanted}' but '{actual}' is in front. "
+                  f"Activate the window you meant first."),
+        "evidence": f"foreground window is '{actual}'",
+    }
+
+
 def _normalize_window(window_param: Any) -> dict[str, Any]:
     """Ensure window parameter is always a dictionary, coercing raw string titles."""
     if isinstance(window_param, str):
@@ -65,12 +239,14 @@ class ComputerUse:
         """Execute a CUA action and return the result."""
         handler = getattr(self, f"_{action}", None)
         if handler is None:
-            return {"error": f"Unknown action: {action}"}
+            return {"error": f"Unknown action: {action}", "sent": False, "verified": False,
+                    "evidence": "no handler exists for this action"}
         try:
-            return handler(params)
+            return _contract(handler(params))
         except Exception as e:
             logger.error(f"Action {action} failed: {e}")
-            return {"error": str(e)}
+            return {"error": str(e), "sent": False, "verified": False,
+                    "evidence": f"the handler raised: {e}"}
 
     def _get_abs_coords(self, window_param: Any, x: Optional[int], y: Optional[int]) -> tuple[Optional[int], Optional[int]]:
         """Translate relative or absolute (x, y) coordinates to screen-absolute coordinates."""
@@ -163,6 +339,12 @@ class ComputerUse:
         if bounds and isinstance(bounds, (list, tuple)) and len(bounds) >= 4:
             window_bounds = (int(bounds[0]), int(bounds[1]), int(bounds[2]), int(bounds[3]))
 
+        refused = _wrong_window(params, "click")
+        if refused is not None:
+            return refused
+
+        before = _screen_state()
+
         # Resolve against the element graph the planner actually saw, so
         # element ids mean the same thing here as they did in the prompt.
         #
@@ -173,7 +355,8 @@ class ComputerUse:
         graph_target = self._resolve_from_graph(params, element_index, target_name)
         if graph_target is not None:
             return self._click_at(graph_target.center[0], graph_target.center[1],
-                                  click_count, f"graph:{graph_target.role}", graph_target.name)
+                                  click_count, f"graph:{graph_target.role}", graph_target.name,
+                                  probe=True, before=before)
 
         # Fall back to the legacy cascade for coordinate-only or unmatched targets.
         resolver = CoordinateResolver()
@@ -191,13 +374,18 @@ class ComputerUse:
         if not resolved:
             return {
                 "ok": False,
+                "sent": False,
+                "verified": False,
+                "action": "click",
                 "status": "element_not_found",
                 "error": f"Target element '{target_name or relative_to}' not found via UIA, OculiX, OpenCV, or OCR",
-                "message": f"I couldn't locate the '{target_name or relative_to}' button on screen."
+                "message": f"I couldn't locate the '{target_name or relative_to}' button on screen.",
+                "evidence": "nothing was clicked",
             }
 
         return self._click_at(resolved.x, resolved.y, click_count, resolved.method,
-                              getattr(resolved.element, "name", None))
+                              getattr(resolved.element, "name", None),
+                              probe=True, before=before)
 
     @staticmethod
     def _target_from_params(params: dict[str, Any]) -> tuple[Optional[int], Optional[str]]:
@@ -265,8 +453,14 @@ class ComputerUse:
         return found
 
     def _click_at(self, x: int, y: int, click_count: int, method: str,
-                  name: Optional[str] = None) -> dict[str, Any]:
-        """Send the actual click, then invalidate the graph the UI just changed."""
+                  name: Optional[str] = None, probe: bool = False,
+                  before: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        """Send the actual click, then invalidate the graph the UI just changed.
+
+        ``probe`` is off for internal callers - `_set_value` clicks only to put
+        focus somewhere and then checks the value it wrote, so a change probe
+        there would pay for a settle and answer the wrong question.
+        """
         import pyautogui
 
         logger.info(f"_click executing via method '{method}' at ({x}, {y})")
@@ -279,8 +473,15 @@ class ComputerUse:
 
         _invalidate_graph()
 
+        verified, evidence = (None, "not checked - this click was a step in another action")
+        if probe:
+            verified, evidence = _change_verdict(before, _settled_state())
+
         return {
             "ok": True,
+            "sent": True,
+            "verified": verified,
+            "evidence": evidence,
             "action": "click",
             "message": f"Clicked {click_count} time(s) at ({x}, {y}) via {method}"
                        + (f" on '{name}'" if name else ""),
@@ -305,6 +506,10 @@ class ComputerUse:
         import pyautogui
         text = str(params.get("text", ""))
 
+        refused = _wrong_window(params, "type_text")
+        if refused is not None:
+            return refused
+
         # Typing used to be entirely blind. Check the element graph for what
         # actually has keyboard focus and report it, so a step that typed a
         # search query into the wrong box is visible in the result instead of
@@ -327,6 +532,8 @@ class ComputerUse:
                         )
                         return {
                             "ok": False,
+                            "sent": False,
+                            "verified": False,
                             "status": "wrong_focus",
                             "action": "type_text",
                             "error": f"Focus is on '{focused.name or focused.placeholder}' "
@@ -334,6 +541,7 @@ class ComputerUse:
                                      f"(frame={expected.frame}). Click the intended field first.",
                             "focused_id": focused.id,
                             "expected_id": expected.id,
+                            "evidence": "no keystrokes were sent",
                         }
             elif target_name:
                 logger.debug(f"_type_text: no focused element found; typing '{target_name}' blind")
@@ -356,16 +564,56 @@ class ComputerUse:
             logger.debug("PyAutoGUI failsafe caught during type_text")
 
         _invalidate_graph()
+        verified, evidence = self._probe_typed(text, bool(params.get("replace")))
         return {
             "ok": True,
+            "sent": True,
+            "verified": verified,
+            "evidence": evidence,
             "action": "type_text",
             "message": f"Typed {len(text)} characters{focus_note}",
         }
 
+    @staticmethod
+    def _probe_typed(text: str, replace: bool) -> tuple[Optional[bool], str]:
+        """Read the field back and say whether it now holds what was typed.
+
+        `replace` changes the question from containment to equality: the whole
+        point of clearing first is that the field ends up holding *only* the new
+        text, and a leftover prefix is exactly the failure the flag exists for -
+        "ChemistryCoordination Compounds" contains what was typed and is still
+        wrong.
+
+        An empty `value` is reported as unknown, not as failure. Plenty of
+        controls simply do not expose their contents through UI Automation, and
+        saying "it did not work" there is inventing evidence.
+        """
+        after = _settled_state()
+        if after is None or after["focus_id"] is None:
+            return None, ("the text was sent, but nothing reports keyboard focus, "
+                          "so what it landed in cannot be read back")
+
+        value = after["focus_value"] or ""
+        if not value:
+            return None, (f"the text was sent to '{after['focus_name']}', which does "
+                          f"not report its contents")
+
+        if replace:
+            ok = value.strip() == text.strip()
+        else:
+            ok = text in value
+        return ok, f"'{after['focus_name']}' now reads '{value[:80]}'"
+
     def _press_key(self, params: dict[str, Any]) -> dict[str, Any]:
         import pyautogui
         raw_key = str(params.get("key", ""))
-        
+
+        refused = _wrong_window(params, "press_key")
+        if refused is not None:
+            return refused
+
+        before = _screen_state()
+
         # Map CUA / X11 keysyms to PyAutoGUI key names
         key_map = {
             "return": "enter",
@@ -396,7 +644,15 @@ class ComputerUse:
             except Exception:
                 pass
         _invalidate_graph()
-        return {"ok": True, "action": "press_key", "message": f"Pressed {raw_key}"}
+        verified, evidence = _change_verdict(before, _settled_state())
+        return {
+            "ok": True,
+            "sent": True,
+            "verified": verified,
+            "evidence": evidence,
+            "action": "press_key",
+            "message": f"Pressed {raw_key}",
+        }
 
     def _screenshot(self, params: dict[str, Any] = None) -> dict[str, Any]:
         img = None
@@ -469,6 +725,7 @@ class ComputerUse:
         if scroll_y is None and scroll_x == 0:
             scroll_y = 500
 
+        before = _screen_state()
         try:
             if explicit_coords and x is not None and y is not None:
                 pyautogui.scroll(-scroll_y, x=x, y=y)
@@ -478,7 +735,21 @@ class ComputerUse:
                 pyautogui.hscroll(scroll_x)
         except pyautogui.FailSafeException:
             logger.debug("PyAutoGUI failsafe caught during scroll")
-        return {"ok": True, "action": "scroll", "message": f"Scrolled ({scroll_x}, {scroll_y or 0})"}
+
+        # Scrolling changes which elements are on screen and where they are, so
+        # it invalidates the graph exactly as a click does. It was the one
+        # mutating handler that did not, which left the next click resolving
+        # against pre-scroll rectangles for the rest of the 1.5s cache TTL.
+        _invalidate_graph()
+        verified, evidence = _change_verdict(before, _settled_state())
+        return {
+            "ok": True,
+            "sent": True,
+            "verified": verified,
+            "evidence": evidence,
+            "action": "scroll",
+            "message": f"Scrolled ({scroll_x}, {scroll_y or 0})",
+        }
 
     def _drag(self, params: dict[str, Any]) -> dict[str, Any]:
         import pyautogui
@@ -501,6 +772,9 @@ class ComputerUse:
             missing = "start" if start is None else "end"
             return {
                 "ok": False,
+                "sent": False,
+                "verified": False,
+                "evidence": "nothing was dragged",
                 "status": "element_not_found",
                 "action": "drag",
                 "error": (
@@ -512,13 +786,26 @@ class ComputerUse:
 
         from_x, from_y = start
         to_x, to_y = end
+        before = _screen_state()
         try:
             pyautogui.moveTo(from_x, from_y)
             pyautogui.drag(to_x - from_x, to_y - from_y, duration=0.3)
         except pyautogui.FailSafeException:
             logger.debug("PyAutoGUI failsafe caught during drag")
-        self._invalidate_graph()
-        return {"ok": True, "action": "drag", "message": f"Dragged from ({from_x},{from_y}) to ({to_x},{to_y})"}
+        # Was `self._invalidate_graph()`, which is a module function, not a
+        # method: every drag raised AttributeError, was swallowed by `perform`,
+        # and reported itself as a plain error after having already moved the
+        # mouse. Caught by the contract tests below.
+        _invalidate_graph()
+        verified, evidence = _change_verdict(before, _settled_state())
+        return {
+            "ok": True,
+            "sent": True,
+            "verified": verified,
+            "evidence": evidence,
+            "action": "drag",
+            "message": f"Dragged from ({from_x},{from_y}) to ({to_x},{to_y})",
+        }
 
     def _point_for(self, params: dict[str, Any], end: str) -> Optional[tuple[int, int]]:
         """Resolve one end of a drag to a screen point.
@@ -566,7 +853,7 @@ class ComputerUse:
                 if win32gui.IsWindow(hwnd):
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                     win32gui.SetForegroundWindow(hwnd)
-                    return {"ok": True, "action": "activate", "message": f"Activated window hwnd: {hwnd}"}
+                    return self._activated(win32gui.GetWindowText(hwnd) or str(hwnd))
             except Exception as e:
                 logger.debug(f"Activate via hwnd failed: {e}")
 
@@ -589,9 +876,12 @@ class ComputerUse:
                 try:
                     win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
                     win32gui.SetForegroundWindow(target_hwnd)
-                    return {"ok": True, "action": "activate", "message": f"Activated window: {window_title}"}
+                    return self._activated(window_title)
                 except Exception as e:
-                    return {"ok": False, "action": "activate", "message": f"Could not focus {window_title}: {e}"}
+                    return {"ok": False, "sent": True, "verified": False,
+                            "action": "activate",
+                            "message": f"Could not focus {window_title}: {e}",
+                            "evidence": f"SetForegroundWindow raised: {e}"}
 
         # Nothing matched. This used to report success, which meant the planner
         # was told the window it asked for was in front and then planned its
@@ -599,9 +889,34 @@ class ComputerUse:
         wanted = window_title or hwnd or "(no window named)"
         return {
             "ok": False,
+            "sent": False,
+            "verified": False,
             "status": "window_not_found",
             "action": "activate",
             "error": f"No open window matches {wanted!r}. Use cua_list_windows to see what is open, or launch it first.",
+            "evidence": f"the foreground window is still '{_foreground_title()}'",
+        }
+
+    @staticmethod
+    def _activated(wanted: str) -> dict[str, Any]:
+        """Did the window we asked for actually come to the front?
+
+        Windows refuses `SetForegroundWindow` from a process that does not own
+        the current foreground window, and does so *silently* - the call returns
+        and nothing happens. Every precondition that asks "is the right window
+        in front" is downstream of this one, so it checks rather than assumes.
+        """
+        time.sleep(SETTLE_SECONDS)
+        actual = _foreground_title()
+        wanted_l, actual_l = wanted.lower(), actual.lower()
+        verified = bool(actual) and (wanted_l in actual_l or actual_l in wanted_l)
+        return {
+            "ok": True,
+            "sent": True,
+            "verified": verified,
+            "evidence": f"the foreground window is '{actual}'",
+            "action": "activate",
+            "message": f"Activated window: {wanted}",
         }
 
     @staticmethod
@@ -782,9 +1097,12 @@ class ComputerUse:
         elif element_id is not None or target_name:
             return {
                 "ok": False,
+                "sent": False,
+                "verified": False,
                 "status": "element_not_found",
                 "action": "set_value",
                 "error": f"Could not locate '{target_name or element_id}' to set its value.",
+                "evidence": "nothing was typed",
             }
         else:
             # No target named at all. The body below is select-all, delete,
@@ -792,10 +1110,13 @@ class ComputerUse:
             # run on a plan that never said where to put the value.
             return {
                 "ok": False,
+                "sent": False,
+                "verified": False,
                 "status": "no_target",
                 "action": "set_value",
                 "error": "set_value needs an element_id or target_name; refusing "
                          "to overwrite whatever currently has focus.",
+                "evidence": "nothing was typed",
             }
 
         try:
@@ -804,15 +1125,46 @@ class ComputerUse:
             pyautogui.press("delete")
             pyautogui.write(value, interval=0.01)
         except Exception as e:
-            return {"ok": False, "action": "set_value", "error": str(e)}
+            return {"ok": False, "sent": False, "verified": False,
+                    "action": "set_value", "error": str(e),
+                    "evidence": "the keystrokes could not be sent"}
 
         _invalidate_graph()
+        verified, evidence = self._probe_set_value(target.id, value)
         return {
             "ok": True,
+            "sent": True,
+            "verified": verified,
+            "evidence": evidence,
             "action": "set_value",
             "message": f"Set value to '{value[:60]}'"
                        + (f" on '{target.name}'" if target is not None else ""),
         }
+
+    @staticmethod
+    def _probe_set_value(element_id: int, value: str) -> tuple[Optional[bool], str]:
+        """Read the field back. `set_value` promises equality, so check for it.
+
+        The element is re-fetched by id rather than by focus: setting a value can
+        move focus onward (a combo box that commits and closes), and checking
+        whatever ended up focused would then grade the wrong control.
+        """
+        after = _settled_state()
+        if after is None:
+            return None, "the value was typed, but this window reports nothing to read back"
+
+        try:
+            element = ComputerUse._graph_element(element_id)
+        except Exception:
+            element = None
+        if element is None:
+            return None, (f"the value was typed, but element {element_id} is no longer "
+                          f"in the tree, so it cannot be read back")
+        if not element.value:
+            return None, f"'{element.name}' does not report its contents"
+        return element.value.strip() == value.strip(), (
+            f"'{element.name}' now reads '{element.value[:80]}'"
+        )
 
     # Element actions the agent can request, mapped to how they are performed.
     _SECONDARY_ACTIONS = {

@@ -12,6 +12,7 @@ import os
 import subprocess
 from typing import Any, Optional
 
+from grace.agent.safety import SafetyGuard
 from grace.intent.parser import Intent
 from grace.automation.computer_use import ComputerUse
 from grace.harness import get_recorder
@@ -116,7 +117,7 @@ class Dispatcher:
         """Install a pre-built index (main.py builds one during startup warmup)."""
         self._app_indexer = indexer
 
-    async def execute(self, intent: Intent) -> dict[str, Any]:
+    async def execute(self, intent: Intent, confirmed: bool = False) -> dict[str, Any]:
         """Execute a parsed intent, taping the call when recording is on.
 
         This is the outermost side-effecting boundary in the backend. In a
@@ -124,12 +125,53 @@ class Dispatcher:
         the Rust port asked for the same tool with the same parameters, in the
         same order - "Grace did the right thing on screen" is not enough if it
         took a different route to get there.
+
+        Being the outermost boundary is also why the safety check belongs here.
+        It used to live inside `AgentLoop`, which meant it covered the agentic
+        path and nothing else - and `delete_file`, `close_app` and
+        `lock_computer` are all in `CapabilityRouter.FAST_PATH_TOOLS`, so
+        "delete my tax return" reached the desktop unconfirmed precisely because
+        it was simple enough to route directly. `AgentLoop` still asks first, so
+        it can park the whole step and resume it; this is the backstop that
+        makes the guarantee independent of which path was taken.
+
+        `confirmed=True` is the caller saying the user has already answered yes.
         """
+        refusal = self.confirmation_required(intent, confirmed)
+        if refusal is not None:
+            return refusal
+
         recorder = get_recorder()
         result = await self._execute(intent)
         if recorder is not None:
             recorder.record_dispatch(intent.tool, intent.params, result)
         return result
+
+    @staticmethod
+    def confirmation_required(intent: Intent, confirmed: bool = False) -> Optional[dict[str, Any]]:
+        """The refusal to return, or None to go ahead.
+
+        Split out of `execute` so the replay harness can apply the same decision
+        without a second copy of it. `TapeDispatcher` replaces `execute`
+        wholesale, so a guard living only inside that method would be silently
+        absent from every replayed run - and a safety rule that the regression
+        oracle cannot see is a safety rule that can be deleted without any test
+        going red.
+        """
+        if confirmed:
+            return None
+        is_safe, prompt = SafetyGuard.evaluate(intent.tool, intent.params)
+        if is_safe:
+            return None
+
+        logger.warning(f"Dispatcher: '{intent.tool}' needs confirmation before it runs")
+        return {
+            "status": "confirmation_required",
+            "confirmation_prompt": prompt,
+            "text": prompt,
+            "tool": intent.tool,
+            "params": intent.params,
+        }
 
     async def _execute(self, intent: Intent) -> dict[str, Any]:
         """Route to CUA for cua_* tools, or to a hardcoded system tool."""
@@ -208,7 +250,19 @@ class Dispatcher:
             result = await asyncio.to_thread(self._cua.perform, action, params)
             await self._emit_tool_finished()
             if result and result.get("error"):
-                return {"status": "error", "error": result["error"], "text": f"Action error: {result['error']}"}
+                # The handler's own envelope is carried through, not replaced.
+                # Flattening it to `{status, error, text}` threw away `status:
+                # "wrong_focus"`, `status: "element_not_found"` and every A2
+                # field - so a precondition that refused precisely, naming both
+                # the window it wanted and the one in front, reached the planner
+                # as an undifferentiated "Action error". Everything that could
+                # be acted on was in the part discarded.
+                return {
+                    "status": "error",
+                    "error": result["error"],
+                    "text": f"Action error: {result['error']}",
+                    "result": result,
+                }
             return {"status": "ok", "result": result}
         except Exception as e:
             await self._emit_tool_finished()

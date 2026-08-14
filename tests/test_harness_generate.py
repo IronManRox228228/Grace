@@ -69,15 +69,19 @@ def test_every_side_effecting_tool_leaf_is_replaced():
 
 def test_an_unscripted_tool_is_refused_rather_than_performed(tmp_path):
     """Reaching an unscripted tool must be reported, and must not run it."""
+    # Deliberately an *unguarded* tool. This used to use lock_computer, which
+    # now stops at the safety guard on the dispatch boundary and so never
+    # reaches the unscripted-tool check at all - the tape would record a
+    # confirmation question and the test would pass for the wrong reason.
     scenario = Scenario(
         name="unscripted_tool",
         covers="fixture",
-        turns=[Turn("lock my computer", [
-            '{"tool": "lock_computer", "params": {}}',
+        turns=[Turn("open the calculator", [
+            '{"tool": "open_calculator", "params": {}}',
         ])],
-        # No tool_results entry for lock_computer, on purpose.
+        # No tool_results entry for open_calculator, on purpose.
     )
-    with pytest.raises(ScriptExhausted, match="lock_computer"):
+    with pytest.raises(ScriptExhausted, match="open_calculator"):
         generate(scenario, str(tmp_path))
 
     # The tape is still on disk, so the route it actually took can be read.

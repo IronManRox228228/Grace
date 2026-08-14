@@ -492,6 +492,23 @@ class GraceApp:
         await self.response_gen.generate_and_speak_with_text(response_text)
         return True
 
+    async def _park_if_confirmation_required(self, intent, result: dict) -> bool:
+        """Ask the question a refused dispatch came back with. True if parked.
+
+        The fast path reaches `delete_file`, `close_app` and `lock_computer`
+        without going anywhere near `AgentLoop`, so before the guard moved to
+        the dispatcher those three ran unconfirmed whenever the router judged
+        the request simple - which, being one-tool requests, is always.
+        """
+        if result.get("status") != "confirmation_required":
+            return False
+
+        prompt = result.get("confirmation_prompt") or "Should I go ahead?"
+        log.warning(f"Fast-path '{intent.tool}' parked for confirmation: {prompt}")
+        self.agent_loop.park_intent(intent, prompt)
+        await self.response_gen.generate_and_speak_with_text(prompt)
+        return True
+
     def _start_background_warmup(self) -> None:
         """Pay lazy initialisation costs up front, off the event loop.
 
@@ -677,6 +694,10 @@ class GraceApp:
                 result = await self.dispatcher.execute(intent)
             log.info(f"Result: {result}")
 
+            if await self._park_if_confirmation_required(intent, result):
+                await self.ws_server.emit({"type": "ConversationFinished"})
+                return
+
             response_text = None
             if intent.is_conversation and intent.response:
                 response_text = intent.response
@@ -792,6 +813,8 @@ class GraceApp:
 
         if intent and not intent.is_conversation:
             result = await self.dispatcher.execute(intent)
+            if await self._park_if_confirmation_required(intent, result):
+                return True
             response_text = result.get("text")
             if response_text:
                 await self.response_gen.generate_and_speak_with_text(response_text)

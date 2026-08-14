@@ -188,7 +188,17 @@ class TapeDispatcher:
         self._index = 0
         self.calls: list[dict] = []
 
-    async def execute(self, intent) -> dict:
+    async def execute(self, intent, confirmed: bool = False) -> dict:
+        # The safety guard runs here too. It lives in the method this class
+        # replaces, so without this a replayed run would dispatch the
+        # destructive tools the recorded run had refused - and the tapes that
+        # exist to prove the guard fires would prove the opposite.
+        from grace.tools.dispatcher import Dispatcher
+
+        refusal = Dispatcher.confirmation_required(intent, confirmed)
+        if refusal is not None:
+            return refusal
+
         self.calls.append({"tool": intent.tool, "params": intent.params})
 
         # Events emitted around a dispatch are part of the contract, so the

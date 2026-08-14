@@ -1,20 +1,20 @@
-{"i": 0, "t_ms": 25.6, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 25.7, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 1040.9, "event": {"type": "FinalTranscript", "text": "get rid of the draft file"}}
-{"i": 3, "t_ms": 1040.9, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 1041.0, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 1041.5, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 1043.0, "event": {"type": "SpeechStarted"}}
-{"i": 7, "t_ms": 1043.2, "event": {"type": "ResponseChunk", "text": "Are you sure you want me to delete draft.txt?"}}
-{"i": 8, "t_ms": 1044.7, "event": {"type": "SpeechChunk"}}
-{"i": 9, "t_ms": 1044.8, "event": {"type": "SpeechFinished"}}
-{"i": 10, "t_ms": 1044.8, "event": {"type": "ConversationFinished"}}
-{"i": 11, "t_ms": 1044.9, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1019.5, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1013.6, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 1.5, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.4, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 1.5, "detail": "0 steps"}, {"name": "observe#1", "depth": 1, "ms": 0.4, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.3, "detail": "delete_file (call 1, blind)"}, {"name": "speak", "depth": 0, "ms": 1.8, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.1, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_agentic_goal": 1016.1, "first_audio_out": 1017.8}}}}
-{"i": 12, "t_ms": 1044.9, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 13, "t_ms": 2058.0, "event": {"type": "FinalTranscript", "text": "no don't do that"}}
-{"i": 14, "t_ms": 2071.0, "event": {"type": "SpeechStarted"}}
-{"i": 15, "t_ms": 2071.8, "event": {"type": "ResponseChunk", "text": "Alright, I won't do that."}}
-{"i": 16, "t_ms": 2072.0, "event": {"type": "SpeechChunk"}}
-{"i": 17, "t_ms": 2072.5, "event": {"type": "SpeechFinished"}}
-{"i": 18, "t_ms": 2072.6, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 19, "t_ms": 8122.1, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 72.7, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 73.1, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1061.4, "event": {"type": "FinalTranscript", "text": "get rid of the draft file"}}
+{"i": 3, "t_ms": 1061.5, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1061.6, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1062.9, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1068.7, "event": {"type": "SpeechStarted"}}
+{"i": 7, "t_ms": 1069.3, "event": {"type": "ResponseChunk", "text": "Are you sure you want me to delete draft.txt?"}}
+{"i": 8, "t_ms": 1071.0, "event": {"type": "SpeechChunk"}}
+{"i": 9, "t_ms": 1071.4, "event": {"type": "SpeechFinished"}}
+{"i": 10, "t_ms": 1071.5, "event": {"type": "ConversationFinished"}}
+{"i": 11, "t_ms": 1071.8, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 999.9, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 984.9, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 3.3, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.1, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 5.4, "detail": "0 steps"}, {"name": "observe#1", "depth": 1, "ms": 1.5, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.8, "detail": "delete_file (call 1, blind)"}, {"name": "speak", "depth": 0, "ms": 2.9, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.4, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.4, "detail": null}], "events": {"route_agentic_goal": 991.5, "first_audio_out": 997.6}}}}
+{"i": 12, "t_ms": 1071.9, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 13, "t_ms": 2068.8, "event": {"type": "FinalTranscript", "text": "no don't do that"}}
+{"i": 14, "t_ms": 2080.2, "event": {"type": "SpeechStarted"}}
+{"i": 15, "t_ms": 2080.8, "event": {"type": "ResponseChunk", "text": "Alright, I won't do that."}}
+{"i": 16, "t_ms": 2080.9, "event": {"type": "SpeechChunk"}}
+{"i": 17, "t_ms": 2081.4, "event": {"type": "SpeechFinished"}}
+{"i": 18, "t_ms": 2081.6, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 19, "t_ms": 8105.9, "event": {"type": "Idle"}}

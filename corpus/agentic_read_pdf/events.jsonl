@@ -1,19 +1,19 @@
-{"i": 0, "t_ms": 21.7, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 21.8, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 1034.1, "event": {"type": "FinalTranscript", "text": "read my report pdf to me"}}
-{"i": 3, "t_ms": 1034.2, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 1034.2, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 1034.6, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 1036.2, "event": {"type": "ToolExecutionStarted", "label": "Reading document…", "tool": "read_pdf", "step": 1}}
-{"i": 7, "t_ms": 1036.3, "event": {"type": "ToolExecutionStarted", "label": "Reading document…"}}
-{"i": 8, "t_ms": 1037.7, "event": {"type": "ToolExecutionFinished"}}
-{"i": 9, "t_ms": 1044.8, "event": {"type": "ToolExecutionFinished", "tool": "read_pdf", "status": "ok"}}
-{"i": 10, "t_ms": 1045.9, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 2}}
-{"i": 11, "t_ms": 1052.6, "event": {"type": "SpeechStarted"}}
-{"i": 12, "t_ms": 1052.8, "event": {"type": "ResponseChunk", "text": "The report covers third quarter results."}}
-{"i": 13, "t_ms": 1052.8, "event": {"type": "SpeechChunk"}}
-{"i": 14, "t_ms": 1053.2, "event": {"type": "SpeechFinished"}}
-{"i": 15, "t_ms": 1053.3, "event": {"type": "ConversationFinished"}}
-{"i": 16, "t_ms": 1053.4, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1031.8, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1010.5, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 1.7, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.4, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 17.8, "detail": "2 steps"}, {"name": "observe#1", "depth": 1, "ms": 0.4, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.3, "detail": "read_pdf (call 1, blind)"}, {"name": "dispatch:read_pdf", "depth": 1, "ms": 1.8, "detail": null}, {"name": "observe#2", "depth": 1, "ms": 0.7, "detail": null}, {"name": "plan#2", "depth": 1, "ms": 0.2, "detail": "converse (call 2, blind)"}, {"name": "speak", "depth": 0, "ms": 0.7, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.4, "detail": null}], "events": {"route_agentic_goal": 1013.2, "first_audio_out": 1031.3}}}}
-{"i": 17, "t_ms": 1053.4, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
-{"i": 18, "t_ms": 1053.4, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 42.2, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 42.3, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1038.1, "event": {"type": "FinalTranscript", "text": "read my report pdf to me"}}
+{"i": 3, "t_ms": 1038.2, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1038.4, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1039.6, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1044.0, "event": {"type": "ToolExecutionStarted", "label": "Reading document…", "tool": "read_pdf", "step": 1}}
+{"i": 7, "t_ms": 1044.1, "event": {"type": "ToolExecutionStarted", "label": "Reading document…"}}
+{"i": 8, "t_ms": 1044.8, "event": {"type": "ToolExecutionFinished"}}
+{"i": 9, "t_ms": 1055.2, "event": {"type": "ToolExecutionFinished", "tool": "read_pdf", "status": "ok"}}
+{"i": 10, "t_ms": 1057.8, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 2}}
+{"i": 11, "t_ms": 1066.6, "event": {"type": "SpeechStarted"}}
+{"i": 12, "t_ms": 1067.4, "event": {"type": "ResponseChunk", "text": "The report covers third quarter results."}}
+{"i": 13, "t_ms": 1067.4, "event": {"type": "SpeechChunk"}}
+{"i": 14, "t_ms": 1067.7, "event": {"type": "SpeechFinished"}}
+{"i": 15, "t_ms": 1067.8, "event": {"type": "ConversationFinished"}}
+{"i": 16, "t_ms": 1068.1, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1026.0, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 991.6, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 4.0, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.0, "detail": null}, {"name": "agent_loop", "depth": 0, "ms": 26.8, "detail": "2 steps"}, {"name": "observe#1", "depth": 1, "ms": 1.0, "detail": null}, {"name": "plan#1", "depth": 1, "ms": 0.5, "detail": "read_pdf (call 1, blind)"}, {"name": "dispatch:read_pdf", "depth": 1, "ms": 1.8, "detail": null}, {"name": "observe#2", "depth": 1, "ms": 1.5, "detail": null}, {"name": "plan#2", "depth": 1, "ms": 0.6, "detail": "converse (call 2, blind)"}, {"name": "speak", "depth": 0, "ms": 1.3, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.6, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.2, "detail": null}], "events": {"route_agentic_goal": 997.8, "first_audio_out": 1025.4}}}}
+{"i": 17, "t_ms": 1068.3, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 18, "t_ms": 1068.4, "event": {"type": "Idle"}}

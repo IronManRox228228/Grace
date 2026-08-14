@@ -1,27 +1,27 @@
-{"i": 0, "t_ms": 22.4, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 22.5, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 1037.8, "event": {"type": "FinalTranscript", "text": "hello grace"}}
-{"i": 3, "t_ms": 1037.9, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 1037.9, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 1038.3, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 1038.4, "event": {"type": "SpeechStarted"}}
-{"i": 7, "t_ms": 1038.5, "event": {"type": "ResponseChunk", "text": "Hello."}}
-{"i": 8, "t_ms": 1038.5, "event": {"type": "SpeechChunk"}}
-{"i": 9, "t_ms": 1040.2, "event": {"type": "ResponseChunk", "text": " What can I do?"}}
-{"i": 10, "t_ms": 1040.2, "event": {"type": "SpeechChunk"}}
-{"i": 11, "t_ms": 1040.3, "event": {"type": "SpeechFinished"}}
-{"i": 12, "t_ms": 1040.3, "event": {"type": "ConversationFinished"}}
-{"i": 13, "t_ms": 1040.4, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1018.2, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1013.7, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 1.6, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.4, "detail": null}, {"name": "speak", "depth": 0, "ms": 2.0, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.1, "detail": "480 bytes"}, {"name": "synth#2", "depth": 1, "ms": 0.1, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 0.1, "detail": null}], "events": {"route_conversation": 1016.2, "first_audio_out": 1016.3}}}}
-{"i": 14, "t_ms": 1040.4, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 15, "t_ms": 2052.5, "event": {"type": "FinalTranscript", "text": "click the refresh button"}}
-{"i": 16, "t_ms": 2056.4, "event": {"type": "ToolExecutionStarted", "label": "Refreshing…", "tool": "cua_click", "step": 1}}
-{"i": 17, "t_ms": 2056.4, "event": {"type": "ToolExecutionStarted", "label": "Clicking…"}}
-{"i": 18, "t_ms": 2056.8, "event": {"type": "ToolExecutionFinished"}}
-{"i": 19, "t_ms": 2066.7, "event": {"type": "ToolExecutionFinished", "tool": "cua_click", "status": "ok"}}
-{"i": 20, "t_ms": 2067.6, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 2}}
-{"i": 21, "t_ms": 2076.3, "event": {"type": "SpeechStarted"}}
-{"i": 22, "t_ms": 2076.7, "event": {"type": "ResponseChunk", "text": "I've refreshed the page."}}
-{"i": 23, "t_ms": 2076.8, "event": {"type": "SpeechChunk"}}
-{"i": 24, "t_ms": 2076.9, "event": {"type": "SpeechFinished"}}
-{"i": 25, "t_ms": 2076.9, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 26, "t_ms": 8090.7, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 66.1, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 66.3, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1063.5, "event": {"type": "FinalTranscript", "text": "hello grace"}}
+{"i": 3, "t_ms": 1063.7, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1063.8, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1065.6, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1065.8, "event": {"type": "SpeechStarted"}}
+{"i": 7, "t_ms": 1066.4, "event": {"type": "ResponseChunk", "text": "Hello."}}
+{"i": 8, "t_ms": 1066.5, "event": {"type": "SpeechChunk"}}
+{"i": 9, "t_ms": 1068.5, "event": {"type": "ResponseChunk", "text": " What can I do?"}}
+{"i": 10, "t_ms": 1068.6, "event": {"type": "SpeechChunk"}}
+{"i": 11, "t_ms": 1069.8, "event": {"type": "SpeechFinished"}}
+{"i": 12, "t_ms": 1070.0, "event": {"type": "ConversationFinished"}}
+{"i": 13, "t_ms": 1070.2, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1006.9, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 992.7, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 4.4, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.6, "detail": null}, {"name": "speak", "depth": 0, "ms": 4.2, "detail": null}, {"name": "synth#1", "depth": 1, "ms": 0.5, "detail": "480 bytes"}, {"name": "synth#2", "depth": 1, "ms": 0.4, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 1, "ms": 1.1, "detail": null}], "events": {"route_conversation": 1002.5, "first_audio_out": 1003.2}}}}
+{"i": 14, "t_ms": 1070.4, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 15, "t_ms": 2046.4, "event": {"type": "FinalTranscript", "text": "click the refresh button"}}
+{"i": 16, "t_ms": 2052.6, "event": {"type": "ToolExecutionStarted", "label": "Refreshing…", "tool": "cua_click", "step": 1}}
+{"i": 17, "t_ms": 2053.0, "event": {"type": "ToolExecutionStarted", "label": "Clicking…"}}
+{"i": 18, "t_ms": 2053.7, "event": {"type": "ToolExecutionFinished"}}
+{"i": 19, "t_ms": 2063.7, "event": {"type": "ToolExecutionFinished", "tool": "cua_click", "status": "ok"}}
+{"i": 20, "t_ms": 2064.9, "event": {"type": "ToolExecutionStarted", "label": "Finishing up…", "tool": "converse", "step": 2}}
+{"i": 21, "t_ms": 2076.8, "event": {"type": "SpeechStarted"}}
+{"i": 22, "t_ms": 2077.6, "event": {"type": "ResponseChunk", "text": "I've refreshed the page."}}
+{"i": 23, "t_ms": 2077.7, "event": {"type": "SpeechChunk"}}
+{"i": 24, "t_ms": 2078.2, "event": {"type": "SpeechFinished"}}
+{"i": 25, "t_ms": 2078.3, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 26, "t_ms": 8099.8, "event": {"type": "Idle"}}
