@@ -1,16 +1,16 @@
-{"i": 0, "t_ms": 65.9, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 66.1, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 1064.3, "event": {"type": "FinalTranscript", "text": "open notepad"}}
-{"i": 3, "t_ms": 1064.5, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 1064.6, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 1066.1, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 1066.3, "event": {"type": "SpeechStarted"}}
-{"i": 7, "t_ms": 1066.7, "event": {"type": "ResponseChunk", "text": "I've hit my request limit for now."}}
-{"i": 8, "t_ms": 1068.6, "event": {"type": "SpeechChunk"}}
-{"i": 9, "t_ms": 1069.2, "event": {"type": "ResponseChunk", "text": " Please try again in a moment."}}
-{"i": 10, "t_ms": 1069.3, "event": {"type": "SpeechChunk"}}
-{"i": 11, "t_ms": 1069.6, "event": {"type": "SpeechFinished"}}
-{"i": 12, "t_ms": 1069.7, "event": {"type": "ConversationFinished"}}
-{"i": 13, "t_ms": 1070.0, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1004.7, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 993.2, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 4.8, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.2, "detail": null}, {"name": "synth#1", "depth": 0, "ms": 0.3, "detail": "480 bytes"}, {"name": "synth#2", "depth": 0, "ms": 0.4, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 0, "ms": 0.3, "detail": null}], "events": {"first_audio_out": 1001.6}}}}
-{"i": 14, "t_ms": 1070.1, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
-{"i": 15, "t_ms": 1070.2, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 22.0, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 22.0, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1038.0, "event": {"type": "FinalTranscript", "text": "open notepad"}}
+{"i": 3, "t_ms": 1038.1, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1038.1, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1039.0, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1039.1, "event": {"type": "SpeechStarted"}}
+{"i": 7, "t_ms": 1039.3, "event": {"type": "ResponseChunk", "text": "I've hit my request limit for now."}}
+{"i": 8, "t_ms": 1040.8, "event": {"type": "SpeechChunk"}}
+{"i": 9, "t_ms": 1041.1, "event": {"type": "ResponseChunk", "text": " Please try again in a moment."}}
+{"i": 10, "t_ms": 1041.2, "event": {"type": "SpeechChunk"}}
+{"i": 11, "t_ms": 1041.3, "event": {"type": "SpeechFinished"}}
+{"i": 12, "t_ms": 1041.3, "event": {"type": "ConversationFinished"}}
+{"i": 13, "t_ms": 1041.4, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1019.6, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1012.9, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 3.0, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.7, "detail": null}, {"name": "synth#1", "depth": 0, "ms": 0.2, "detail": "480 bytes"}, {"name": "synth#2", "depth": 0, "ms": 0.2, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 0, "ms": 0.1, "detail": null}], "events": {"first_audio_out": 1017.6}}}}
+{"i": 14, "t_ms": 1041.5, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 15, "t_ms": 1041.5, "event": {"type": "Idle"}}

@@ -152,6 +152,26 @@ def _contract(result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _downscaled(img, max_width: Optional[int] = None):
+    """Shrink a screenshot to the configured prompt width, preserving aspect."""
+    if max_width is None:
+        try:
+            from grace.config import Config
+
+            max_width = int(Config().screenshot_max_width)
+        except Exception:
+            max_width = 1280
+    if max_width <= 0 or img.width <= max_width:
+        return img
+    height = max(1, round(img.height * max_width / img.width))
+    try:
+        from PIL import Image
+
+        return img.resize((max_width, height), Image.LANCZOS)
+    except Exception:
+        return img
+
+
 def _foreground_title() -> str:
     try:
         import win32gui
@@ -677,6 +697,13 @@ class ComputerUse:
             from PIL import Image
             img = Image.new("RGB", (800, 600), color=(253, 251, 247))
 
+        # Downscale to the same width the perception path uses. This went out
+        # at full resolution, base64-encoded, into the tool result and from
+        # there into the transcript and the recorded tape - roughly a megabyte
+        # of characters per call, for an image no model reads at that
+        # resolution anyway.
+        img = _downscaled(img)
+
         buffer = io.BytesIO()
         img.save(buffer, format="PNG", compress_level=1)
         b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
@@ -833,9 +860,16 @@ class ComputerUse:
 
     @staticmethod
     def _graph_element(element_id: int):
-        from grace.agent import perception as perception_mod
+        # `from grace.agent.perception import X`, matching every other lookup in
+        # this file. The `from grace.agent import perception` form resolved the
+        # attribute on the already-imported package instead of going through
+        # sys.modules, so this one function reached a different perception module
+        # from its neighbours whenever the package had been imported first -
+        # which depends on import order and therefore on nothing you can see
+        # from here.
+        from grace.agent.perception import PerceptionEngine
 
-        graph = perception_mod.PerceptionEngine.get_graph_builder().get()
+        graph = PerceptionEngine.get_graph_builder().get()
         return graph.by_id(element_id) if graph is not None else None
 
     def _activate(self, params: dict[str, Any]) -> dict[str, Any]:

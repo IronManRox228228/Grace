@@ -170,7 +170,11 @@ def _scripted_gemini(replies: list[Reply], overruns: Overruns):
     queue = list(replies)
     served = [0]
 
-    async def _stream(self, messages, temperature=0.2, max_tokens=1024):
+    # `model` is accepted and ignored: the ladder's escalation rung asks for a
+    # stronger model, and a stub that rejects the kwarg turns every escalated
+    # call into "the planner returned nothing" - which the loop correctly reads
+    # as an unusable plan and gives up on after three.
+    async def _stream(self, messages, temperature=0.2, max_tokens=1024, model=None):
         if not queue:
             preview = ""
             for message in reversed(messages):
@@ -623,6 +627,42 @@ _BROWSER = screen(
 )
 
 
+# The shape of the app all three recorded failures happened in: the window
+# frame, reported perfectly, and nothing whatever from inside it. Every element
+# here is real - a tab, the scrollbar arrows, the system menu - and none of them
+# is what the user asked for.
+_BLIND_APP = screen(
+    "WhatsApp",
+    [
+        element(0, "button", "System menu", (0, 0, 32, 32), container="Title bar"),
+        element(1, "button", "Minimise", (1810, 0, 1846, 32), container="Title bar"),
+        element(2, "button", "Maximise", (1846, 0, 1882, 32), container="Title bar"),
+        element(3, "button", "Close", (1882, 0, 1918, 32), container="Title bar"),
+    ],
+    class_name="Chrome_WidgetWin_1",
+)
+
+# A search box that is not empty. The whole failure is invisible from here:
+# `value` is what the app *would* report if it reported anything, and the app
+# in question does not.
+_STALE_SEARCH = screen(
+    "WhatsApp",
+    [
+        element(0, "edit", "Search", (40, 60, 440, 96), container="Chat list",
+                value="Chemistry", focused=True),
+        element(1, "listitem", "Chemistry 2024", (40, 110, 440, 170), container="Chat list"),
+        element(2, "button", "New chat", (400, 20, 440, 56), container="Chat list"),
+        element(3, "button", "Menu", (440, 20, 480, 56), container="Chat list"),
+        element(4, "listitem", "Physics group", (40, 170, 440, 230), container="Chat list"),
+        element(5, "listitem", "Family", (40, 230, 440, 290), container="Chat list"),
+        element(6, "listitem", "Work", (40, 290, 440, 350), container="Chat list"),
+        element(7, "button", "Settings", (40, 1000, 80, 1040), container="Chat list"),
+        element(8, "button", "Profile", (80, 1000, 120, 1040), container="Chat list"),
+    ],
+    class_name="Chrome_WidgetWin_1",
+)
+
+
 def _catalogue() -> list[Scenario]:
     return [
         # -- conversation --------------------------------------------------
@@ -878,6 +918,94 @@ def _catalogue() -> list[Scenario]:
                 "status": "ok", "action": "read_pdf",
                 "text": "[Excerpt 1]: Third quarter results exceeded projections.",
             }},
+        ),
+
+        # -- the three real failures ----------------------------------------
+        #
+        # Each of these is a session that actually happened, on the same
+        # request, encoded so it cannot happen silently again.
+        Scenario(
+            name="blind_app_vision_mode",
+            covers=(
+                "An app that reports its window frame and nothing else. Four "
+                "title-bar controls are not an element list, and treating them "
+                "as one is why the loop reasoned soundly about a screen it "
+                "could not see for 130 steps. Below the observability "
+                "threshold the planner is sent a marked screenshot instead, "
+                "and the tape pins that the prompt says so."
+            ),
+            turns=[Turn(
+                "open the chemistry group",
+                [
+                    _intent("cua_click", element_id=1),
+                    _plan("cua_click", thought="Open the chat from the list.",
+                          expect="the chemistry group conversation opens",
+                          user_update="Opening the group…", element_id=1),
+                    _plan("converse", thought="Done.", completed=True,
+                          user_update="Finishing up…",
+                          final="I've opened the chemistry group."),
+                ],
+            )],
+            snapshots=[_BLIND_APP],
+            cua_results=[{"ok": True, "sent": True, "verified": None,
+                          "evidence": "this window does not report its contents",
+                          "message": "clicked"}],
+        ),
+        Scenario(
+            name="stale_field_replace",
+            covers=(
+                "A search box that already holds the previous query. Typing "
+                "appends, so the second search became "
+                "'ChemistryCoordination Compounds' and found nothing - and the "
+                "planner could not have known, because the app does not report "
+                "the field's contents. `replace` is the fix, and this pins "
+                "that the parameter survives the four hops to the executor."
+            ),
+            turns=[Turn(
+                "now search for coordination compounds",
+                [
+                    _intent("cua_type_text", text="Coordination Compounds"),
+                    _plan("cua_type_text", thought="The box still holds the last query.",
+                          expect="the search box contains only the new query",
+                          user_update="Searching…",
+                          text="Coordination Compounds", replace=True),
+                    _plan("converse", thought="Done.", completed=True,
+                          user_update="Finishing up…",
+                          final="I've searched for Coordination Compounds."),
+                ],
+            )],
+            snapshots=[_STALE_SEARCH],
+            cua_results=[{"ok": True, "sent": True, "verified": True,
+                          "evidence": "'Search' now reads 'Coordination Compounds'",
+                          "message": "typed"}],
+        ),
+        Scenario(
+            name="repeated_action_escalates",
+            covers=(
+                "The same action, three times, against an unchanging screen. "
+                "The guard that catches this used to stop on the spot, which "
+                "killed a run that was succeeding; it now escalates - normal, "
+                "re-ground, stronger planner - and only then stops. What the "
+                "tape pins is that it does stop, and that it does not stop on "
+                "the first repeat."
+            ),
+            turns=[Turn(
+                "click send",
+                [
+                    _intent("cua_click", element_id=3),
+                    # Five, not four: the third rung spends a planner call of
+                    # its own asking a stronger model for a different approach,
+                    # which is the whole cost of escalating.
+                    *[_plan("cua_click", thought="Send it.",
+                            expect="the message is sent",
+                            user_update="Clicking Send…", element_id=3)
+                      for _ in range(5)],
+                ],
+            )],
+            snapshots=[_BROWSER],
+            cua_results=[{"ok": True, "sent": True, "verified": False,
+                          "evidence": "nothing changed after settling",
+                          "message": "clicked"}] * 5,
         ),
 
         # -- safety ---------------------------------------------------------

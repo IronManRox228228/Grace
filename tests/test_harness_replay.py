@@ -99,7 +99,7 @@ def scripted_backend(monkeypatch, tmp_path):
         followup_timeout_seconds=0,
     )
 
-    async def _fake_gemini(self, messages, temperature=0.2, max_tokens=1024):
+    async def _fake_gemini(self, messages, temperature=0.2, max_tokens=1024, model=None):
         for chunk in llm_chunks:
             yield chunk
 

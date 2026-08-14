@@ -1,0 +1,1 @@
+{"i": 0, "t_ms": 1042.3, "tool": "cua_click", "params": {"element_id": 1}, "result": {"status": "ok", "result": {"ok": true, "sent": true, "verified": null, "evidence": "this window does not report its contents", "message": "clicked"}}}

@@ -170,6 +170,7 @@ class UIInspector:
                 self._walk_uia_tree(
                     uia, elem, elements,
                     depth=0, max_depth=MAX_DEPTH_BROWSER, cap=cap,
+                    start_index=start_index,
                 )
             else:
                 condition = uia.CreateTrueCondition()
@@ -180,7 +181,7 @@ class UIInspector:
                         break
                     try:
                         c = controls.GetElement(i)
-                        self._maybe_append(elements, c)
+                        self._maybe_append(elements, c, start_index=idx)
                     except Exception:
                         pass
         except Exception as e:
@@ -198,9 +199,17 @@ class UIInspector:
         self,
         elements: List[UIElement],
         c,
-        start_index_offset: Optional[int] = None,
+        start_index: int = 1,
     ) -> None:
-        """Append a COM UIA element to the result list if it is interactive."""
+        """Append a COM UIA element to the result list if it is interactive.
+
+        `start_index` continues the numbering the Win32 pass already used. It
+        was computed and passed down, and then this method numbered from
+        `len(elements) + 1` regardless - so the UIA pass restarted at 1 and two
+        different controls could share an index. An index is how a caller says
+        which element it means, and a duplicated one silently points at the
+        wrong control.
+        """
         try:
             name = c.CurrentName
             rect = c.CurrentBoundingRectangle
@@ -215,7 +224,7 @@ class UIInspector:
                 cy = rect.top + h // 2
                 elements.append(
                     UIElement(
-                        index=len(elements) + 1,
+                        index=start_index + len(elements),
                         name=name.strip(),
                         control_type=ctl_type,
                         bounds=(rect.left, rect.top, rect.right, rect.bottom),
@@ -233,6 +242,7 @@ class UIInspector:
         depth: int,
         max_depth: int,
         cap: int,
+        start_index: int = 1,
     ) -> None:
         """Depth-limited recursive TreeWalker over the UIA tree.
 
@@ -260,7 +270,7 @@ class UIInspector:
 
             # Append interactive elements; recurse into named containers.
             if raw_ctl_type in INTERACTIVE_CONTROL_IDS:
-                self._maybe_append(elements, child)
+                self._maybe_append(elements, child, start_index=start_index)
             elif raw_ctl_type in CONTAINER_CONTROL_IDS:
                 # Only descend into containers that carry a name (real region)
                 # or are at shallow depth, to avoid exploding node counts.

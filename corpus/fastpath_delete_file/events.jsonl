@@ -1,22 +1,22 @@
-{"i": 0, "t_ms": 913.3, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 913.5, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 1898.2, "event": {"type": "FinalTranscript", "text": "delete old notes"}}
-{"i": 3, "t_ms": 1898.4, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 1898.5, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 1900.5, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 1901.4, "event": {"type": "SpeechStarted"}}
-{"i": 7, "t_ms": 1901.9, "event": {"type": "ResponseChunk", "text": "Are you sure you want me to delete old notes.txt?"}}
-{"i": 8, "t_ms": 1904.0, "event": {"type": "SpeechChunk"}}
-{"i": 9, "t_ms": 1904.2, "event": {"type": "SpeechFinished"}}
-{"i": 10, "t_ms": 1904.3, "event": {"type": "ConversationFinished"}}
-{"i": 11, "t_ms": 1904.5, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 992.4, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 976.6, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 7.9, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.6, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 0.0, "detail": null}, {"name": "synth#1", "depth": 0, "ms": 0.4, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 0, "ms": 0.2, "detail": null}], "events": {"route_fast_path": 989.2, "first_audio_out": 989.9}}}}
-{"i": 12, "t_ms": 1904.5, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 13, "t_ms": 2883.9, "event": {"type": "FinalTranscript", "text": "yes"}}
-{"i": 14, "t_ms": 2884.8, "event": {"type": "ToolExecutionStarted", "label": "Moving old notes.txt to recycle bin…"}}
-{"i": 15, "t_ms": 2884.8, "event": {"type": "ToolExecutionFinished"}}
-{"i": 16, "t_ms": 2885.9, "event": {"type": "SpeechStarted"}}
-{"i": 17, "t_ms": 2887.3, "event": {"type": "ResponseChunk", "text": "I've moved 'old notes.txt' to the Recycle Bin."}}
-{"i": 18, "t_ms": 2887.4, "event": {"type": "SpeechChunk"}}
-{"i": 19, "t_ms": 2887.7, "event": {"type": "SpeechFinished"}}
-{"i": 20, "t_ms": 2887.8, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
-{"i": 21, "t_ms": 8896.6, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 25.7, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 25.8, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1043.9, "event": {"type": "FinalTranscript", "text": "delete old notes"}}
+{"i": 3, "t_ms": 1044.1, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1044.1, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1045.1, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1045.3, "event": {"type": "SpeechStarted"}}
+{"i": 7, "t_ms": 1045.7, "event": {"type": "ResponseChunk", "text": "Are you sure you want me to delete old notes.txt?"}}
+{"i": 8, "t_ms": 1046.3, "event": {"type": "SpeechChunk"}}
+{"i": 9, "t_ms": 1046.7, "event": {"type": "SpeechFinished"}}
+{"i": 10, "t_ms": 1046.8, "event": {"type": "ConversationFinished"}}
+{"i": 11, "t_ms": 1047.0, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1021.4, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1012.6, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 5.4, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 0.9, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 0.0, "detail": null}, {"name": "synth#1", "depth": 0, "ms": 0.3, "detail": "480 bytes"}, {"name": "playback_drain", "depth": 0, "ms": 0.3, "detail": null}], "events": {"route_fast_path": 1019.8, "first_audio_out": 1020.3}}}}
+{"i": 12, "t_ms": 1047.0, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 13, "t_ms": 2059.4, "event": {"type": "FinalTranscript", "text": "yes"}}
+{"i": 14, "t_ms": 2059.6, "event": {"type": "ToolExecutionStarted", "label": "Moving old notes.txt to recycle bin…"}}
+{"i": 15, "t_ms": 2059.7, "event": {"type": "ToolExecutionFinished"}}
+{"i": 16, "t_ms": 2060.7, "event": {"type": "SpeechStarted"}}
+{"i": 17, "t_ms": 2061.3, "event": {"type": "ResponseChunk", "text": "I've moved 'old notes.txt' to the Recycle Bin."}}
+{"i": 18, "t_ms": 2061.4, "event": {"type": "SpeechChunk"}}
+{"i": 19, "t_ms": 2061.7, "event": {"type": "SpeechFinished"}}
+{"i": 20, "t_ms": 2061.8, "event": {"type": "FollowupListeningStarted", "timeout": 6}}
+{"i": 21, "t_ms": 8102.5, "event": {"type": "Idle"}}

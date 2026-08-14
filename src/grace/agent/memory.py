@@ -115,6 +115,12 @@ class PersistentMemoryStore:
             return []
 
 
+# How many established facts / ruled-out approaches to carry forward. They go
+# into every subsequent prompt, so this is a token budget as much as a memory
+# one; past a handful, the useful ones stop standing out.
+MAX_REMEMBERED = 8
+
+
 @dataclass
 class StepRecord:
     """Record of a single action step in the agentic loop."""
@@ -186,6 +192,31 @@ class AgentMemory:
         if self.persistent_store:
             self.persistent_store.save_step(self.user_goal, action, params, result)
         return record
+
+    def establish(self, fact: str) -> None:
+        """Record something now known to be true, outside the 3-step window."""
+        self._remember("established", fact)
+
+    def rule_out(self, approach: str, why: str = "") -> None:
+        """Record an approach that has been tried and did not work."""
+        self._remember("ruled_out", f"{approach} - {why}" if why else approach)
+
+    def _remember(self, key: str, entry: str) -> None:
+        """Append to a rolling list, most recent last, without duplicates.
+
+        `format_history_markdown` keeps the last three steps verbatim and
+        discards everything before them with no summary, so a goal that has
+        tried and rejected four approaches cannot see that it did - it re-plans
+        from a window that has already forgotten. This is the minimum that
+        survives the window, and it costs no model call: every entry is written
+        from facts the loop has already computed.
+        """
+        entries = self.scratchpad.setdefault(key, [])
+        if entry in entries:
+            return
+        entries.append(entry)
+        # Bounded, because it goes into every subsequent prompt.
+        del entries[:-MAX_REMEMBERED]
 
     def set_scratchpad(self, key: str, value: Any):
         """Store intermediate data (e.g. extracted text, search results)."""

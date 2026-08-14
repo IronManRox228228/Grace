@@ -132,17 +132,27 @@ class GemmaClient:
         temperature: float = 0.7,
         max_tokens: int = 8192,
         stream: bool = True,
+        model: Optional[str] = None,
     ):
-        """Send a chat completion request."""
+        """Send a chat completion request.
+
+        `model` overrides the configured one for this call only. It exists for
+        the escalation ladder: when a goal is stuck, the last thing worth trying
+        before giving up is a more capable planner, and paying for that on every
+        step to have it available on the rare one would be the wrong trade. It
+        applies to the Gemini backend; a local llama-server serves whatever
+        model it was started with, so there is nothing to switch there.
+        """
         await self._prepare()
-        logger.info(f"LLM request ({self._model_name if self._api_key else 'llama.cpp'}): {len(messages)} messages, max_tokens={max_tokens}, temperature={temperature}")
+        effective_model = model or self._model_name
+        logger.info(f"LLM request ({effective_model if self._api_key else 'llama.cpp'}): {len(messages)} messages, max_tokens={max_tokens}, temperature={temperature}")
 
         recorder = get_recorder()
         request = None
         if recorder is not None:
             request = {
                 "backend": "gemini" if self._api_key else "llama.cpp",
-                "model": self._model_name,
+                "model": effective_model,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
                 "stream": stream,
@@ -150,7 +160,8 @@ class GemmaClient:
             }
 
         if self._api_key:
-            gemini = self._stream_gemini_response(messages, temperature=temperature, max_tokens=max_tokens)
+            gemini = self._stream_gemini_response(messages, temperature=temperature,
+                                                  max_tokens=max_tokens, model=effective_model)
             if recorder is None:
                 return gemini
             return _record_stream(recorder, "chat", request, gemini)
@@ -224,6 +235,7 @@ class GemmaClient:
         messages: list[dict],
         temperature: float = 0.2,
         max_tokens: int = 1024,
+        model: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """Stream response tokens from the configured Gemini model.
 
@@ -262,7 +274,7 @@ class GemmaClient:
         if system_instruction:
             payload["system_instruction"] = system_instruction
 
-        model = self._model_name
+        model = model or self._model_name
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
             f":streamGenerateContent?key={self._api_key}&alt=sse"
@@ -392,6 +404,7 @@ class GemmaClient:
         max_tokens: int = 8192,
         messages: Optional[list[dict]] = None,
         image_b64: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Optional[str]:
         """Generate text completion non-streaming."""
         if not messages:
@@ -404,7 +417,8 @@ class GemmaClient:
             ]
         tokens = []
         try:
-            stream = await self.chat(messages, temperature=temperature, max_tokens=max_tokens, stream=True)
+            stream = await self.chat(messages, temperature=temperature, max_tokens=max_tokens,
+                                     stream=True, model=model)
             if stream is not None:
                 async for token in stream:
                     tokens.append(token)

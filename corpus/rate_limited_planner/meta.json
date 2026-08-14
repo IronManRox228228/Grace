@@ -1,7 +1,7 @@
 {
   "session_id": "rate_limited_planner",
-  "recorded_at": "2026-08-15T02:51:59",
-  "git_sha": "be49f6898f8b754a80f2e1c132f005e85586ce17",
+  "recorded_at": "2026-08-15T03:21:07",
+  "git_sha": "aee4f8cd9500fc857da579adc2070e7169cf09b9",
   "config": {
     "agent_max_consecutive_plan_failures": 3,
     "agent_max_iterations": 0,
@@ -39,6 +39,7 @@
     "observability_min_actionable": 8,
     "planner_max_calls_per_goal": 0,
     "screenshot_max_width": 1280,
+    "stronger_planner_model": "gemini-3.1-flash",
     "use_cloud_llm": true,
     "use_oculix": false,
     "use_ui_tars_local": false,

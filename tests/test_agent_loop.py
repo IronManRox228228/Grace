@@ -345,6 +345,139 @@ class TestActionVerdict:
         )
 
 
+class TestEscalationLadder:
+    """A repeated action escalates through different strategies before stopping.
+
+    The old guard could only terminate, so the answer to "that didn't work" was
+    always "give up". Repetition is the trigger for trying *differently*.
+    """
+
+    CLICK = '{"action": "cua_click", "params": {"element_id": 3, "target_name": "Send"}, "expect": "the message sends"}'
+
+    def test_the_rungs_are_in_order(self):
+        from grace.agent.loop import _rung
+
+        assert [_rung(n, 3) for n in (1, 2, 3, 4, 5)] == [
+            "normal", "reground", "stronger", "stop", "stop",
+        ]
+
+    def test_a_first_attempt_is_not_grounded(self):
+        loop, _, _ = make_loop([self.CLICK, DONE])
+        loop._ground = AsyncMock()
+        freeze_screen(loop)
+        asyncio.run(loop.run(user_goal="send the message"))
+        assert loop._ground.await_count == 0
+
+    def test_a_repeat_is_regrounded(self):
+        # Rung 2: the element the plan named resolved and clicking it did
+        # nothing, so stop trusting the tree and ask the pixels.
+        loop, _, _ = make_loop([self.CLICK] * 6)
+        loop._ground = AsyncMock()
+        freeze_screen(loop)
+        asyncio.run(loop.run(user_goal="send the message"))
+        assert loop._ground.await_count >= 1
+        assert loop._ground.await_args.kwargs.get("force") is True
+
+    def test_regrounding_drops_the_element_id(self):
+        # The executor resolves the graph first, so leaving element_id in place
+        # would send the click straight back to the element that just failed.
+        from grace.agent.grounder import GroundedPoint
+
+        loop, _, _ = make_loop([])
+        loop._grounder.locate = AsyncMock(return_value=GroundedPoint(x=400, y=300))
+        step = PlannedStep(action="cua_click",
+                           params={"element_id": 3, "target_name": "Send"})
+        snap = snapshot()
+        snap.png_bytes = b"not-really-a-png"
+
+        asyncio.run(loop._ground(step, snap, force=True))
+        assert step.params["x"] == 400
+        assert "element_id" not in step.params
+
+    def test_an_ordinary_grounding_keeps_the_element_id(self):
+        from grace.agent.grounder import GroundedPoint
+
+        loop, _, _ = make_loop([])
+        loop._grounder.locate = AsyncMock(return_value=GroundedPoint(x=400, y=300))
+        step = PlannedStep(action="cua_click", params={"element_id": 3})
+        snap = snapshot()
+        snap.png_bytes = b"not-really-a-png"
+
+        asyncio.run(loop._ground(step, snap))
+        assert step.params["element_id"] == 3
+
+    def test_the_third_attempt_asks_a_stronger_model(self):
+        loop, _, _ = make_loop([self.CLICK] * 8)
+        freeze_screen(loop)
+        asyncio.run(loop.run(user_goal="send the message"))
+
+        models = [
+            c.kwargs.get("model")
+            for c in loop._planner._llm.generate_text.call_args_list
+        ]
+        assert loop._stronger_model in models, (
+            f"no call escalated to the stronger planner: {models}"
+        )
+        assert models[0] is None, "the first call must use the configured model"
+
+    def test_it_still_stops(self):
+        # Escalation must not become a way of never giving up.
+        loop, _, _ = make_loop([self.CLICK] * 20)
+        freeze_screen(loop)
+        res = asyncio.run(loop.run(user_goal="send the message"))
+        assert res["status"] == "no_progress"
+
+
+class TestRollingScratchpad:
+    """What was established and ruled out has to outlive the 3-step window."""
+
+    def test_a_failed_step_is_ruled_out(self):
+        memory = AgentMemory("g")
+        loop, _, _ = make_loop([])
+        step = PlannedStep(action="cua_click", params={"element_id": 3}, expect="it opens")
+        loop._remember(step, {"status": "error", "error": "element not found"}, memory)
+
+        assert any("element not found" in e for e in memory.scratchpad["ruled_out"])
+        assert "established" not in memory.scratchpad
+
+    def test_a_verified_step_establishes_its_expectation(self):
+        memory = AgentMemory("g")
+        loop, _, _ = make_loop([])
+        step = PlannedStep(action="cua_click", params={}, expect="the chat list is open")
+        loop._remember(step, {"status": "ok", "result": {"verified": True,
+                                                         "evidence": "focus moved"}}, memory)
+        assert memory.scratchpad["established"] == ["the chat list is open"]
+
+    def test_unknown_outcomes_are_not_recorded_as_either(self):
+        # A window that reports nothing produces one of these on every step.
+        # Writing them down would crowd out the facts worth carrying and teach
+        # the planner that nothing works.
+        memory = AgentMemory("g")
+        loop, _, _ = make_loop([])
+        step = PlannedStep(action="cua_click", params={}, expect="something")
+        loop._remember(step, {"status": "ok", "result": {"verified": None,
+                                                         "evidence": "cannot tell"}}, memory)
+        assert memory.scratchpad == {}
+
+    def test_entries_are_deduplicated_and_bounded(self):
+        from grace.agent.memory import MAX_REMEMBERED
+
+        memory = AgentMemory("g")
+        memory.establish("the same fact")
+        memory.establish("the same fact")
+        assert memory.scratchpad["established"] == ["the same fact"]
+
+        for i in range(MAX_REMEMBERED + 5):
+            memory.rule_out(f"approach {i}")
+        assert len(memory.scratchpad["ruled_out"]) == MAX_REMEMBERED
+
+    def test_it_reaches_the_planner_prompt(self):
+        memory = AgentMemory("g")
+        memory.rule_out("`cua_click` with {'element_id': 3}", "nothing changed")
+        assert "cua_click" in memory.format_scratchpad_markdown()
+        assert "ruled_out" in memory.format_scratchpad_markdown()
+
+
 class TestWallClockBudget:
     """Time is the only budget a stuck loop cannot spend slowly."""
 

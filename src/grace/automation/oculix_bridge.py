@@ -145,8 +145,13 @@ class OculixBridge:
         an unresolved click can block for seconds. With the UIA/DOM element
         graph doing the work, this path should almost never be needed.
         """
-        import os
-        return os.getenv("USE_OCULIX", "false").lower() in ("true", "1", "yes")
+        from grace.config import Config
+
+        # Read through Config rather than os.getenv directly. `Config.use_oculix`
+        # existed and nothing consulted it, so the switch the rest of the system
+        # believed it had was parallel dead state: setting it in code changed
+        # nothing, and only the raw environment variable had any effect.
+        return bool(Config().use_oculix)
 
     @classmethod
     def is_available(cls) -> bool:
@@ -156,6 +161,25 @@ class OculixBridge:
         if not cls._available and not cls._jvm_started:
             cls.initialize()
         return cls._available
+
+    @classmethod
+    def _region_from_bounds(cls, bounds: Tuple[int, int, int, int]):
+        """Build a SikuliX Region from Grace's window bounds.
+
+        The two disagree about what four numbers mean. Grace passes window
+        bounds as `(left, top, right, bottom)` - that is what `win32gui`
+        returns and what `CoordinateResolver` hands down - while SikuliX's
+        `Region(x, y, w, h)` reads the last two as a width and a height. Passing
+        one straight into the other made the search region start in the right
+        place and extend by the *screen coordinates* of its far corner, so for
+        any window not at the origin the area searched was wrong: too large,
+        running off the screen, and including whatever else was beside it.
+
+        Currently masked by OculiX being off by default, which is also why it
+        went unnoticed.
+        """
+        left, top, right, bottom = (int(v) for v in bounds[:4])
+        return cls._Region(left, top, max(0, right - left), max(0, bottom - top))
 
     @classmethod
     def find(
@@ -168,7 +192,8 @@ class OculixBridge:
 
         Args:
             image_path: Absolute path to PNG template image.
-            region: Optional (x, y, w, h) bounding box to restrict search.
+            region: Optional (left, top, right, bottom) window bounds to
+                restrict the search to.
             similarity: Minimum match confidence threshold (0.0 to 1.0).
         """
         if not cls.is_available():
@@ -179,7 +204,7 @@ class OculixBridge:
             pattern = cls._Pattern(image_path).similar(float(similarity))
 
             if region:
-                search_region = cls._Region(int(region[0]), int(region[1]), int(region[2]), int(region[3]))
+                search_region = cls._region_from_bounds(region)
             else:
                 search_region = cls._Screen(0)
 
@@ -213,7 +238,7 @@ class OculixBridge:
         cls._ensure_thread()
         try:
             if region:
-                search_region = cls._Region(int(region[0]), int(region[1]), int(region[2]), int(region[3]))
+                search_region = cls._region_from_bounds(region)
             else:
                 search_region = cls._Screen(0)
 

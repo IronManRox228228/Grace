@@ -1,12 +1,12 @@
-{"i": 0, "t_ms": 55.0, "event": {"type": "WakeWordDetected"}}
-{"i": 1, "t_ms": 55.4, "event": {"type": "ListeningStarted"}}
-{"i": 2, "t_ms": 1040.5, "event": {"type": "FinalTranscript", "text": "list my open windows"}}
-{"i": 3, "t_ms": 1040.6, "event": {"type": "ListeningStopped"}}
-{"i": 4, "t_ms": 1040.7, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
-{"i": 5, "t_ms": 1041.8, "event": {"type": "UnderstandingFinished"}}
-{"i": 6, "t_ms": 1042.0, "event": {"type": "ToolExecutionStarted", "label": "Listing windows…"}}
-{"i": 7, "t_ms": 1043.0, "event": {"type": "ToolExecutionFinished"}}
-{"i": 8, "t_ms": 1045.3, "event": {"type": "ConversationFinished"}}
-{"i": 9, "t_ms": 1045.4, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 991.1, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 981.4, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 3.5, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.0, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 3.3, "detail": null}], "events": {"route_fast_path": 987.7}}}}
-{"i": 10, "t_ms": 1045.4, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
-{"i": 11, "t_ms": 1045.5, "event": {"type": "Idle"}}
+{"i": 0, "t_ms": 22.6, "event": {"type": "WakeWordDetected"}}
+{"i": 1, "t_ms": 22.7, "event": {"type": "ListeningStarted"}}
+{"i": 2, "t_ms": 1046.0, "event": {"type": "FinalTranscript", "text": "list my open windows"}}
+{"i": 3, "t_ms": 1046.1, "event": {"type": "ListeningStopped"}}
+{"i": 4, "t_ms": 1046.2, "event": {"type": "UnderstandingStarted", "label": "Understanding request…"}}
+{"i": 5, "t_ms": 1047.3, "event": {"type": "UnderstandingFinished"}}
+{"i": 6, "t_ms": 1047.5, "event": {"type": "ToolExecutionStarted", "label": "Listing windows…"}}
+{"i": 7, "t_ms": 1047.8, "event": {"type": "ToolExecutionFinished"}}
+{"i": 8, "t_ms": 1049.1, "event": {"type": "ConversationFinished"}}
+{"i": 9, "t_ms": 1049.3, "event": {"type": "TurnTrace", "trace": {"label": "activation", "total_ms": 1026.8, "stages": [{"name": "chime", "depth": 0, "ms": 0.0, "detail": null}, {"name": "listen", "depth": 0, "ms": 1018.2, "detail": "16384 bytes"}, {"name": "whisper", "depth": 0, "ms": 5.0, "detail": null}, {"name": "intent_llm", "depth": 0, "ms": 1.0, "detail": null}, {"name": "dispatch", "depth": 0, "ms": 1.6, "detail": null}], "events": {"route_fast_path": 1025.0}}}}
+{"i": 10, "t_ms": 1049.4, "event": {"type": "FollowupListeningStarted", "timeout": 0}}
+{"i": 11, "t_ms": 1049.4, "event": {"type": "Idle"}}

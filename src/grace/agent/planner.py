@@ -183,6 +183,7 @@ class Planner:
         expectation_note: str = "",
         window_title: str = "",
         image_b64: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Optional[PlannedStep]:
         """Ask for the next step. Returns None if the model gave nothing usable.
 
@@ -213,6 +214,9 @@ class Planner:
             prompt=prompt,
             system_prompt=self._system_prompt,
             image_b64=image_b64,
+            # None on every ordinary step: the configured planner model. The
+            # ladder's third rung passes a stronger one for that call alone.
+            model=model,
             temperature=0.1,
             # Generous: a truncated plan is an unparseable plan, which costs a
             # whole wasted step. Reasoning is never worth clipping to save

@@ -87,7 +87,36 @@ DEFAULT_MAX_CONSECUTIVE_PLAN_FAILURES = 3
 #
 # So the repeat counter resets the moment the observation changes, and only
 # accumulates for an identical action retried against an identical view.
+#
+# What the counter now drives is the ladder below, not an immediate stop. A
+# guard that can only terminate turns every unfamiliar situation into a refusal;
+# repetition is a signal to try *differently*, and only the last rung stops.
 DEFAULT_MAX_REPEATED_ACTIONS = 3
+
+# The escalation ladder, indexed by how many times this exact action has been
+# tried against this exact view.
+#
+# Each rung is a genuinely different strategy rather than a retry, which is what
+# makes spending another attempt worth anything:
+#
+#   normal    - as planned. Nearly every goal lives here and never leaves.
+#   reground  - the element the plan named is not working. Stop trusting the
+#               tree and ask the visual grounder (UI-TARS) where the thing
+#               actually is, in pixels. This path has never once fired in
+#               production: `needs_grounding` requires a *named* target with no
+#               coordinates, and until Stage 3 a blind planner invented
+#               coordinates instead, which disqualified it.
+#   stronger  - re-plan this step with a more capable model, carrying the
+#               history and the failure evidence. Flash Lite is fast and does
+#               not model UI state; paying for capability on the one step that
+#               needs it is the whole point of a tiered design.
+#   stop      - name what was tried, and say so.
+ESCALATION_LADDER = ("normal", "reground", "stronger", "stop")
+
+# The model the third rung asks. Deliberately a different, stronger model than
+# the configured planner; if it is unset, that rung degrades to a plain retry
+# with the failure evidence attached, which is still worth one attempt.
+DEFAULT_STRONGER_PLANNER_MODEL = "gemini-3.1-flash"
 
 # The wall-clock ceiling for one goal, in seconds.
 #
@@ -137,6 +166,9 @@ class AgentLoop:
             "agent_max_repeated_actions", DEFAULT_MAX_REPEATED_ACTIONS
         )
         self._max_seconds = _config_int("agent_max_seconds", DEFAULT_MAX_SECONDS)
+        self._stronger_model = _config_str(
+            "stronger_planner_model", DEFAULT_STRONGER_PLANNER_MODEL
+        )
         self._pending: Optional[dict[str, Any]] = None
 
     # -- safety resumption -------------------------------------------------
@@ -316,12 +348,27 @@ class AgentLoop:
             # but past that the loop is just spending time and quota.
             signature = _step_signature(step)
             attempts[signature] = attempts.get(signature, 0) + 1
-            if attempts[signature] >= self._max_repeated_actions:
+            rung = _rung(attempts[signature], self._max_repeated_actions)
+
+            if rung == "stop":
                 logger.error(
                     f"AgentLoop: giving up - tried {step.action} with the same "
-                    f"parameters {attempts[signature]} times and nothing changed."
+                    f"parameters {attempts[signature]} times, through every "
+                    f"strategy available, and nothing changed."
                 )
+                memory.rule_out(f"{step.action} on this screen", "tried at every tier; nothing changed")
                 return self._no_progress_result(memory, snapshot)
+
+            if rung == "stronger":
+                logger.warning(
+                    f"AgentLoop: escalating - re-planning '{step.action}' with "
+                    f"{self._stronger_model or 'the same model'}."
+                )
+                stronger = await self._replan_stronger(memory, view, snapshot, expectation_note)
+                if stronger is not None:
+                    step = stronger
+                    signature = _step_signature(step)
+                    attempts[signature] = attempts.get(signature, 0) + 1
 
             logger.info(f"AgentLoop step {step_no}: [{step.action}] {step.thought}")
 
@@ -342,9 +389,9 @@ class AgentLoop:
                     "steps": [s.to_dict() for s in memory.steps_taken],
                 }
 
-            if step.needs_grounding:
+            if step.needs_grounding or rung == "reground":
                 async with stage(f"ground#{step_no}"):
-                    await self._ground(step, snapshot)
+                    await self._ground(step, snapshot, force=(rung == "reground"))
 
             await self._emit({
                 "type": "ToolExecutionStarted",
@@ -368,6 +415,7 @@ class AgentLoop:
                 memory.set_scratchpad("verification_hint", hint)
                 step.is_completed = False
 
+            self._remember(step, exec_result, memory)
             self._harvest(exec_result, memory)
             memory.add_step(step.thought, step.action, step.params, exec_result, step.user_update)
             last_step, last_result = step, exec_result
@@ -403,8 +451,45 @@ class AgentLoop:
         async with stage(f"dispatch:{step.action}"):
             return await self._dispatcher.execute(intent, confirmed=confirmed)
 
-    async def _ground(self, step: PlannedStep, snapshot) -> None:
-        """Fill in x/y for a target the element graph could not resolve."""
+    async def _replan_stronger(
+        self, memory: AgentMemory, view, snapshot, expectation_note: str
+    ) -> Optional[PlannedStep]:
+        """Ask a more capable model for a different approach to the same goal.
+
+        Given the same prompt it would likely produce the same plan, so the
+        scratchpad is what makes this rung worth its cost: it carries what has
+        already been established and ruled out, which the three-step verbatim
+        history has usually forgotten by the time this fires.
+        """
+        try:
+            return await self._planner.plan(
+                goal=memory.user_goal,
+                elements_prompt=view.markdown,
+                history=memory.format_history_markdown(),
+                scratchpad=memory.format_scratchpad_markdown(),
+                expectation_note=expectation_note,
+                window_title=_window_title(snapshot),
+                image_b64=view.image_b64,
+                model=self._stronger_model or None,
+            )
+        except (PlannerBudgetExceeded, RateLimitError):
+            # Both are handled by the caller's own planning path on the next
+            # lap. Escalating is optional; failing the goal because the
+            # optional attempt was refused is not.
+            raise
+        except Exception as e:
+            logger.warning(f"Escalated re-plan failed, keeping the original step: {e}")
+            return None
+
+    async def _ground(self, step: PlannedStep, snapshot, force: bool = False) -> None:
+        """Fill in x/y for a target the element graph could not resolve.
+
+        `force` is the ladder's second rung: the element the plan named resolved
+        fine and clicking it changed nothing, so the tree is to be distrusted
+        and the pixels asked instead. That means dropping `element_id` on
+        success - the executor resolves the graph first, so leaving it in would
+        send the click straight back to the element that already failed.
+        """
         description = describe_target(step.params)
         png = getattr(snapshot, "png_bytes", None)
         if not png:
@@ -424,6 +509,9 @@ class AgentLoop:
         if point is not None:
             step.params["x"] = point.x
             step.params["y"] = point.y
+            if force:
+                step.params.pop("element_id", None)
+                step.params.pop("element_index", None)
             logger.info(f"Grounded '{description}' to ({point.x}, {point.y})")
 
     def _expectation_note(
@@ -487,6 +575,31 @@ class AgentLoop:
 
         lines.append("Judge from the screen description above whether your expectation actually came true.")
         return "\n".join(lines)
+
+    @staticmethod
+    def _remember(step: PlannedStep, exec_result: dict[str, Any], memory: AgentMemory) -> None:
+        """Keep what this step settled, in a form that outlives the history window.
+
+        Only definite outcomes are recorded. `verified is None` is deliberately
+        not written down as either: an unreadable window produces one of those
+        on every single step, and filling the scratchpad with "could not tell"
+        would crowd out the facts that are worth carrying and teach the planner
+        that nothing works.
+        """
+        reason = _failure_reason(exec_result)
+        if reason:
+            memory.rule_out(f"`{step.action}` with {_short_params(step.params)}", reason)
+            return
+
+        inner = exec_result.get("result") if isinstance(exec_result.get("result"), dict) else {}
+        verified = inner.get("verified")
+        if verified is True and step.expect:
+            memory.establish(step.expect)
+        elif verified is False:
+            memory.rule_out(
+                f"`{step.action}` with {_short_params(step.params)}",
+                inner.get("evidence") or "it changed nothing",
+            )
 
     def _harvest(self, exec_result: dict[str, Any], memory: AgentMemory) -> None:
         """Move useful tool output into the scratchpad."""
@@ -715,6 +828,13 @@ def _step_signature(step: PlannedStep) -> str:
     return f"{step.action}:{params}"
 
 
+def _short_params(params: dict[str, Any]) -> str:
+    """Enough of a step's parameters to recognise it again, and no more."""
+    interesting = {k: v for k, v in params.items() if k != "window"}
+    text = str(interesting)
+    return text if len(text) <= 90 else text[:87] + "…"
+
+
 def _has_elements(snapshot) -> bool:
     """Whether the snapshot describes anything the planner could act on.
 
@@ -727,6 +847,31 @@ def _has_elements(snapshot) -> bool:
     if graph is not None and len(graph):
         return True
     return bool(getattr(snapshot, "ui_elements", None))
+
+
+def _rung(attempt: int, before_stop: int) -> str:
+    """Which strategy this attempt gets.
+
+    `before_stop` is how many strategies are tried before giving up, so with the
+    default of 3 an action is attempted normally, then re-grounded, then
+    re-planned by a stronger model, and only then abandoned. It used to be the
+    number of identical retries before stopping - the same budget, spent on
+    repetition rather than on different approaches.
+    """
+    if attempt >= max(1, before_stop) + 1:
+        return "stop"
+    index = min(attempt, len(ESCALATION_LADDER)) - 1
+    return ESCALATION_LADDER[max(0, index)]
+
+
+def _config_str(field: str, default: str) -> str:
+    try:
+        from grace.config import Config
+
+        value = getattr(Config(), field, default)
+        return value if value is not None else default
+    except Exception:
+        return default
 
 
 def _config_int(field: str, default: int) -> int:

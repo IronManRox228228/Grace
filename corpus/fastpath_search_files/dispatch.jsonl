@@ -1,1 +1,1 @@
-{"i": 0, "t_ms": 1040.1, "tool": "search_files", "params": {"query": "tax return"}, "result": {"status": "ok", "text": "Here are the matching files:\n  1. C:\\Users\\x\\Documents\\tax return 2025.pdf", "files": ["C:\\Users\\x\\Documents\\tax return 2025.pdf"]}}
+{"i": 0, "t_ms": 1048.8, "tool": "search_files", "params": {"query": "tax return"}, "result": {"status": "ok", "text": "Here are the matching files:\n  1. C:\\Users\\x\\Documents\\tax return 2025.pdf", "files": ["C:\\Users\\x\\Documents\\tax return 2025.pdf"]}}

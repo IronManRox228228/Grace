@@ -1,2 +1,2 @@
-{"i": 0, "t_ms": 1059.7, "tool": "open_app", "params": {"name": "notepad"}, "result": {"status": "ok", "text": "I've opened Notepad."}}
-{"i": 1, "t_ms": 3080.2, "tool": "cua_type_text", "params": {"text": "a note"}, "result": {"status": "ok", "result": {"ok": true, "message": "typed"}}}
+{"i": 0, "t_ms": 1042.3, "tool": "open_app", "params": {"name": "notepad"}, "result": {"status": "ok", "text": "I've opened Notepad."}}
+{"i": 1, "t_ms": 3047.0, "tool": "cua_type_text", "params": {"text": "a note"}, "result": {"status": "ok", "result": {"ok": true, "message": "typed"}}}

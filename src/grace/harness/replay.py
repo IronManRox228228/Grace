@@ -81,7 +81,8 @@ class TapeLlm:
     async def health_check(self) -> bool:
         return True
 
-    async def chat(self, messages, temperature=0.7, max_tokens=8192, stream=True):
+    async def chat(self, messages, temperature=0.7, max_tokens=8192, stream=True,
+                   model=None):
         from ..llm.gemma_client import _redact_images
 
         # Built to match GemmaClient.chat's recorded request exactly, image
@@ -125,7 +126,8 @@ class TapeLlm:
         return "".join(tokens) if tokens else None
 
     async def generate_text(self, prompt, system_prompt, temperature=0.2,
-                            max_tokens=8192, messages=None, image_b64=None):
+                            max_tokens=8192, messages=None, image_b64=None,
+                            model=None):
         if not messages:
             user = {"role": "user", "content": prompt}
             if image_b64:

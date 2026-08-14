@@ -1,1 +1,1 @@
-{"i": 0, "t_ms": 1047.7, "tool": "adjust_volume", "params": {"amount": 10, "mode": "increase"}, "result": {"status": "ok", "text": "Volume set to 60 percent.", "volume": 60}}
+{"i": 0, "t_ms": 1035.1, "tool": "adjust_volume", "params": {"amount": 10, "mode": "increase"}, "result": {"status": "ok", "text": "Volume set to 60 percent.", "volume": 60}}

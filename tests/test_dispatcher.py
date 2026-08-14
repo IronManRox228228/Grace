@@ -24,12 +24,19 @@ class TestDispatcher:
         assert "nonexistent_tool" in result["error"]
 
     def test_execute_converse(self):
-        """Converse tool is handled but returns status ok."""
+        """converse has a handler and speaks the response back.
+
+        This asserted `"error" in result or "status" in result`, which every
+        possible result satisfies - both branches of the dispatcher always
+        return one or the other - so it passed whatever converse did. Its
+        comment claimed converse "is not in handler_map" and "falls through to
+        unknown tool handler", contradicting the handler map, which has listed
+        it for as long as the file has existed.
+        """
         intent = Intent(tool="converse", params={"response": "Hi!"})
-        # converse is not in handler_map, so it goes to the unknown tool path
         result = asyncio.run(self.dispatcher.execute(intent))
-        # converse falls through to unknown tool handler
-        assert "error" in result or "status" in result
+        assert result["status"] == "ok"
+        assert result["text"] == "Hi!"
 
     def test_cua_tool_without_bridge(self):
         """CUA tool without bridge returns error."""

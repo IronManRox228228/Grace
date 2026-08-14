@@ -1,2 +1,2 @@
-{"i": 0, "t_ms": 1062.8, "tool": "cua_click", "params": {"element_id": 2}, "result": {"status": "ok", "result": {"ok": true, "message": "clicked"}}}
-{"i": 1, "t_ms": 1071.8, "tool": "cua_type_text", "params": {"text": "hello"}, "result": {"status": "ok", "result": {"ok": true, "message": "typed"}}}
+{"i": 0, "t_ms": 1075.6, "tool": "cua_click", "params": {"element_id": 2}, "result": {"status": "ok", "result": {"ok": true, "message": "clicked"}}}
+{"i": 1, "t_ms": 1083.7, "tool": "cua_type_text", "params": {"text": "hello"}, "result": {"status": "ok", "result": {"ok": true, "message": "typed"}}}
