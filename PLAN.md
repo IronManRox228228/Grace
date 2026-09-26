@@ -50,7 +50,7 @@ Grace detects the hardware at startup and picks where each model runs. Same mode
 |---|---|---|---|
 | Speech recognition | **Parakeet-TDT 0.6B** (int8, ONNX), personalised (§6) | Moonshine Base (58 MB) on the floor tier; Whisper as baseline | Moonshine plus personalisation matches it on the floor machine |
 | Tool calling ("what to do") | **LFM2.5-350M** fine-tune | FunctionGemma 270M; xLAM-2-1b-fc-r | FunctionGemma matches it on Grace's corpus utterances (take the smaller) |
-| Element selection (tree exists) | **GLiNER2.5-Decide** (340M) LoRA | Laya (421M), which is fine-tuned for Kerfd anyway | Laya wins after both are tuned on the same Grace snapshots |
+| Element selection (tree exists) | **GLiNER2.5-Decide** (340M) LoRA | Laya (421M) | Laya wins after both are tuned on the same Grace snapshots |
 | Vision (no tree) | **LFM2.5-VL-450M**, picking a numbered mark on a crop of the foreground window | SE-GUI-3B / Qwen-GUI-3B as a benchmark reference only | Still unreliable after GUI fine-tuning → fall back to asking the user, not a 3B model |
 | Mid-size fallback | **LFM2.5-1.2B-Instruct**, loaded only when needed | Qwen3.5-2B; Gemma 3n E2B if Indian languages matter | It can't plan in unfamiliar apps |
 | Voice output | **Kokoro 82M** (ONNX) | none | none |
