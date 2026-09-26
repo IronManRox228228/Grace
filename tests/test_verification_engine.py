@@ -140,3 +140,4 @@ class TestVerificationEngine:
     def test_ensure_foreground_window_does_not_raise(self):
         cu = ComputerUse()
         cu._ensure_foreground_window()
+        assert cu is not None

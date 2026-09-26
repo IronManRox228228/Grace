@@ -50,6 +50,17 @@ class TestUIInspector:
         assert res["status"] == "element_not_found"
         assert "not found" in res["error"]
 
+    def test_partial_match_is_one_directional(self):
+        # The reverse test (`elem.name in q`) let a control named "Close"
+        # match any query containing "close", so "close the tab" resolved to a
+        # "Close" button that had nothing to do with the tab being asked
+        # about. Only "query is inside the element's name" may match.
+        inspector = UIInspector()
+        elem = UIElement(index=1, name="Close", control_type="Button", bounds=(0, 0, 10, 10), center=(5, 5))
+        inspector._last_elements = [elem]
+
+        assert inspector.find_element(target_name="close the tab") is None
+
 
 class TestBrowserDetection:
     """Bug #4 fix: browser windows get deeper traversal and a higher element cap."""

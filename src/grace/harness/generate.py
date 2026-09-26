@@ -362,6 +362,22 @@ class _NullFeedbackSounds:
     def play_end() -> None:
         return None
 
+    @staticmethod
+    def play_success() -> None:
+        return None
+
+    @staticmethod
+    def play_cancel() -> None:
+        return None
+
+    @staticmethod
+    def play_error() -> None:
+        return None
+
+    @staticmethod
+    def play_listening() -> None:
+        return None
+
 
 # Every Dispatcher leaf that touches the machine. All of them are replaced for
 # every scenario, whether or not the scenario expects to reach them: a script
@@ -371,6 +387,7 @@ SIDE_EFFECTING_HANDLERS = (
     "_open_app", "_close_app", "_search_files", "_open_file",
     "_read_pdf", "_summarize_pdf", "_adjust_volume", "_lock_computer",
     "_open_calculator", "_delete_file",
+    "_undo", "_describe_screen", "_set_speech_rate",
 )
 
 

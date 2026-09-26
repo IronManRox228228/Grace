@@ -579,6 +579,18 @@ class _NullFeedbackSounds:
     @staticmethod
     def play_end(): return None
 
+    @staticmethod
+    def play_success(): return None
+
+    @staticmethod
+    def play_cancel(): return None
+
+    @staticmethod
+    def play_error(): return None
+
+    @staticmethod
+    def play_listening(): return None
+
 
 # -- driver ----------------------------------------------------------------
 

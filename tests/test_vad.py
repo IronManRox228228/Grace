@@ -50,7 +50,8 @@ class TestVadDetector:
         # Process a silent chunk - should NOT trigger silence callback yet
         # (we need silence_duration_ms worth of silence)
         result = detector.process_chunk(bytes(512))
-        # First chunk won't trigger because we need continuous silence
+        assert result is False
+        assert len(called) == 0
 
     def test_speech_callback(self):
         """Test speech detection callback."""

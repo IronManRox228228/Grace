@@ -302,10 +302,13 @@ class ComputerUse:
         if left is not None and top is not None:
             try:
                 left, top = int(left), int(top)
-                # Only add window left/top if x and y are within local window relative range (0..w, 0..h)
-                # AND they are less than left/top (meaning they cannot already be absolute screen coordinates)
-                if window_w and window_h and (0 <= x <= window_w) and (0 <= y <= window_h):
-                    if x < left or y < top:
+                if window_w and window_h:
+                    right = left + window_w
+                    bottom = top + window_h
+                    if left <= x <= right and top <= y <= bottom:
+                        # Coordinates already fall within the absolute window bounds
+                        pass
+                    elif 0 <= x <= window_w and 0 <= y <= window_h:
                         x = left + x
                         y = top + y
             except (ValueError, TypeError):
@@ -1070,12 +1073,11 @@ class ComputerUse:
         try:
             os.startfile(target)
             return {"ok": True, "action": "launch", "message": f"Launched {app}"}
-        except Exception:
-            try:
-                subprocess.Popen(f'start "" "{target}"', shell=True)
-                return {"ok": True, "action": "launch", "message": f"Launched {app}"}
-            except Exception as e:
-                return {"ok": False, "action": "launch", "message": f"Failed to launch {app}: {e}"}
+        except Exception as e:
+            # No shell fallback: `target` can be model-generated text, and a
+            # shell=True Popen re-parses it for &|<>^ - a launch request is not
+            # supposed to be able to run a second, arbitrary command.
+            return {"ok": False, "action": "launch", "message": f"Failed to launch {app}: {e}"}
 
     def _text(self, params: dict[str, Any] = None) -> dict[str, Any]:
         return self._get_text(params)

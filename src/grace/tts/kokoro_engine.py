@@ -155,11 +155,13 @@ class KokoroWorker:
         voices_path: str,
         device: str = "cuda",
         dtype: str = "float32",
+        speed: float = 1.0,
     ):
         self._model_path = model_path
         self._voices_path = voices_path
         self._device = device
         self._dtype = dtype
+        self._speed = max(0.5, min(2.5, float(speed)))
         self._pipeline = None
         self._voice = None
         self._worker_id = id(self)
@@ -170,6 +172,14 @@ class KokoroWorker:
             max_workers=1,
             thread_name_prefix=f"KokoroWorker-{self._worker_id}"
         )
+
+    def set_speed(self, speed: float) -> None:
+        """Update speech rate multiplier."""
+        self._speed = max(0.5, min(2.5, float(speed)))
+
+    @property
+    def speed(self) -> float:
+        return self._speed
 
     def _initialize(self) -> Optional[str]:
         """Initialize the worker on its dedicated thread. Returns error message on failure, None on success."""
@@ -240,18 +250,18 @@ class KokoroWorker:
             self._initialized = False
             return error_msg
 
-    def synthesize(self, text: str, voice_name: str = "af_bella") -> Optional[bytes]:
+    def synthesize(self, text: str, voice_name: str = "af_bella", speed: Optional[float] = None) -> Optional[bytes]:
         """Synthesize speech for the given text on the dedicated thread."""
-        future = self._executor.submit(self._do_synthesize, text, voice_name)
+        future = self._executor.submit(self._do_synthesize, text, voice_name, speed)
         try:
             return future.result(timeout=30)
         except Exception as e:
             logger.error(f"Kokoro synthesis execution error: {e}")
             return None
 
-    def submit(self, text: str, voice_name: str = "af_bella") -> concurrent.futures.Future:
+    def submit(self, text: str, voice_name: str = "af_bella", speed: Optional[float] = None) -> concurrent.futures.Future:
         """Queue a synthesis without waiting, so callers can pipeline sentences."""
-        return self._executor.submit(self._do_synthesize, text, voice_name)
+        return self._executor.submit(self._do_synthesize, text, voice_name, speed)
 
     def warmup(self, text: str = "Ready.") -> bool:
         """Run one throwaway synthesis to pay the cold-start cost up front.
@@ -269,7 +279,7 @@ class KokoroWorker:
             logger.debug(f"Kokoro warmup skipped: {e}")
             return False
 
-    def _do_synthesize(self, text: str, voice_name: str = "af_bella") -> Optional[bytes]:
+    def _do_synthesize(self, text: str, voice_name: str = "af_bella", speed: Optional[float] = None) -> Optional[bytes]:
         if not self._initialized:
             err = self._do_initialize()
             if err:
@@ -280,8 +290,13 @@ class KokoroWorker:
 
         try:
             voice = voice_name if voice_name else "af_bella"
+            eff_speed = self._speed if speed is None else max(0.5, min(2.5, float(speed)))
             audio_chunks = []
-            for _gs, _ps, audio in self._pipeline(text, voice=voice):
+            try:
+                stream = self._pipeline(text, voice=voice, speed=eff_speed)
+            except TypeError:
+                stream = self._pipeline(text, voice=voice)
+            for _gs, _ps, audio in stream:
                 if audio is None:
                     continue
                 if hasattr(audio, "cpu"):
@@ -343,6 +358,7 @@ class KokoroEngine:
         dtype: str = "float32",
         warmup: bool = True,
         cache_size: int = 32,
+        speed: float = 1.0,
     ):
         self._num_workers = num_workers
         self._device = device
@@ -351,67 +367,83 @@ class KokoroEngine:
         self._voices_path = voices_path
         self._warmup = warmup
         self._cache_size = max(0, cache_size)
+        self._speed = max(0.5, min(2.5, float(speed)))
         self._current_idx = 0
         self._workers: list[KokoroWorker] = []
         self._lock = threading.Lock()
         self._initialized = False
         self._init_errors: list[str] = []
-        self._cache: "OrderedDict[tuple[str, str], bytes]" = OrderedDict()
+        self._cache: "OrderedDict[tuple[str, str, float], bytes]" = OrderedDict()
         self._cache_lock = threading.Lock()
+
+    def set_speed(self, speed: float) -> None:
+        """Set speech rate multiplier (clamped to [0.5, 2.5])."""
+        speed = max(0.5, min(2.5, float(speed)))
+        self._speed = speed
+        with self._cache_lock:
+            self._cache.clear()
+        for worker in self._workers:
+            worker.set_speed(speed)
+        logger.info(f"Kokoro speech speed set to {speed:.2f}x")
+
+    @property
+    def speed(self) -> float:
+        return self._speed
 
     def initialize(self):
         """Initialize all workers. Collects failures and raises if all workers failed."""
-        if self._initialized:
-            return
+        with self._lock:
+            if self._initialized:
+                return
 
-        self._init_errors = []
+            self._init_errors = []
 
-        # Workers are built concurrently. The shared KModel load is serialised
-        # by its own lock, so only the first worker pays for it; the others go
-        # straight to building their (comparatively cheap) G2P pipeline.
-        workers = [
-            KokoroWorker(self._model_path, self._voices_path, self._device, self._dtype)
-            for _ in range(self._num_workers)
-        ]
+            # Workers are built concurrently. The shared KModel load is serialised
+            # by its own lock, so only the first worker pays for it; the others go
+            # straight to building their (comparatively cheap) G2P pipeline.
+            workers = [
+                KokoroWorker(self._model_path, self._voices_path, self._device, self._dtype, speed=self._speed)
+                for _ in range(self._num_workers)
+            ]
 
-        results: list[tuple[int, KokoroWorker, Optional[str]]] = []
-        if workers:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=len(workers)) as pool:
-                futures = {pool.submit(w._initialize): (i, w) for i, w in enumerate(workers)}
-                for future in concurrent.futures.as_completed(futures):
-                    i, w = futures[future]
-                    try:
-                        error = future.result()
-                    except Exception as e:  # pragma: no cover - defensive
-                        error = f"Kokoro worker init raised: {e}"
-                    results.append((i, w, error))
+            results: list[tuple[int, KokoroWorker, Optional[str]]] = []
+            if workers:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(workers)) as pool:
+                    futures = {pool.submit(w._initialize): (i, w) for i, w in enumerate(workers)}
+                    for future in concurrent.futures.as_completed(futures):
+                        i, w = futures[future]
+                        try:
+                            error = future.result()
+                        except Exception as e:  # pragma: no cover - defensive
+                            error = f"Kokoro worker init raised: {e}"
+                        results.append((i, w, error))
 
-        for i, worker, error in sorted(results, key=lambda r: r[0]):
-            if error:
-                self._init_errors.append(f"Worker {i}: {error}")
-                worker.shutdown()
-            else:
-                self._workers.append(worker)
-                logger.info(f"Kokoro worker {i} created on {worker._device}")
+            for i, worker, error in sorted(results, key=lambda r: r[0]):
+                if error:
+                    self._init_errors.append(f"Worker {i}: {error}")
+                    worker.shutdown()
+                else:
+                    self._workers.append(worker)
+                    logger.info(f"Kokoro worker {i} created on {worker._device}")
 
-        # If zero workers requested, that's a valid (if useless) config - don't raise
-        if self._num_workers == 0:
-            logger.info("KokoroEngine initialized with 0 workers (no TTS available)")
+            # If zero workers requested, that's a valid (if useless) config - don't raise
+            if self._num_workers == 0:
+                logger.info("KokoroEngine initialized with 0 workers (no TTS available)")
+                self._initialized = True
+                return
+
+            if not self._workers:
+                error_summary = "; ".join(self._init_errors) if self._init_errors else "No workers initialized"
+                raise RuntimeError(f"KokoroEngine initialization failed: {error_summary}")
+
+            if self._init_errors:
+                # Some workers failed - log warnings but continue with working ones
+                logger.warning(f"KokoroEngine: {len(self._init_errors)} worker(s) failed: {'; '.join(self._init_errors)}")
+
             self._initialized = True
-            return
 
-        if not self._workers:
-            error_summary = "; ".join(self._init_errors) if self._init_errors else "No workers initialized"
-            raise RuntimeError(f"KokoroEngine initialization failed: {error_summary}")
-
-        if self._init_errors:
-            # Some workers failed - log warnings but continue with working ones
-            logger.warning(f"KokoroEngine: {len(self._init_errors)} worker(s) failed: {'; '.join(self._init_errors)}")
-
-        self._initialized = True
-
-        if self._warmup:
-            self.warmup()
+            if self._warmup:
+                self.warmup()
 
     def warmup(self) -> int:
         """Pay the cold-start cost on every worker now, in parallel."""
@@ -431,18 +463,22 @@ class KokoroEngine:
     def is_initialized(self) -> bool:
         return self._initialized
 
-    def _cache_get(self, key: tuple[str, str]) -> Optional[bytes]:
+    def _cache_get(self, key: tuple) -> Optional[bytes]:
         if self._cache_size <= 0:
             return None
+        if len(key) == 2:
+            key = (key[0], key[1], self._speed)
         with self._cache_lock:
             wav = self._cache.get(key)
             if wav is not None:
                 self._cache.move_to_end(key)
             return wav
 
-    def _cache_put(self, key: tuple[str, str], wav: bytes) -> None:
+    def _cache_put(self, key: tuple, wav: bytes) -> None:
         if self._cache_size <= 0 or not wav:
             return
+        if len(key) == 2:
+            key = (key[0], key[1], self._speed)
         with self._cache_lock:
             self._cache[key] = wav
             self._cache.move_to_end(key)
@@ -458,7 +494,7 @@ class KokoroEngine:
             self._current_idx += 1
             return worker
 
-    def synthesize(self, text: str, voice: str = "af_bella") -> Optional[bytes]:
+    def synthesize(self, text: str, voice: str = "af_bella", speed: Optional[float] = None) -> Optional[bytes]:
         """Synthesize speech, serving repeated phrases from the cache."""
         if not self._initialized:
             self.initialize()
@@ -470,7 +506,8 @@ class KokoroEngine:
         # Grace repeats a handful of canned lines ("Goal executed.", "I'm here
         # to help!", ...) on almost every turn; re-synthesising them is pure
         # waste.
-        key = (text, voice)
+        eff_speed = self._speed if speed is None else max(0.5, min(2.5, float(speed)))
+        key = (text, voice, eff_speed)
         cached = self._cache_get(key)
         if cached is not None:
             logger.debug(f"Kokoro cache hit for '{text[:40]}'")
@@ -480,12 +517,12 @@ class KokoroEngine:
         if worker is None:
             return None
 
-        wav = worker.synthesize(text, voice)
+        wav = worker.synthesize(text, voice, speed=eff_speed)
         if wav:
             self._cache_put(key, wav)
         return wav
 
-    def submit(self, text: str, voice: str = "af_bella"):
+    def submit(self, text: str, voice: str = "af_bella", speed: Optional[float] = None):
         """Start synthesis without blocking.
 
         Returns either a Future or, on a cache hit, the WAV bytes directly.
@@ -496,7 +533,8 @@ class KokoroEngine:
         if not self._workers:
             return None
 
-        key = (text, voice)
+        eff_speed = self._speed if speed is None else max(0.5, min(2.5, float(speed)))
+        key = (text, voice, eff_speed)
         cached = self._cache_get(key)
         if cached is not None:
             return cached
@@ -504,9 +542,9 @@ class KokoroEngine:
         worker = self._next_worker()
         if worker is None:
             return None
-        return worker.submit(text, voice)
+        return worker.submit(text, voice, speed=eff_speed)
 
-    def resolve(self, pending, text: str, voice: str = "af_bella") -> Optional[bytes]:
+    def resolve(self, pending, text: str, voice: str = "af_bella", speed: Optional[float] = None) -> Optional[bytes]:
         """Resolve whatever :func:`submit` returned into WAV bytes."""
         if pending is None:
             return None
@@ -518,19 +556,21 @@ class KokoroEngine:
             logger.error(f"Kokoro synthesis execution error: {e}")
             return None
         if wav:
-            self._cache_put((text, voice), wav)
+            eff_speed = self._speed if speed is None else max(0.5, min(2.5, float(speed)))
+            self._cache_put((text, voice, eff_speed), wav)
         return wav
 
     def synthesize_sentences(
         self,
         text: str,
         voice: str = "af_bella",
+        speed: Optional[float] = None,
     ) -> list[bytes]:
         """Split text into sentences and synthesize each one."""
         sentences = self._split_sentences(text)
         results = []
         for sentence in sentences:
-            wav = self.synthesize(sentence, voice)
+            wav = self.synthesize(sentence, voice, speed=speed)
             if wav:
                 results.append(wav)
         return results

@@ -25,10 +25,14 @@ def split_sentences(text: str) -> list[str]:
         if not part:
             i += 1
             continue
-        tail = part.split()[-1].rstrip(".").lower() if part.split() else ""
-        if tail in ABBREVIATIONS and i + 1 < len(parts):
-            part = part + " " + parts[i + 1].strip()
-            i += 1
+        while i + 1 < len(parts):
+            words = part.split()
+            tail = words[-1].rstrip(".").lower() if words else ""
+            if tail in ABBREVIATIONS:
+                part = part + " " + parts[i + 1].strip()
+                i += 1
+            else:
+                break
         merged.append(part)
         i += 1
     return merged

@@ -11,6 +11,10 @@ class TestOculixBridge(unittest.TestCase):
         cp = OculixBridge.get_classpath()
         self.assertIsInstance(cp, list)
 
+    @unittest.skipUnless(
+        os.getenv("USE_OCULIX", "").lower() in ("true", "1", "yes"),
+        "OculiX JVM integration is opt-in via USE_OCULIX to prevent JVM access violation",
+    )
     def test_bridge_initialization_or_fallback(self):
         # Initializing OculiX bridge should either succeed or fail gracefully without unhandled exception
         is_ready = OculixBridge.initialize()

@@ -12,6 +12,8 @@ search box.
 import asyncio
 import logging
 import re
+import time
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from grace.agent.grounder import Grounder, describe_target
@@ -118,6 +120,12 @@ ESCALATION_LADDER = ("normal", "reground", "stronger", "stop")
 # with the failure evidence attached, which is still worth one attempt.
 DEFAULT_STRONGER_PLANNER_MODEL = "gemini-3.1-flash"
 
+# How long a parked safety confirmation waits for an answer before it is
+# treated as abandoned. Without this, a delete parked at the start of a goal
+# stayed approvable indefinitely - an unrelated "yes" spoken in a much later,
+# unrelated conversation would silently execute it.
+PENDING_CONFIRMATION_TTL_SECONDS = 30
+
 # The wall-clock ceiling for one goal, in seconds.
 #
 # This is the bound the twelve-minute run needed and did not have. Every other
@@ -181,14 +189,31 @@ class AgentLoop:
         anywhere able to resume it - so answering "yes" started an unrelated new
         request and the confirmed action never ran.
         """
+        self._expire_pending()
         return self._pending is not None
 
     @property
     def pending_prompt(self) -> Optional[str]:
+        self._expire_pending()
         return self._pending.get("prompt") if self._pending else None
 
     def cancel_pending(self) -> None:
         self._pending = None
+
+    def _expire_pending(self) -> None:
+        """Drop a parked confirmation once it has waited too long to still apply.
+
+        Without a TTL a pending delete or app-close stays approvable forever, so
+        an unrelated "yes" spoken in a much later exchange would silently confirm
+        it. The clock is `time.monotonic()`, the same one `AgentMemory` uses for
+        the goal's own wall-clock budget.
+        """
+        if self._pending is None:
+            return
+        parked_at = self._pending.get("parked_at", 0.0)
+        if time.monotonic() - parked_at > PENDING_CONFIRMATION_TTL_SECONDS:
+            logger.warning("Pending confirmation expired unanswered; cancelling it.")
+            self._pending = None
 
     def park_intent(self, intent: Intent, prompt: str) -> None:
         """Hold a fast-path tool call until the user answers the question.
@@ -199,10 +224,11 @@ class AgentLoop:
         consulted, and two places tracking "is something waiting for a yes"
         is how one of them comes to be missed.
         """
-        self._pending = {"intent": intent, "prompt": prompt}
+        self._pending = {"intent": intent, "prompt": prompt, "parked_at": time.monotonic()}
 
     async def resume_pending(self, approved: bool) -> dict[str, Any]:
         """Continue whatever stopped for a safety confirmation."""
+        self._expire_pending()
         if not self._pending:
             return {"status": "error", "error": "Nothing is waiting for confirmation."}
 
@@ -364,7 +390,21 @@ class AgentLoop:
                     f"AgentLoop: escalating - re-planning '{step.action}' with "
                     f"{self._stronger_model or 'the same model'}."
                 )
-                stronger = await self._replan_stronger(memory, view, snapshot, expectation_note)
+                try:
+                    stronger = await self._replan_stronger(memory, view, snapshot, expectation_note)
+                except PlannerBudgetExceeded as e:
+                    # The overall per-goal budget is spent, not just this one
+                    # optional attempt - the same terminal condition the
+                    # ordinary planning call above hits, so it gets the same
+                    # honest, spoken reason instead of taking Grace down.
+                    logger.warning(str(e))
+                    return self._budget_result(memory)
+                except RateLimitError as e:
+                    # Escalation is optional (see _replan_stronger); a rate
+                    # limit on this extra call must not end the goal when the
+                    # step can still be tried as originally planned.
+                    logger.warning(f"Escalated re-plan rate limited, continuing without it: {e}")
+                    stronger = None
                 if stronger is not None:
                     step = stronger
                     signature = _step_signature(step)
@@ -381,7 +421,10 @@ class AgentLoop:
                     "prompt": confirm_prompt,
                 }
                 memory.pause_clock()
-                self._pending = {"memory": memory, "step": step, "prompt": confirm_prompt}
+                self._pending = {
+                    "memory": memory, "step": step, "prompt": confirm_prompt,
+                    "parked_at": time.monotonic(),
+                }
                 return {
                     "status": "safety_confirmation_required",
                     "confirmation_prompt": confirm_prompt,
@@ -405,7 +448,9 @@ class AgentLoop:
             exec_result = await self._dispatch(step, memory)
 
             if step.is_completed or step.action == "converse":
-                verified, hint = self._verify_goal_completion(memory.user_goal, snapshot, memory)
+                verified, hint = self._verify_goal_completion(
+                    memory.user_goal, snapshot, memory, claiming_step=step, claiming_result=exec_result
+                )
                 if verified:
                     memory.is_completed = True
                     memory.final_response = self._final_response(step, memory)
@@ -734,7 +779,14 @@ class AgentLoop:
 
     # -- verification ------------------------------------------------------
 
-    def _verify_goal_completion(self, user_goal: str, snapshot, memory: AgentMemory) -> tuple[bool, Optional[str]]:
+    def _verify_goal_completion(
+        self,
+        user_goal: str,
+        snapshot,
+        memory: AgentMemory,
+        claiming_step: Optional[PlannedStep] = None,
+        claiming_result: Optional[dict[str, Any]] = None,
+    ) -> tuple[bool, Optional[str]]:
         """Block a claimed completion that no action could have produced.
 
         Deliberately a narrow check. It cannot tell whether the goal was
@@ -752,11 +804,23 @@ class AgentLoop:
         because on a window Grace cannot read a claim of success is not
         contradicted by anything - and blocking it there would be inventing
         evidence, which is the mistake that stopped a working run.
+
+        ``claiming_step``/``claiming_result`` are the step making the claim and
+        its own dispatch result. This runs before ``memory.add_step`` records
+        that step, so without them the check judges a completing action only by
+        whatever came *before* it - a successful first-and-last action had no
+        history to pass on, and a failing one was judged by an earlier, possibly
+        successful, step instead of its own failure.
         """
         if _CONVERSATIONAL_RE.search(user_goal or ""):
             return True, None
 
         interactive = [s for s in memory.steps_taken if s.action in INTERACTIVE_TOOLS]
+        if claiming_step is not None and claiming_step.action in INTERACTIVE_TOOLS:
+            interactive = interactive + [SimpleNamespace(
+                action=claiming_step.action, result=claiming_result or {},
+            )]
+
         if not interactive:
             return False, (
                 "Goal observation check: no desktop interaction has been performed yet. "

@@ -15,9 +15,11 @@ from grace.automation.ui_inspector import UIElement
 class TestWin32Driver:
     """Test suite for Win32Driver background message dispatcher."""
 
-    def test_win32_driver_click_at_does_not_raise(self):
+    @patch("ctypes.windll.user32.SendInput", return_value=3)
+    def test_win32_driver_click_at_does_not_raise(self, mock_send_input):
         res = Win32Driver.click_at(100, 100)
         assert res is True
+        assert mock_send_input.called
 
     def test_perception_to_markdown_includes_hermes_tree_index(self):
         elem = UIElement(index=14, name="Play", control_type="Button", bounds=(700, 245, 780, 285), center=(740, 265))

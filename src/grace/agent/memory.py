@@ -4,12 +4,16 @@ Tracks execution history, intermediate results, extracted data,
 and iteration bounds during multi-step autonomous tasks.
 """
 
+import contextlib
 import json
+import logging
 import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+logger = logging.getLogger("grace.agent.memory")
 
 
 class PersistentMemoryStore:
@@ -30,71 +34,72 @@ class PersistentMemoryStore:
 
     def _init_db(self):
         try:
-            with sqlite3.connect(self._db_path) as conn:
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS task_history (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_goal TEXT,
-                        action TEXT,
-                        params TEXT,
-                        result TEXT,
-                        timestamp REAL
+            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS task_history (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_goal TEXT,
+                            action TEXT,
+                            params TEXT,
+                            result TEXT,
+                            timestamp REAL
+                        )
+                        """
                     )
-                    """
-                )
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS user_preferences (
-                        key TEXT PRIMARY KEY,
-                        value TEXT,
-                        updated_at REAL
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS user_preferences (
+                            key TEXT PRIMARY KEY,
+                            value TEXT,
+                            updated_at REAL
+                        )
+                        """
                     )
-                    """
-                )
-                conn.commit()
         except Exception as exc:
-            pass
+            logger.warning(f"Persistent memory DB init failed: {exc}")
 
     def save_step(self, user_goal: str, action: str, params: dict, result: dict) -> None:
         """Persist a completed action step to SQLite disk database."""
         try:
-            with sqlite3.connect(self._db_path) as conn:
-                conn.execute(
-                    "INSERT INTO task_history (user_goal, action, params, result, timestamp) VALUES (?, ?, ?, ?, ?)",
-                    (user_goal, action, json.dumps(params), json.dumps(result), time.time()),
-                )
-                conn.commit()
-        except Exception:
-            pass
+            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
+                with conn:
+                    conn.execute(
+                        "INSERT INTO task_history (user_goal, action, params, result, timestamp) VALUES (?, ?, ?, ?, ?)",
+                        (user_goal, action, json.dumps(params), json.dumps(result), time.time()),
+                    )
+        except Exception as exc:
+            logger.debug(f"Failed to save step to persistent memory: {exc}")
 
     def set_preference(self, key: str, value: str) -> None:
         """Set a persistent user preference or remembered value."""
         try:
-            with sqlite3.connect(self._db_path) as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO user_preferences (key, value, updated_at) VALUES (?, ?, ?)",
-                    (key, value, time.time()),
-                )
-                conn.commit()
-        except Exception:
-            pass
+            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
+                with conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO user_preferences (key, value, updated_at) VALUES (?, ?, ?)",
+                        (key, value, time.time()),
+                    )
+        except Exception as exc:
+            logger.debug(f"Failed to set preference in persistent memory: {exc}")
 
     def get_preference(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """Get a persistent user preference or remembered value."""
         try:
-            with sqlite3.connect(self._db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT value FROM user_preferences WHERE key = ?", (key,))
                 row = cursor.fetchone()
                 return row[0] if row else default
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Failed to get preference from persistent memory: {exc}")
             return default
 
     def get_recent_history(self, limit: int = 5) -> list[dict[str, Any]]:
         """Retrieve recent task history across sessions."""
         try:
-            with sqlite3.connect(self._db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT user_goal, action, params, result, timestamp FROM task_history ORDER BY id DESC LIMIT ?",
@@ -111,7 +116,8 @@ class PersistentMemoryStore:
                     }
                     for r in rows
                 ]
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Failed to get recent history from persistent memory: {exc}")
             return []
 
 

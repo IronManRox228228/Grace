@@ -116,6 +116,32 @@ def test_a_refused_dispatch_is_not_taped_as_an_execution(dispatcher, monkeypatch
     assert [t[0] for t in taped] == ["open_app"]
 
 
+class TestKeyAliasNormalisation:
+    """pyautogui's own key names, not just the X11 keysyms, must be recognised.
+
+    The guard only aliased control_l/shift_l/alt_l/super_l style names. pyautogui
+    itself reports altleft, ctrlleft, shiftleft and winleft/winright/super/win,
+    so a press coming through that path skipped the guard entirely.
+    """
+
+    @pytest.mark.parametrize("key", [
+        "altleft+f4", "ctrlleft+w", "ctrl+f4", "shift+delete", "win+l",
+    ])
+    def test_native_pyautogui_names_still_require_confirmation(self, dispatcher, key):
+        result = asyncio.run(
+            dispatcher.execute(Intent(tool="cua_press_key", params={"key": key}))
+        )
+        assert result["status"] == "confirmation_required", key
+        assert dispatcher.executed == []
+
+    def test_an_unguarded_hotkey_is_not_delayed(self, dispatcher):
+        result = asyncio.run(
+            dispatcher.execute(Intent(tool="cua_press_key", params={"key": "ctrl+c"}))
+        )
+        assert result["status"] == "ok"
+        assert dispatcher.executed == ["cua_press_key"]
+
+
 class TestGuardCoverage:
     """The rule sets must name tools that exist, or they guard nothing."""
 

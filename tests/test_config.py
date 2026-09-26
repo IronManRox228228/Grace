@@ -30,7 +30,9 @@ class TestConfig:
         assert config.vosk_keyword == "grace"
         assert config.vosk_threshold == 0.4
         assert config.whisper_vad_threshold == 0.008
-        assert config.whisper_silence_duration_ms == 700
+        assert config.whisper_silence_duration_ms == 1200
+        assert config.initial_listen_timeout_seconds == 6.0
+        assert config.kokoro_speed == 1.0
         # Two workers share one KModel; see KokoroEngine.
         assert config.kokoro_workers == 2
         assert config.kokoro_device == "cuda"

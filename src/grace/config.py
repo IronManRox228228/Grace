@@ -17,11 +17,11 @@ class Config:
     # Model paths
     llama_model_path: str = field(default_factory=lambda: os.getenv(
         "LLAMA_MODEL_PATH",
-        r"C:\Users\Ashman Das\Downloads\UI-TARS-1.5-7B.Q4_K_M.gguf",
+        os.path.join(os.path.expanduser("~"), "Downloads", "UI-TARS-1.5-7B.Q4_K_M.gguf"),
     ))
     llama_mmproj_path: str = field(default_factory=lambda: os.getenv(
         "LLAMA_MMPROJ_PATH",
-        r"C:\Users\Ashman Das\Downloads\UI-TARS-1.5-7B.mmproj-Q8_0.gguf",
+        os.path.join(os.path.expanduser("~"), "Downloads", "UI-TARS-1.5-7B.mmproj-Q8_0.gguf"),
     ))
     use_ui_tars_local: bool = field(default_factory=lambda: os.getenv("USE_UI_TARS_LOCAL", "true").lower() in ("true", "1", "yes"))
     # A separate local model for the planner role (JSON/tool-calling), used
@@ -31,11 +31,19 @@ class Config:
     local_planner_model_path: str = field(default_factory=lambda: os.getenv("LLAMA_PLANNER_MODEL_PATH", ""))
     kokoro_model_path: str = field(default_factory=lambda: os.getenv(
         "KOKORO_MODEL_PATH",
-        r"C:\Users\Ashman Das\.cache\huggingface\hub\models--hexgrad--Kokoro-82M\snapshots\f3ff3571791e39611d31c381e3a41a3af07b4987\kokoro-v1_0.pth",
+        os.path.join(
+            os.path.expanduser("~"),
+            ".cache", "huggingface", "hub", "models--hexgrad--Kokoro-82M",
+            "snapshots", "f3ff3571791e39611d31c381e3a41a3af07b4987", "kokoro-v1_0.pth",
+        ),
     ))
     kokoro_voices_path: str = field(default_factory=lambda: os.getenv(
         "KOKORO_VOICES_PATH",
-        r"C:\Users\Ashman Das\.cache\huggingface\hub\models--hexgrad--Kokoro-82M\snapshots\f3ff3571791e39611d31c381e3a41a3af07b4987\voices\af_bella.pt",
+        os.path.join(
+            os.path.expanduser("~"),
+            ".cache", "huggingface", "hub", "models--hexgrad--Kokoro-82M",
+            "snapshots", "f3ff3571791e39611d31c381e3a41a3af07b4987", "voices", "af_bella.pt",
+        ),
     ))
 
     # llama-server & Gemini Cloud LLM
@@ -64,6 +72,7 @@ class Config:
     mic_channels: int = field(default_factory=lambda: int(os.getenv("MIC_CHANNELS", "1")))
     mic_width: int = field(default_factory=lambda: int(os.getenv("MIC_WIDTH", "2")))
     followup_timeout_seconds: int = field(default_factory=lambda: int(os.getenv("FOLLOWUP_TIMEOUT_SECONDS", "10")))
+    initial_listen_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("INITIAL_LISTEN_TIMEOUT_SECONDS", "6.0")))
 
     # Wake Word
     wake_word_keyword: str = field(default_factory=lambda: os.getenv("WAKE_WORD_KEYWORD", "grace"))
@@ -78,7 +87,7 @@ class Config:
     # Whisper
     whisper_model_path: str = field(default_factory=lambda: os.getenv("WHISPER_MODEL_PATH", "small"))
     whisper_vad_threshold: float = field(default_factory=lambda: float(os.getenv("WHISPER_VAD_THRESHOLD", "0.008")))
-    whisper_silence_duration_ms: int = field(default_factory=lambda: int(os.getenv("WHISPER_SILENCE_DURATION_MS", "700")))
+    whisper_silence_duration_ms: int = field(default_factory=lambda: int(os.getenv("WHISPER_SILENCE_DURATION_MS", "1200")))
 
     # Kokoro
     # Two workers share ONE KModel: enough concurrency to hide synthesis behind
@@ -90,6 +99,7 @@ class Config:
     kokoro_dtype: str = field(default_factory=lambda: os.getenv("KOKORO_DTYPE", "float32"))
     kokoro_warmup: bool = field(default_factory=lambda: os.getenv("KOKORO_WARMUP", "true").lower() in ("true", "1", "yes"))
     kokoro_cache_size: int = field(default_factory=lambda: int(os.getenv("KOKORO_CACHE_SIZE", "32")))
+    kokoro_speed: float = field(default_factory=lambda: float(os.getenv("KOKORO_SPEED", "1.0")))
 
     # Agent loop. The step cap stays 0 = unlimited: capping steps only ever
     # stops a real task halfway ("I've used up my planning budget"), leaving the
@@ -137,6 +147,11 @@ class Config:
     # WebSocket (frontend)
     ws_host: str = field(default_factory=lambda: os.getenv("WS_HOST", "127.0.0.1"))
     ws_port: int = field(default_factory=lambda: int(os.getenv("WS_PORT", "8765")))
+    # Comma-separated origins to allow beyond the built-in Tauri/dev-server
+    # allowlist (see ws_server._DEFAULT_ALLOWED_ORIGINS). Empty by default -
+    # the server only needs this when the renderer is served from somewhere
+    # non-standard.
+    ws_allowed_origins: str = field(default_factory=lambda: os.getenv("WS_ALLOWED_ORIGINS", ""))
 
     # Derived
     @property

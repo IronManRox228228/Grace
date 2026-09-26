@@ -75,6 +75,11 @@ class AudioPump:
         self._running = False
         thread = self._thread
         self._thread = None
+        if self._queue is not None and self._loop is not None and not self._loop.is_closed():
+            try:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, None)
+            except Exception:
+                pass
         if thread is not None and thread.is_alive():
             # One chunk read (~32 ms) is the longest the thread can be stuck.
             thread.join(timeout=1.0)
@@ -119,12 +124,16 @@ class AudioPump:
     async def get(self, timeout: Optional[float] = None) -> Optional[bytes]:
         """Await the next chunk. Returns None on timeout or when not running."""
         q = self._queue
-        if q is None:
+        if q is None or not self._running:
             return None
-        if timeout is None:
-            return _tape(await q.get())
         try:
-            return _tape(await asyncio.wait_for(q.get(), timeout=timeout))
+            if timeout is None:
+                val = await q.get()
+            else:
+                val = await asyncio.wait_for(q.get(), timeout=timeout)
+            if val is None or not self._running:
+                return None
+            return _tape(val)
         except asyncio.TimeoutError:
             return None
 

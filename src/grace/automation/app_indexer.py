@@ -173,10 +173,20 @@ class AppIndexer:
 
         return None
 
+    # Characters cmd.exe (or a future shell path) would re-parse as its own
+    # syntax. `name` can be model-generated text, so a launch request must
+    # never carry one through to a process launch.
+    _UNSAFE_NAME_CHARS = set('&|<>^"%')
+
     def launch(self, name: str) -> dict[str, Any]:
         """Launch an application by name or search query."""
         if not name:
             return {"status": "error", "error": "Missing application name"}
+        if any(ch in name for ch in self._UNSAFE_NAME_CHARS):
+            return {
+                "status": "error",
+                "error": f"Refusing to launch '{name}': contains unsafe characters.",
+            }
 
         clean_name = name.lower().strip()
 
@@ -200,7 +210,13 @@ class AppIndexer:
             try:
                 if target.startswith("uwp:"):
                     appid = target[4:]
-                    os.system(f'start "" "shell:AppsFolder\\{appid}"')
+                    try:
+                        os.startfile(f"shell:AppsFolder\\{appid}")
+                    except Exception:
+                        # No cmd.exe: it re-parses the argument for &|<>^, and
+                        # explorer.exe accepts a shell: URI directly with no
+                        # shell involved.
+                        subprocess.run(["explorer.exe", f"shell:AppsFolder\\{appid}"])
                     return {"status": "ok", "text": f"I've opened {name}."}
                 else:
                     os.startfile(target)
@@ -209,9 +225,11 @@ class AppIndexer:
                 logger.error(f"Failed to launch {name} via target '{target}': {e}")
                 return {"status": "error", "error": str(e), "text": f"Failed to open {name}. {e}"}
 
-        # Direct shell start fallback
+        # No cmd.exe fallback here either: `clean_name` is unresolved,
+        # arbitrary text at this point, and cmd would re-parse it as shell
+        # syntax. If Windows can't open it directly, say so honestly.
         try:
-            os.system(f'start "" "{clean_name}"')
+            os.startfile(clean_name)
             return {"status": "ok", "text": f"I've opened {name}."}
         except Exception as exc:
             return {

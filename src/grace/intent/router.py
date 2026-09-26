@@ -59,18 +59,21 @@ class CapabilityRouter:
         "cua_launch",
         "cua_list_windows",
         "cua_list_apps",
+        "cua_press_key",
+        "cua_scroll",
+        "cua_activate",
+        "undo",
+        "describe_screen",
+        "set_speech_rate",
     }
 
     # Tools that inherently need to look at the screen and iterate.
     AGENTIC_TOOLS = {
         "cua_click",
         "cua_type_text",
-        "cua_press_key",
-        "cua_scroll",
         "cua_drag",
         "cua_set_value",
         "cua_secondary_action",
-        "cua_activate",
         "read_pdf",
         "summarize_pdf",
     }

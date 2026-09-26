@@ -22,13 +22,14 @@ from grace.agent.perception import ScreenSnapshot, WindowInfo
 from grace.agent.planner import PlannedStep
 
 
-def snapshot(title="Untitled - Notepad", graph=None):
+def snapshot(title="Untitled - Notepad", graph=None, ui_elements=None):
     return ScreenSnapshot(
         active_window=WindowInfo(hwnd=1, title=title, class_name="X", rect=(0, 0, 800, 600)),
         ocr_lines=[],
         width=1920,
         height=1080,
         graph=graph,
+        ui_elements=ui_elements,
     )
 
 
@@ -245,6 +246,47 @@ class TestVerification:
         assert res["final_response"] == "All done."
         assert any(s["action"] == "open_app" for s in res["steps"])
 
+    def test_completion_rejected_when_only_the_last_step_failed(self):
+        # A regression required BOTH of the last two interactive steps to have
+        # failed before a completion claim was rejected, so a real failure
+        # slipped through whenever the step before it had succeeded.
+        # `snapshot(ui_elements=...)` keeps the guard's own is_blind shortcut
+        # ("nothing to check against, trust the claim") from masking this.
+        loop, _, _ = make_loop([])
+        memory = AgentMemory("open notepad")
+        memory.add_step("t", "open_app", {"name": "Notepad"}, {"status": "ok"})
+        memory.add_step("t", "cua_click", {}, {"status": "error", "error": "not found"})
+        readable = snapshot(ui_elements=list(range(10)))
+        assert loop._verify_goal_completion("open notepad", readable, memory)[0] is False
+
+    def test_a_successful_final_action_completes_on_its_own_dispatch(self):
+        # `_verify_goal_completion` used to run before `memory.add_step`, so a
+        # single step that both acts and claims completion was judged with no
+        # history at all and rejected - even though it had just succeeded.
+        step_json = (
+            '{"action": "cua_type_text", "params": {"text": "banana"}, '
+            '"is_completed": true, "final_response": "Typed banana."}'
+        )
+        loop, _, dispatcher = make_loop([step_json], dispatch_result={"status": "ok"})
+        res = asyncio.run(loop.run(user_goal="type banana"))
+        assert res["status"] == "ok"
+        assert res["final_response"] == "Typed banana."
+        assert dispatcher.execute.await_count == 1
+
+    def test_a_failing_final_action_is_still_rejected(self):
+        # The other half: seeing the claiming step's own result must not turn
+        # into always trusting it - a failed final action is still rejected.
+        loop, _, _ = make_loop([])
+        memory = AgentMemory("type banana")
+        step = PlannedStep(action="cua_type_text", params={"text": "banana"}, is_completed=True)
+        exec_result = {"status": "error", "error": "no focused field"}
+        readable = snapshot(ui_elements=list(range(10)))
+        verified, hint = loop._verify_goal_completion(
+            "type banana", readable, memory, claiming_step=step, claiming_result=exec_result
+        )
+        assert verified is False
+        assert "no focused field" in hint
+
 
 class TestExpectationFeedback:
     """A failed step must come back as an explicit correction, not a silent retry."""
@@ -427,6 +469,33 @@ class TestEscalationLadder:
         res = asyncio.run(loop.run(user_goal="send the message"))
         assert res["status"] == "no_progress"
 
+    def test_a_rate_limited_escalation_does_not_escape_run(self):
+        # `_replan_stronger` deliberately re-raises RateLimitError and
+        # PlannerBudgetExceeded for its caller to handle, but the caller had no
+        # try/except around it, so either exception escaped `run()` entirely
+        # and took the whole process down with it.
+        from grace.llm.gemma_client import RateLimitError
+
+        loop, _, _ = make_loop([self.CLICK] * 8)
+        freeze_screen(loop)
+        loop._replan_stronger = AsyncMock(side_effect=RateLimitError("429 quota"))
+        res = asyncio.run(loop.run(user_goal="send the message"))
+        # Escalation is optional; being refused it must not end the goal when
+        # the originally planned step can still be tried.
+        assert res["status"] != "rate_limited"
+
+    def test_a_budget_exceeded_escalation_stops_with_an_honest_reason(self):
+        from grace.agent.planner import PlannerBudgetExceeded
+
+        loop, _, _ = make_loop([self.CLICK] * 8)
+        freeze_screen(loop)
+        loop._replan_stronger = AsyncMock(
+            side_effect=PlannerBudgetExceeded("planner call budget exhausted")
+        )
+        res = asyncio.run(loop.run(user_goal="send the message"))
+        assert res["status"] == "planner_budget_exceeded"
+        assert res["final_response"]
+
 
 class TestRollingScratchpad:
     """What was established and ruled out has to outlive the 3-step window."""
@@ -596,6 +665,23 @@ class TestSafetyResumption:
         asyncio.run(loop.run(user_goal="delete x"))
         loop.cancel_pending()
         assert loop.has_pending_confirmation is False
+
+    def test_a_stale_confirmation_expires_and_cannot_be_resumed(self):
+        # Without a TTL, a delete parked at the start of a goal stayed
+        # approvable forever - an unrelated "yes" spoken hours later in a
+        # different conversation would silently confirm it.
+        from grace.intent.parser import Intent
+
+        loop, _, dispatcher = make_loop([])
+        loop.park_intent(Intent(tool="delete_file", params={"name": "x.txt"}), "Sure?")
+        assert loop.has_pending_confirmation is True
+
+        loop._pending["parked_at"] -= 31  # older than the 30s TTL
+
+        assert loop.has_pending_confirmation is False
+        res = asyncio.run(loop.resume_pending(approved=True))
+        assert res["status"] == "error"
+        assert dispatcher.execute.call_count == 0
 
 
 class TestGrounding:

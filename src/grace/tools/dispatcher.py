@@ -9,6 +9,8 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
+import re
 import subprocess
 from typing import Any, Optional
 
@@ -31,6 +33,9 @@ _TOOL_LABELS: dict[str, str] = {
     "lock_computer": "Locking computer\u2026",
     "open_calculator": "Opening calculator\u2026",
     "delete_file": "Moving file to recycle bin\u2026",
+    "undo": "Undoing action\u2026",
+    "describe_screen": "Inspecting screen\u2026",
+    "set_speech_rate": "Adjusting speech rate\u2026",
 }
 
 # One entry per handler ComputerUse actually implements. The removed keys
@@ -106,12 +111,22 @@ _WEBSITE_ALIASES: dict[str, str] = {
 class Dispatcher:
     """Routes intents to CUA or hardcoded tool implementations."""
 
-    def __init__(self, computer_use: Optional[ComputerUse] = None, ws_server: Optional[WsEventServer] = None):
+    def __init__(
+        self,
+        computer_use: Optional[ComputerUse] = None,
+        ws_server: Optional[WsEventServer] = None,
+        kokoro_engine: Optional[Any] = None,
+    ):
         self._cua = computer_use
         self._ws = ws_server
+        self._kokoro_engine = kokoro_engine
         self._last_search_results: list[str] = []
         self._app_indexer = None
         self._app_indexer_lock = asyncio.Lock()
+
+    def set_kokoro_engine(self, engine: Any) -> None:
+        """Install Kokoro engine for runtime speech parameter adjustments."""
+        self._kokoro_engine = engine
 
     def set_app_indexer(self, indexer) -> None:
         """Install a pre-built index (main.py builds one during startup warmup)."""
@@ -193,6 +208,9 @@ class Dispatcher:
             "lock_computer": self._lock_computer,
             "open_calculator": self._open_calculator,
             "delete_file": self._delete_file,
+            "undo": self._undo,
+            "describe_screen": self._describe_screen,
+            "set_speech_rate": self._set_speech_rate,
         }
 
         handler = handler_map.get(tool)
@@ -350,26 +368,36 @@ class Dispatcher:
         if not query:
             return {"status": "error", "error": "Missing 'query' parameter"}
 
+        # Sanitize: strip shell-dangerous / control characters
+        query = re.sub(r'[\"\'`;$|&<>(){}!\[\]\\]', '', query).strip()
+        if not query:
+            return {"status": "error", "error": "Invalid query after sanitization"}
+
         self._last_search_results = []
 
         try:
             user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
             docs_dir = os.path.join(user_profile, "Documents")
-            cmd = f'$searchResults = Get-ChildItem -Path "{docs_dir}" -Recurse -Include *.pdf,*.docx,*.txt,*.xlsx -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -like "*{query}*" }} | Select-Object -First 10 FullName; $searchResults | ForEach-Object {{ $_.FullName }}'
+            extensions = {'.pdf', '.docx', '.txt', '.xlsx'}
+            q_lower = query.lower()
 
-            # A recursive Get-ChildItem over Documents can run the full 30s.
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["powershell", "-Command", cmd],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            def _search():
+                if not os.path.exists(docs_dir):
+                    return []
+                matches = []
+                for p in Path(docs_dir).rglob("*"):
+                    try:
+                        if p.suffix.lower() in extensions and q_lower in p.name.lower():
+                            matches.append(str(p))
+                            if len(matches) >= 10:
+                                break
+                    except (PermissionError, OSError):
+                        continue
+                return matches
 
-            if result.stdout.strip():
-                self._last_search_results = [
-                    line.strip() for line in result.stdout.strip().split("\n") if line.strip()
-                ]
+            self._last_search_results = await asyncio.to_thread(_search)
+
+            if self._last_search_results:
                 result_list = "\n".join(f"  {i+1}. {path}" for i, path in enumerate(self._last_search_results))
                 return {
                     "status": "ok",
@@ -382,8 +410,6 @@ class Dispatcher:
                     "text": f"I couldn't find any files matching '{query}'.",
                     "files": [],
                 }
-        except subprocess.TimeoutExpired:
-            return {"status": "error", "error": "Search timed out", "text": "I couldn't search in time."}
         except Exception as e:
             return {"status": "error", "error": str(e), "text": f"Search failed: {e}"}
 
@@ -424,7 +450,7 @@ class Dispatcher:
         if not path:
             return {"status": "error", "error": "Missing 'path' parameter"}
 
-        try:
+        def _do_read():
             from pypdf import PdfReader
             from grace.rag import LocalRagIndex
 
@@ -436,7 +462,7 @@ class Dispatcher:
                     text += page_text + "\n\n"
 
             if not text.strip():
-                return {"status": "error", "error": "No extractable text in PDF", "text": "The PDF doesn't contain extractable text."}
+                return None, "No extractable text in PDF"
 
             index = LocalRagIndex()
             doc_id = os.path.basename(path)
@@ -449,9 +475,16 @@ class Dispatcher:
                 chunks = index.get_summary_chunks(top_k=3)
                 rag_text = "\n\n".join(f"[Excerpt {i+1}]: {c}" for i, c in enumerate(chunks))
 
+            return rag_text or text.strip()[:2000], None
+
+        try:
+            rag_text, err = await asyncio.to_thread(_do_read)
+            if err:
+                return {"status": "error", "error": err, "text": "The PDF doesn't contain extractable text."}
+
             return {
                 "status": "ok",
-                "text": rag_text or text.strip()[:2000],
+                "text": rag_text,
                 "action": "read_pdf",
             }
         except FileNotFoundError:
@@ -464,7 +497,7 @@ class Dispatcher:
         if not path:
             return {"status": "error", "error": "Missing 'path' parameter"}
 
-        try:
+        def _do_summarize():
             from pypdf import PdfReader
             from grace.rag import LocalRagIndex
 
@@ -476,7 +509,7 @@ class Dispatcher:
                     text += page_text + "\n\n"
 
             if not text.strip():
-                return {"status": "error", "error": "No extractable text in PDF", "text": "The PDF doesn't contain extractable text."}
+                return None, "No extractable text in PDF"
 
             index = LocalRagIndex()
             doc_id = os.path.basename(path)
@@ -484,6 +517,12 @@ class Dispatcher:
 
             chunks = index.get_summary_chunks(top_k=4)
             summary_context = "\n\n".join(f"[Section {i+1}]: {c}" for i, c in enumerate(chunks))
+            return summary_context, None
+
+        try:
+            summary_context, err = await asyncio.to_thread(_do_summarize)
+            if err:
+                return {"status": "error", "error": err, "text": "The PDF doesn't contain extractable text."}
 
             return {
                 "status": "ok",
@@ -499,7 +538,7 @@ class Dispatcher:
         amount = params.get("amount", 0)
         mode = params.get("mode", "increase")
 
-        try:
+        def _do_adjust():
             try:
                 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
                 from comtypes import CLSCTX_ALL
@@ -530,6 +569,9 @@ class Dispatcher:
                     "text": f"Volume {mode} by {amount}.",
                     "volume": amount,
                 }
+
+        try:
+            return await asyncio.to_thread(_do_adjust)
         except Exception as e:
             return {"status": "error", "error": str(e), "text": f"Could not adjust volume: {e}"}
 
@@ -553,7 +595,7 @@ class Dispatcher:
         if not name:
             return {"status": "error", "error": "Missing 'name' parameter"}
 
-        try:
+        def _do_delete():
             user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
             paths_to_try = [
                 name,
@@ -586,5 +628,101 @@ class Dispatcher:
                 "text": f"I've moved '{os.path.basename(target_path)}' to the Recycle Bin.",
                 "action": "delete_file",
             }
+
+        try:
+            return await asyncio.to_thread(_do_delete)
         except Exception as e:
             return {"status": "error", "error": str(e), "text": f"I couldn't delete '{name}'. {e}"}
+
+    async def _undo(self, params: dict) -> dict:
+        """Undo the last action using Ctrl+Z hotkey."""
+        from grace.response.feedback import FeedbackSounds
+
+        def _do_undo():
+            import pyautogui
+            pyautogui.hotkey("ctrl", "z")
+
+        try:
+            await asyncio.to_thread(_do_undo)
+            FeedbackSounds.play_success()
+            return {"status": "ok", "action": "undo", "text": "Undone."}
+        except Exception as e:
+            logger.error(f"Undo action failed: {e}")
+            FeedbackSounds.play_error()
+            return {"status": "error", "error": str(e), "text": f"Could not undo: {e}"}
+
+    async def _describe_screen(self, params: dict) -> dict:
+        """Describe what is currently visible on the screen."""
+        title = ""
+        elements_summary = []
+        try:
+            import win32gui
+            hwnd = win32gui.GetForegroundWindow()
+            title = win32gui.GetWindowText(hwnd) or "Desktop"
+        except Exception:
+            title = "Current screen"
+
+        try:
+            from grace.agent.perception import PerceptionEngine
+            graph = PerceptionEngine.get_graph_builder().get()
+            if graph and graph.elements:
+                named = [
+                    e.name for e in graph.elements
+                    if e.name and e.role in ("button", "edit", "link", "menuitem", "tabitem")
+                ][:5]
+                if named:
+                    elements_summary = named
+        except Exception as e:
+            logger.debug(f"Perception graph unavailable for describe_screen: {e}")
+
+        if elements_summary:
+            controls_str = ", ".join(f"'{name}'" for name in elements_summary)
+            text = f"You are looking at {title}. Key controls: {controls_str}."
+        elif title:
+            text = f"The active window is {title}."
+        else:
+            text = "I cannot detect an active application on screen."
+
+        return {
+            "status": "ok",
+            "action": "describe_screen",
+            "text": text,
+            "window_title": title,
+            "controls": elements_summary,
+        }
+
+    async def _set_speech_rate(self, params: dict) -> dict:
+        """Set the Kokoro TTS speech speed multiplier."""
+        from grace.response.feedback import FeedbackSounds
+        rate_val = params.get("rate", "1.0")
+        try:
+            if isinstance(rate_val, str):
+                rate_lower = rate_val.lower().strip()
+                if "slow" in rate_lower:
+                    speed = 0.8
+                elif "fast" in rate_lower or "quick" in rate_lower:
+                    speed = 1.25
+                elif "normal" in rate_lower or "default" in rate_lower or "reset" in rate_lower:
+                    speed = 1.0
+                else:
+                    nums = re.findall(r"[-+]?(?:\d*\.\d+|\d+)", rate_lower)
+                    speed = float(nums[0]) if nums else 1.0
+            else:
+                speed = float(rate_val)
+
+            speed = max(0.5, min(2.5, speed))
+
+            if self._kokoro_engine is not None:
+                self._kokoro_engine.set_speed(speed)
+
+            FeedbackSounds.play_success()
+            return {
+                "status": "ok",
+                "action": "set_speech_rate",
+                "text": f"Speech rate set to {speed:.2f}x.",
+                "speed": speed,
+            }
+        except Exception as e:
+            logger.error(f"Set speech rate failed: {e}")
+            FeedbackSounds.play_error()
+            return {"status": "error", "error": str(e), "text": f"Could not adjust speech rate: {e}"}

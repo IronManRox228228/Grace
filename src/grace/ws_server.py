@@ -14,6 +14,36 @@ logger = logging.getLogger("grace.ws")
 # production, where a malformed diagnostic event must never abort a user's turn.
 _CONTRACT_STRICT = os.getenv("GRACE_CONTRACT_STRICT", "").lower() in ("1", "true", "yes")
 
+# Origins the Tauri renderer actually connects from. WebView2 reports the
+# packaged app's own page as one of the tauri.localhost/tauri://localhost
+# forms depending on config; the dev server is the fixed port declared in both
+# frontend/renderer/vite.config.ts and src-tauri/tauri.conf.json's devUrl.
+# Anything else talking to this socket is not the renderer Grace ships with.
+DEFAULT_ALLOWED_ORIGINS = frozenset({
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+    "http://localhost:5173",
+})
+
+
+def _parse_extra_origins(raw: str) -> frozenset:
+    """Split the comma-separated GRACE_WS_ALLOWED_ORIGINS override."""
+    return frozenset(o.strip() for o in (raw or "").split(",") if o.strip())
+
+
+def is_origin_allowed(origin: Optional[str], allowed: frozenset) -> bool:
+    """Whether a WebSocket handshake with this Origin header should proceed.
+
+    No Origin header at all is allowed: only browsers send one, so a
+    non-browser local client (a test script, a health check) would otherwise
+    be rejected for doing nothing wrong. A browser-origin connection from
+    anywhere not in the allowlist is what this guards against - without it,
+    any page open in the user's browser could open this socket, read live
+    transcripts, and inject a fake wake event.
+    """
+    return origin is None or origin in allowed
+
 
 class WsEventServer:
     """WebSocket server sending GraceEvent messages to the frontend.
@@ -24,7 +54,7 @@ class WsEventServer:
     forwarded through the *on_wake* callback.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8765):
+    def __init__(self, host: str = "127.0.0.1", port: int = 8765, allowed_origins: str = ""):
         self._host = host
         self._port = port
         self._app: Optional[web.Application] = None
@@ -32,6 +62,7 @@ class WsEventServer:
         self._site: Optional[web.TCPSite] = None
         self._clients: set[web.WebSocketResponse] = set()
         self._on_wake: Optional[Callable[[], None]] = None
+        self._allowed_origins = DEFAULT_ALLOWED_ORIGINS | _parse_extra_origins(allowed_origins)
 
     @property
     def is_connected(self) -> bool:
@@ -41,6 +72,11 @@ class WsEventServer:
         self._on_wake = callback
 
     async def _handler(self, request: web.Request) -> web.WebSocketResponse:
+        origin = request.headers.get("Origin")
+        if not is_origin_allowed(origin, self._allowed_origins):
+            logger.warning(f"Rejected WebSocket handshake from disallowed origin: {origin}")
+            raise web.HTTPForbidden(text="Origin not allowed")
+
         ws = web.WebSocketResponse()
         try:
             await ws.prepare(request)
@@ -120,7 +156,7 @@ class WsEventServer:
             return
 
         to_remove = set()
-        for ws in self._clients:
+        for ws in list(self._clients):
             if ws.closed:
                 to_remove.add(ws)
                 continue

@@ -323,8 +323,8 @@ class GemmaClient:
                                         text = part.get("text")
                                         if text:
                                             yield text
-                            except Exception:
-                                pass
+                            except Exception as ex:
+                                logger.debug(f"Failed to decode Gemini stream chunk: {ex}")
                     return
             except RateLimitError:
                 raise
@@ -369,7 +369,8 @@ class GemmaClient:
                                 content = delta.get("content")
                                 if content:
                                     yield content
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as ex:
+                            logger.debug(f"Failed to decode LLM stream chunk: {ex}")
                             continue
         except Exception as e:
             logger.error(f"SSE streaming exception: {e}")

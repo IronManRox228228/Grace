@@ -66,7 +66,83 @@ class FeedbackSounds:
         envelope[:fade_len] = np.linspace(0, 1, fade_len)
         envelope[-fade_len:] = np.linspace(1, 0, fade_len)
         audio = (tone1 + tone2) * envelope * np.exp(-2 * t) * volume / 2
-        sd.play(audio, sample_rate)
-        if blocking:
-            sd.wait()
+        try:
+            sd.play(audio, sample_rate)
+            if blocking:
+                sd.wait()
+        except Exception as e:
+            logger.debug(f"Chime playback failed: {e}")
         logger.debug("Fallback chime played")
+
+    @staticmethod
+    def play_success(duration: float = 0.18, volume: float = 0.25, blocking: bool = False) -> None:
+        """Gentle rising two-tone earcon confirming an action finished (C5 -> E5)."""
+        try:
+            sample_rate = 24000
+            t_half = duration / 2.0
+            n1 = int(sample_rate * t_half)
+            n2 = int(sample_rate * t_half)
+            t1 = np.linspace(0, t_half, n1, endpoint=False)
+            t2 = np.linspace(0, t_half, n2, endpoint=False)
+
+            part1 = np.sin(2 * np.pi * 523.25 * t1) * np.exp(-3 * t1)
+            part2 = np.sin(2 * np.pi * 659.25 * t2) * np.exp(-3 * t2)
+            audio = np.concatenate([part1, part2]) * volume
+            sd.play(audio, sample_rate)
+            if blocking:
+                sd.wait()
+        except Exception as exc:
+            logger.debug(f"play_success failed: {exc}")
+
+    @staticmethod
+    def play_cancel(duration: float = 0.18, volume: float = 0.25, blocking: bool = False) -> None:
+        """Gentle descending two-tone earcon confirming cancellation/stop (E5 -> C5)."""
+        try:
+            sample_rate = 24000
+            t_half = duration / 2.0
+            n1 = int(sample_rate * t_half)
+            n2 = int(sample_rate * t_half)
+            t1 = np.linspace(0, t_half, n1, endpoint=False)
+            t2 = np.linspace(0, t_half, n2, endpoint=False)
+
+            part1 = np.sin(2 * np.pi * 659.25 * t1) * np.exp(-3 * t1)
+            part2 = np.sin(2 * np.pi * 523.25 * t2) * np.exp(-3 * t2)
+            audio = np.concatenate([part1, part2]) * volume
+            sd.play(audio, sample_rate)
+            if blocking:
+                sd.wait()
+        except Exception as exc:
+            logger.debug(f"play_cancel failed: {exc}")
+
+    @staticmethod
+    def play_error(duration: float = 0.22, volume: float = 0.25, blocking: bool = False) -> None:
+        """Gentle low-frequency double tone indicating an error or no-speech timeout."""
+        try:
+            sample_rate = 24000
+            t_pulse = 0.09
+            n_pulse = int(sample_rate * t_pulse)
+            n_gap = int(sample_rate * 0.04)
+            t1 = np.linspace(0, t_pulse, n_pulse, endpoint=False)
+
+            pulse = np.sin(2 * np.pi * 261.63 * t1) * np.exp(-4 * t1)
+            gap = np.zeros(n_gap, dtype=np.float32)
+            audio = np.concatenate([pulse, gap, pulse]) * volume
+            sd.play(audio, sample_rate)
+            if blocking:
+                sd.wait()
+        except Exception as exc:
+            logger.debug(f"play_error failed: {exc}")
+
+    @staticmethod
+    def play_listening(duration: float = 0.06, volume: float = 0.18, blocking: bool = False) -> None:
+        """Subtle high blip indicating Grace is listening in follow-up mode."""
+        try:
+            sample_rate = 24000
+            n = int(sample_rate * duration)
+            t = np.linspace(0, duration, n, endpoint=False)
+            audio = np.sin(2 * np.pi * 880.0 * t) * np.exp(-8 * t) * volume
+            sd.play(audio, sample_rate)
+            if blocking:
+                sd.wait()
+        except Exception as exc:
+            logger.debug(f"play_listening failed: {exc}")

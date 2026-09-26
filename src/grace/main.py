@@ -47,7 +47,7 @@ from grace.ws_server import WsEventServer
 from grace.tts.player import TTSPlayer
 from grace.response.generator import ResponseGenerator
 from grace.response.feedback import FeedbackSounds
-from grace.util.timing import start_turn
+from grace.util.timing import start_turn, stage
 from grace.harness import get_recorder
 
 # Configure logging. DEBUG formats an f-string per 32ms audio chunk, so it is
@@ -75,6 +75,7 @@ class GraceApp:
         self._llama_process: Optional[subprocess.Popen] = None
         self._audio_queue: Optional[queue.Queue] = None
         self._wake_event: Optional[asyncio.Event] = None
+        self._last_spoken_text: str = ""
 
         # Audio
         self.capture = AudioCapture(
@@ -161,6 +162,7 @@ class GraceApp:
         self.ws_server = WsEventServer(
             host=self.config.ws_host,
             port=self.config.ws_port,
+            allowed_origins=self.config.ws_allowed_origins,
         )
 
         # Computer use
@@ -196,7 +198,9 @@ class GraceApp:
             dtype=self.config.kokoro_dtype,
             warmup=self.config.kokoro_warmup,
             cache_size=self.config.kokoro_cache_size,
+            speed=self.config.kokoro_speed,
         )
+        self.dispatcher.set_kokoro_engine(self.kokoro)
 
         self.tts_player = TTSPlayer()
 
@@ -215,9 +219,29 @@ class GraceApp:
             "Keep replies under 3 sentences unless the user asks for detail."
         )
 
+    _STOP_COMMANDS = {
+        "stop", "cancel", "never mind", "nevermind", "quiet", "be quiet",
+        "shut up", "pause", "halt", "stop speaking", "stop that", "abort",
+    }
+    _REPEAT_COMMANDS = {
+        "repeat", "repeat that", "what did you say", "say that again",
+        "say again", "pardon", "what was that", "can you repeat that",
+    }
+
+    async def _speak_response(self, text: str) -> None:
+        """Speak response text and record it for voice repeat requests."""
+        if not text or not text.strip():
+            return
+        self._last_spoken_text = text.strip()
+        await self.response_gen.generate_and_speak_with_text(self._last_spoken_text)
+
     def _start_llama_server(self) -> None:
         """Start llama-server as a subprocess with UI-TARS 1.5-7B on GPU."""
         cfg = self.config
+        if not os.path.exists(cfg.llama_server_exe):
+            raise FileNotFoundError(
+                f"llama-server executable not found at: {cfg.llama_server_exe}"
+            )
         args = [
             cfg.llama_server_exe,
             "-m", cfg.llama_model_path,
@@ -249,19 +273,22 @@ class GraceApp:
     def _stop_llama_server(self) -> None:
         """Stop the llama-server subprocess."""
         if self._llama_process is not None:
-            log.info(f"Stopping llama-server PID {self._llama_process.pid}...")
+            pid = self._llama_process.pid
+            log.info(f"Stopping llama-server PID {pid}...")
             try:
-                self._llama_process.kill()
-                self._llama_process.wait(timeout=3)
+                self._llama_process.terminate()
+                try:
+                    self._llama_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._llama_process.kill()
+                    self._llama_process.wait(timeout=3)
             except Exception as e:
                 log.warning(f"Error terminating llama-server process: {e}")
+            try:
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+            except Exception:
+                pass
             self._llama_process = None
-
-        try:
-            subprocess.run(["taskkill", "/F", "/IM", "llama-server.exe"], capture_output=True)
-            log.info("Force killed residual llama-server.exe processes.")
-        except Exception:
-            pass
 
     async def _ensure_grounding_backend(self) -> bool:
         """Start llama-server the first time UI-TARS grounding is actually needed."""
@@ -426,11 +453,11 @@ class GraceApp:
                 if self.wake_word.detected:
                     log.info("Wake word detected!")
                     self.wake_word.reset()
-                    await self._handle_activation()
+                    await self._run_activation_turn()
                 elif self._wake_event and self._wake_event.is_set():
                     log.info("Wake command received from frontend!")
                     self._wake_event.clear()
-                    await self._handle_activation()
+                    await self._run_activation_turn()
                 else:
                     await asyncio.sleep(0)
         except KeyboardInterrupt:
@@ -438,25 +465,72 @@ class GraceApp:
         finally:
             await self.shutdown()
 
-    # Words that answer a safety confirmation. Checked as whole words so
-    # "no problem" reads as yes-ish only through the affirmative list.
-    _AFFIRMATIVE = ("yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead",
-                    "do it", "confirm", "please do", "affirmative", "correct")
-    _NEGATIVE = ("no", "nope", "don't", "dont", "stop", "cancel", "never mind",
-                 "nevermind", "abort", "negative")
+    # A bare yes/no word. Alone it is a complete answer ("yes"); it is also a
+    # valid lead-in before a short stock phrase ("yes go ahead", "no cancel
+    # that") - natural speech rarely answers with the bare word alone.
+    _YES_WORDS = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "affirmative", "correct"}
+    _NO_WORDS = {"no", "nope", "negative"}
+    # Stock phrases meaning "proceed" / "stop", with or without one of the
+    # words above in front. Deliberately a closed, curated list rather than
+    # "any text after yes/no": "yes" plus an unrelated new request ("okay open
+    # spotify") must not be read as approval of the parked action.
+    _PROCEED_PHRASES = {"go ahead", "go on", "go for it", "do it", "confirm", "please do"}
+    _STOP_PHRASES = {
+        "dont", "dont do that", "do not do that", "cancel", "cancel that",
+        "stop", "stop that", "never mind", "nevermind", "abort",
+    }
+    # Any of these inside a would-be "yes" tail rules it out - belt-and-
+    # suspenders for anything added to _PROCEED_PHRASES later.
+    _NEGATION_WORDS = ("not", "no", "dont", "never")
+    # Filler stripped from the ends before matching, so "um yes please" and
+    # "grace yes" still count as plain answers.
+    _CONFIRMATION_LEADING_FILLER = ("grace", "um", "uh", "umm", "uhh")
+    _CONFIRMATION_TRAILING_FILLER = ("please",)
 
     @classmethod
     def _confirmation_answer(cls, transcript: str) -> Optional[bool]:
-        """Read a yes/no out of an utterance. None means it wasn't an answer."""
-        text = (transcript or "").lower().strip()
+        """Read a yes/no out of an utterance. None means it wasn't a plain answer.
+
+        Strict on purpose: the previous version matched a yes/no word *anywhere*
+        in the sentence, so "I am not sure" and "okay open spotify" (an
+        unrelated new request) both read as approval. Now the utterance, once
+        lowercased and stripped of punctuation and filler, must reduce to a
+        bare yes/no or one of a small set of stock confirmation phrases -
+        optionally preceded by that yes/no ("yes go ahead", "no don't do
+        that") - rather than merely containing one somewhere. Anything else
+        returns None, which already cancels the pending action and treats the
+        utterance as a new request.
+        """
+        text = re.sub(r"[^\w\s]", "", (transcript or "").lower()).strip()
         if not text:
             return None
-        for phrase in cls._NEGATIVE:
-            if re.search(r"\b" + re.escape(phrase) + r"\b", text):
+
+        words = text.split()
+        while words and words[0] in cls._CONFIRMATION_LEADING_FILLER:
+            words.pop(0)
+        while words and words[-1] in cls._CONFIRMATION_TRAILING_FILLER:
+            words.pop()
+        if not words:
+            return None
+
+        if words[0] in cls._YES_WORDS:
+            tail_words = words[1:]
+        elif words[0] in cls._NO_WORDS:
+            tail_words = words[1:]
+            tail = " ".join(tail_words)
+            if not tail or tail in cls._STOP_PHRASES:
                 return False
-        for phrase in cls._AFFIRMATIVE:
-            if re.search(r"\b" + re.escape(phrase) + r"\b", text):
-                return True
+            return None  # "no" followed by something else isn't a plain answer
+        else:
+            tail_words = words
+
+        tail = " ".join(tail_words)
+        if not tail and words[0] in cls._YES_WORDS:
+            return True
+        if tail in cls._PROCEED_PHRASES and not (set(tail_words) & set(cls._NEGATION_WORDS)):
+            return True
+        if tail in cls._STOP_PHRASES:
+            return False
         return None
 
     @staticmethod
@@ -486,9 +560,16 @@ class GraceApp:
 
         log.info(f"Resuming parked action with approval={answer}")
         result = await self.agent_loop.resume_pending(approved=answer)
-        response_text = result.get("final_response") or (
-            "Done." if answer else "Alright, I won't do that."
-        )
+        if result.get("status") == "safety_confirmation_required":
+            # The approved step led straight into another one that also needs
+            # confirming (e.g. delete this, then delete that too). Saying
+            # "Done." here would tell the user their real action already
+            # happened and drop the new pending step on the floor unasked.
+            response_text = self._agent_response_text(result)
+        else:
+            response_text = result.get("final_response") or (
+                "Done." if answer else "Alright, I won't do that."
+            )
         await self.response_gen.generate_and_speak_with_text(response_text)
         return True
 
@@ -531,26 +612,54 @@ class GraceApp:
 
         threading.Thread(target=_warm, name="grace-warmup", daemon=True).start()
 
+    async def _run_activation_turn(self) -> None:
+        """Run one activation turn without letting it take Grace down with it.
+
+        The main loop used to catch only KeyboardInterrupt, so any exception
+        escaping a turn - a bad transcript, a dispatcher bug, an LLM client
+        raising something nobody expected - shut Grace down entirely. A user
+        who navigates by voice has no other way to restart it.
+        """
+        try:
+            await self._handle_activation()
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            raise
+        except Exception as e:
+            log.error(f"Activation turn crashed: {e}", exc_info=True)
+            FeedbackSounds.play_error()
+            # Best-effort: _handle_activation already resumes on most exit
+            # paths, but this catches whatever crashed outside that guard.
+            self.wake_word.resume()
+            await self.ws_server.emit({"type": "Idle"})
+
     async def _handle_activation(self):
         """Time one activation cycle end to end, then hand off to the follow-up window.
 
         The follow-up window runs outside this trace so each of its turns can be
         measured on its own rather than inflating the wake-word turn.
         """
+        turn_result = False
         with start_turn("activation") as trace:
             try:
-                await self._handle_activation_turn(trace)
+                turn_result = await self._handle_activation_turn(trace)
             finally:
                 log.info(trace.summary())
                 try:
                     await self.ws_server.emit({"type": "TurnTrace", "trace": trace.to_dict()})
                 except Exception as e:
                     log.debug(f"Failed to emit TurnTrace: {e}")
+                # The follow-up window pauses/resumes the detector itself once it
+                # actually starts. Every other exit from this turn - an aborted
+                # False, or an exception below - must resume it here instead, or
+                # "Grace" is never heard again.
+                if turn_result is False:
+                    self.wake_word.resume()
 
-        await self._run_followup_window(timeout_seconds=self.config.followup_timeout_seconds)
+        if turn_result is not False:
+            await self._run_followup_window(timeout_seconds=self.config.followup_timeout_seconds)
 
-    async def _handle_activation_turn(self, trace):
-        """Handle a wake word activation cycle."""
+    async def _handle_activation_turn(self, trace) -> bool:
+        """Handle a wake word activation cycle. Returns False if aborted/silence, True on turn success."""
         # 1. Play activation chime
         with trace.stage("chime"):
             FeedbackSounds.play_chime()
@@ -570,26 +679,38 @@ class GraceApp:
         # Anything captured while the previous turn was still working is stale.
         self.pump.drain()
 
-        # Listen for speech (max 30s to avoid hanging forever)
+        # Listen for speech with initial silence timeout (default 6s) and maximum timeout (30s)
         import time
         listen_start = time.time()
         max_listen_seconds = 30
+        initial_timeout = self.config.initial_listen_timeout_seconds
+        has_speech_started = False
+
         with trace.stage("listen") as listen_stage:
             while self._running:
                 try:
                     chunk = await self.pump.get(timeout=1.0)
+                    now = time.time()
                     if chunk is None:
-                        if time.time() - listen_start > max_listen_seconds:
+                        if not has_speech_started and (now - listen_start > initial_timeout):
+                            log.info(f"Initial listen timeout reached ({initial_timeout}s without speech).")
+                            break
+                        if now - listen_start > max_listen_seconds:
                             log.info("Listen timeout reached.")
                             break
                         continue
                     audio_buffer.extend(chunk)
                     if log.isEnabledFor(logging.DEBUG):
                         log.debug(f"Audio chunk: {len(chunk)} bytes, RMS={self.capture.get_rms(chunk):.1f}")
+                    if self.capture.get_rms(chunk) > self.config.whisper_vad_threshold * 32767:
+                        has_speech_started = True
                     if self.vad.process_chunk(chunk, self.capture):
                         log.info(f"VAD turn-end detected after {len(audio_buffer)} bytes")
                         break
-                    if time.time() - listen_start > max_listen_seconds:
+                    if not has_speech_started and (now - listen_start > initial_timeout):
+                        log.info(f"Initial listen timeout reached ({initial_timeout}s without speech).")
+                        break
+                    if now - listen_start > max_listen_seconds:
                         log.info("Listen timeout reached.")
                         break
                 except Exception as e:
@@ -599,8 +720,7 @@ class GraceApp:
 
         # 3. Transcribe. GPU inference is seconds of blocking work, so it goes
         # to a worker thread rather than stalling the WebSocket server.
-        # A transcription failure ends the turn; it must never end the process,
-        # which is what an unhandled model-load error used to do.
+        # A transcription failure ends the turn; it must never end the process.
         try:
             async with trace.stage("whisper"):
                 self.whisper.add_buffer(audio_buffer)
@@ -608,26 +728,50 @@ class GraceApp:
         except Exception as e:
             log.error(f"Transcription failed: {e}", exc_info=True)
             self.whisper.reset_buffer()
+            FeedbackSounds.play_error()
             await self.ws_server.emit({"type": "ConversationFinished"})
             await self.ws_server.emit({"type": "Idle"})
-            return
+            return False
 
         if not transcript.strip():
             log.info("No speech detected.")
+            FeedbackSounds.play_cancel()
             await self.ws_server.emit({"type": "ConversationFinished"})
-            await asyncio.sleep(2.6)
             await self.ws_server.emit({"type": "Idle"})
-            return
+            return False
 
         log.info(f"Transcribed: '{transcript}'")
         await self.ws_server.emit({"type": "FinalTranscript", "text": transcript})
         await self.ws_server.emit({"type": "ListeningStopped"})
 
+        clean_transcript = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
+
+        # Immediate voice stop reflex
+        if clean_transcript in self._STOP_COMMANDS or clean_transcript.startswith("stop ") or clean_transcript == "stop":
+            log.info(f"Immediate stop command detected: '{transcript}'")
+            self.response_gen.stop_speaking()
+            if self.agent_loop.has_pending_confirmation:
+                self.agent_loop.cancel_pending()
+            FeedbackSounds.play_cancel()
+            await self.ws_server.emit({"type": "ConversationFinished"})
+            await self.ws_server.emit({"type": "Idle"})
+            return False
+
+        # Immediate voice replay reflex
+        if clean_transcript in self._REPEAT_COMMANDS:
+            log.info(f"Immediate repeat command detected: '{transcript}'")
+            if self._last_spoken_text:
+                await self._speak_response(self._last_spoken_text)
+            else:
+                await self._speak_response("I haven't said anything yet.")
+            await self.ws_server.emit({"type": "ConversationFinished"})
+            return True
+
         # 3b. If a step is parked waiting for a yes/no, this utterance answers it.
         if self.agent_loop.has_pending_confirmation:
             if await self._resolve_pending_confirmation(transcript):
                 await self.ws_server.emit({"type": "ConversationFinished"})
-                return
+                return True
 
         # 4. Generate intent
         await self.ws_server.emit({"type": "UnderstandingStarted", "label": "Understanding request\u2026"})
@@ -641,11 +785,11 @@ class GraceApp:
         except RateLimitError as e:
             log.error(f"Intent generation rate limited: {e}")
             await self.ws_server.emit({"type": "UnderstandingFinished"})
-            await self.response_gen.generate_and_speak_with_text(
+            await self._speak_response(
                 "I've hit my request limit for now. Please try again in a moment."
             )
             await self.ws_server.emit({"type": "ConversationFinished"})
-            return
+            return True
 
         intent = None
         if intent_json:
@@ -681,13 +825,13 @@ class GraceApp:
             response_text = self._agent_response_text(agent_res)
             if response_text:
                 async with trace.stage("speak"):
-                    await self.response_gen.generate_and_speak_with_text(response_text)
+                    await self._speak_response(response_text)
         elif (intent is not None and intent.is_conversation) or complexity == TaskComplexity.CONVERSATION:
             # Use the response from intent generation directly (already generated by the intent LLM call)
             response_text = intent.response if intent and intent.response else "I'm here to help! What can I do for you today?"
             log.info(f"Speaking conversational response: '{response_text[:100]}...'")
             async with trace.stage("speak"):
-                await self.response_gen.generate_and_speak_with_text(response_text)
+                await self._speak_response(response_text)
         else:
             log.info(f"Fast-path executing tool '{intent.tool}' with params={intent.params}")
             async with trace.stage("dispatch"):
@@ -696,7 +840,7 @@ class GraceApp:
 
             if await self._park_if_confirmation_required(intent, result):
                 await self.ws_server.emit({"type": "ConversationFinished"})
-                return
+                return True
 
             response_text = None
             if intent.is_conversation and intent.response:
@@ -707,9 +851,10 @@ class GraceApp:
             if response_text:
                 log.info(f"Speaking tool result: '{response_text[:100]}...' ({len(response_text)} chars)")
                 async with trace.stage("speak"):
-                    await self.response_gen.generate_and_speak_with_text(response_text)
+                    await self._speak_response(response_text)
 
         await self.ws_server.emit({"type": "ConversationFinished"})
+        return True
 
     async def _run_followup_window(self, timeout_seconds: int = 10):
         """Keep listening without a wake word, restarting the window after each turn.
@@ -722,6 +867,7 @@ class GraceApp:
 
         log.info(f"Entering active {timeout_seconds}s follow-up listening window...")
         self.wake_word.pause()
+        FeedbackSounds.play_listening()
 
         while self._running:
             await self.ws_server.emit({"type": "FollowupListeningStarted", "timeout": timeout_seconds})
@@ -763,6 +909,12 @@ class GraceApp:
                 break
 
         log.info("Follow-up listening window timed out. Returning to idle.")
+        if self.agent_loop.has_pending_confirmation:
+            # A parked delete or app-close that nobody answered must not still
+            # be approvable once we're back to idle and a new "yes" could be
+            # about something else entirely.
+            log.info("Cancelling a confirmation that timed out unanswered.")
+            self.agent_loop.cancel_pending()
         self.wake_word.resume()
         self._flush_mic_buffer()
         await self.ws_server.emit({"type": "Idle"})
@@ -773,20 +925,41 @@ class GraceApp:
         await self.ws_server.emit({"type": "FinalTranscript", "text": transcript})
 
         # Cancel any ongoing TTS output if user barged in
-        self.response_gen.tts_player.stop()
+        self.response_gen.stop_speaking()
+
+        clean_transcript = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
+
+        # Immediate voice stop reflex in follow-up window
+        if clean_transcript in self._STOP_COMMANDS or clean_transcript.startswith("stop ") or clean_transcript == "stop":
+            log.info(f"Follow-up stop command detected: '{transcript}'")
+            self.response_gen.stop_speaking()
+            if self.agent_loop.has_pending_confirmation:
+                self.agent_loop.cancel_pending()
+            FeedbackSounds.play_cancel()
+            return False
+
+        # Immediate voice repeat reflex in follow-up window
+        if clean_transcript in self._REPEAT_COMMANDS:
+            log.info(f"Follow-up repeat command detected: '{transcript}'")
+            if self._last_spoken_text:
+                await self._speak_response(self._last_spoken_text)
+            else:
+                await self._speak_response("I haven't said anything yet.")
+            return True
 
         if self.agent_loop.has_pending_confirmation:
             if await self._resolve_pending_confirmation(transcript):
                 return True
 
         try:
-            intent_json = await self.gemma.generate_intent(
-                user_message=transcript,
-                system_prompt=self.intent_prompt,
-            )
+            async with stage("intent_llm"):
+                intent_json = await self.gemma.generate_intent(
+                    user_message=transcript,
+                    system_prompt=self.intent_prompt,
+                )
         except RateLimitError as e:
             log.error(f"Follow-up intent generation rate limited: {e}")
-            await self.response_gen.generate_and_speak_with_text(
+            await self._speak_response(
                 "I've hit my request limit for now. Please try again in a moment."
             )
             return True
@@ -808,7 +981,7 @@ class GraceApp:
             agent_res = await self.agent_loop.run(user_goal=transcript)
             response_text = self._agent_response_text(agent_res)
             if response_text:
-                await self.response_gen.generate_and_speak_with_text(response_text)
+                await self._speak_response(response_text)
             return True
 
         if intent and not intent.is_conversation:
@@ -817,11 +990,11 @@ class GraceApp:
                 return True
             response_text = result.get("text")
             if response_text:
-                await self.response_gen.generate_and_speak_with_text(response_text)
+                await self._speak_response(response_text)
             return True
 
         if intent and intent.response:
-            await self.response_gen.generate_and_speak_with_text(intent.response)
+            await self._speak_response(intent.response)
             return True
 
         return False

@@ -138,6 +138,7 @@ class TTSPlayer:
             self._queue.clear()
             self._cv.notify_all()
         thread = self._thread
+        self._thread = None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2.0)
         self._close_stream()
@@ -157,6 +158,11 @@ class TTSPlayer:
         """True while audio is being written or is still queued."""
         with self._cv:
             return self._active or bool(self._queue)
+
+    @property
+    def is_playing(self) -> bool:
+        """True while audio is being written or is still queued."""
+        return self._playing
 
     # -- internals -------------------------------------------------------
 

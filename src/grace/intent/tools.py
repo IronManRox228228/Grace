@@ -243,6 +243,26 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
         ],
         is_system=True,
     ),
+    ToolDefinition(
+        name="undo",
+        description="Undo the last action, text edit, or command using Windows Undo (Ctrl+Z).",
+        params=[],
+        is_system=True,
+    ),
+    ToolDefinition(
+        name="describe_screen",
+        description="Describe what is currently visible on the screen, including the active window and main interactive controls.",
+        params=[],
+        is_system=True,
+    ),
+    ToolDefinition(
+        name="set_speech_rate",
+        description="Set the TTS speech speed rate multiplier (e.g. 0.8 for slower, 1.0 for normal, 1.2 for faster).",
+        params=[
+            ToolParam("rate", "Speech rate speed multiplier (e.g. 0.5 to 2.0, where 1.0 is normal)", True, "1.0", "float"),
+        ],
+        is_system=True,
+    ),
 ]
 
 ALL_TOOLS: list[ToolDefinition] = CUA_TOOLS + SYSTEM_TOOLS

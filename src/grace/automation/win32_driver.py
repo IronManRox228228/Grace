@@ -216,8 +216,8 @@ class Win32Driver:
                 vx, vy, vw, vh = 0, 0, 1920, 1080
 
             # Normalize coordinates to 0..65535 absolute range across virtual desk
-            norm_x = int((x - vx) * 65535 / vw)
-            norm_y = int((y - vy) * 65535 / vh)
+            norm_x = int((x - vx) * 65535 / max(vw - 1, 1))
+            norm_y = int((y - vy) * 65535 / max(vh - 1, 1))
 
             flags_move = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
             flags_down = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_LEFTDOWN

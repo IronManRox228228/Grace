@@ -46,14 +46,21 @@ class ResponseGenerator:
         self._player = tts_player
         self._ws = ws_server
         self._system_prompt: Optional[str] = None
+        self._stopped: bool = False
 
     @property
     def tts_player(self) -> TTSPlayer:
         """Access the underlying TTS player."""
         return self._player
 
+    @property
+    def is_speaking(self) -> bool:
+        """True while speech is actively being synthesized or played."""
+        return self._player.is_playing
+
     def stop_speaking(self):
-        """Immediately stop current TTS audio playback."""
+        """Immediately stop current TTS audio playback and abort ongoing synthesis."""
+        self._stopped = True
         self._player.stop()
 
     def set_system_prompt(self, prompt: str):
@@ -70,6 +77,7 @@ class ResponseGenerator:
         and routes each sentence immediately to Kokoro for synthesis & playback.
         The first sentence begins playing while subsequent sentences are being generated.
         """
+        self._stopped = False
         if not self._system_prompt:
             logger.warning("No system prompt set for response generation")
             return False
@@ -99,6 +107,9 @@ class ResponseGenerator:
         sentence_count = 0
 
         async for token in token_stream:
+            if self._stopped:
+                logger.info("generate_and_speak: speech aborted by stop request")
+                break
             sentence_buffer += token
 
             # Cheap regex gate, then confirm with the abbreviation-aware
@@ -114,10 +125,14 @@ class ResponseGenerator:
             complete, sentence_buffer = parts[:-1], parts[-1]
 
             for complete_sentence in complete:
+                if self._stopped:
+                    break
                 sentence_count += 1
                 logger.info(f"Streaming TTS sentence #{sentence_count}: '{complete_sentence[:60]}'")
                 async with stage(f"synth#{sentence_count}"):
                     wav = await asyncio.to_thread(self._kokoro.synthesize, complete_sentence, voice)
+                if self._stopped:
+                    break
                 if wav:
                     self._player.play(wav)
                     mark_event("first_audio_out")
@@ -127,24 +142,26 @@ class ResponseGenerator:
                         await self._ws.emit({"type": "ResponseChunk", "text": chunk_text})
                         await self._ws.emit({"type": "SpeechChunk"})
 
-        final_sentence = sentence_buffer.strip()
-        if final_sentence:
-            sentence_count += 1
-            logger.info(f"Streaming TTS final sentence #{sentence_count}: '{final_sentence[:60]}'")
-            async with stage(f"synth#{sentence_count}"):
-                wav = await asyncio.to_thread(self._kokoro.synthesize, final_sentence, voice)
-            if wav:
-                self._player.play(wav)
-                mark_event("first_audio_out")
-                spoken_any = True
-                if self._ws:
-                    chunk_text = f" {final_sentence}" if sentence_count > 1 else final_sentence
-                    await self._ws.emit({"type": "ResponseChunk", "text": chunk_text})
-                    await self._ws.emit({"type": "SpeechChunk"})
+        if not self._stopped:
+            final_sentence = sentence_buffer.strip()
+            if final_sentence:
+                sentence_count += 1
+                logger.info(f"Streaming TTS final sentence #{sentence_count}: '{final_sentence[:60]}'")
+                async with stage(f"synth#{sentence_count}"):
+                    wav = await asyncio.to_thread(self._kokoro.synthesize, final_sentence, voice)
+                if not self._stopped and wav:
+                    self._player.play(wav)
+                    mark_event("first_audio_out")
+                    spoken_any = True
+                    if self._ws:
+                        chunk_text = f" {final_sentence}" if sentence_count > 1 else final_sentence
+                        await self._ws.emit({"type": "ResponseChunk", "text": chunk_text})
+                        await self._ws.emit({"type": "SpeechChunk"})
 
         # Wait for TTS player to finish playing audio out loud
-        async with stage("playback_drain"):
-            await asyncio.to_thread(self._player.wait)
+        if not self._stopped:
+            async with stage("playback_drain"):
+                await asyncio.to_thread(self._player.wait)
 
         if self._ws:
             await self._ws.emit({"type": "SpeechFinished"})
@@ -185,6 +202,7 @@ class ResponseGenerator:
         Each sentence is sent to the Kokoro engine immediately.
         The TTS player queues them sequentially.
         """
+        self._stopped = False
         success = False
         if self._ws:
             await self._ws.emit({"type": "SpeechStarted"})
@@ -195,16 +213,23 @@ class ResponseGenerator:
         pending = self._submit(sentences[0], voice)
 
         for i, sentence in enumerate(sentences):
+            if self._stopped:
+                logger.info("TTS aborted by stop_speaking")
+                break
             logger.debug(f"TTS sentence {i+1}/{len(sentences)}: '{sentence[:80]}'")
 
             next_pending = (
-                self._submit(sentences[i + 1], voice) if i + 1 < len(sentences) else None
+                self._submit(sentences[i + 1], voice) if (i + 1 < len(sentences) and not self._stopped) else None
             )
 
             async with stage(f"synth#{i+1}") as synth_stage:
                 wav = await asyncio.to_thread(self._resolve, pending, sentence, voice)
                 synth_stage.detail(f"{len(wav) if wav else 0} bytes")
             pending = next_pending
+
+            if self._stopped:
+                logger.info("TTS aborted by stop_speaking after synth")
+                break
 
             if wav:
                 self._player.play(wav)
@@ -221,8 +246,9 @@ class ResponseGenerator:
                 logger.warning(f"TTS sentence {i+1}/{len(sentences)} FAILED: '{sentence[:50]}'")
 
         # Wait for TTS player to finish playing audio out loud
-        async with stage("playback_drain"):
-            await asyncio.to_thread(self._player.wait)
+        if not self._stopped:
+            async with stage("playback_drain"):
+                await asyncio.to_thread(self._player.wait)
 
         if self._ws:
             await self._ws.emit({"type": "SpeechFinished"})

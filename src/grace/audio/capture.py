@@ -1,4 +1,5 @@
 import logging
+import struct
 from typing import Optional
 
 import numpy as np
@@ -132,9 +133,9 @@ class AudioCapture:
 
     def get_chunk_as_int16(self) -> list[int]:
         """Read one chunk and return as list of int16 values."""
-        import struct
-
         raw = self.get_chunk()
+        if len(raw) % 2 != 0:
+            raw = raw[:-1]
         return list(struct.unpack(f"<{len(raw) // 2}h", raw))
 
     def get_rms(self, chunk: bytes) -> float:

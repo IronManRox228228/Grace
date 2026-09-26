@@ -93,7 +93,6 @@ class WakeWordDetector:
             try:
                 frame = self._audio_queue.get(timeout=0.1)
             except queue.Empty:
-                self._flush_audio_buffer()
                 continue
 
             self._audio_buffer.extend(frame)

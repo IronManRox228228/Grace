@@ -19,10 +19,13 @@ class TestTTSPlayer:
     def test_stop_without_play(self):
         """Test stop() without prior play."""
         player = TTSPlayer()
-        player.stop()  # Should not raise
+        player.stop()
+        assert player.queue_size == 0
+        assert not player._playing
 
     def test_play_sync_invalid_wav(self):
         """Test play_sync() with invalid WAV data."""
         player = TTSPlayer()
-        # Invalid WAV data - should not crash
+        # Invalid WAV data - should not crash and queue should remain empty
         player.play_sync(b"not a wav file")
+        assert player.queue_size == 0

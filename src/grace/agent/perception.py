@@ -632,12 +632,15 @@ class PerceptionEngine:
                     stream = streams.InMemoryRandomAccessStream()
                     writer = streams.DataWriter(stream)
                     writer.write_bytes(img_bytes)
-                    _run_async(writer.store_async())
-                    stream.seek(0)
 
-                    decoder = _run_async(imaging.BitmapDecoder.create_async(stream))
-                    bitmap = _run_async(decoder.get_software_bitmap_async())
-                    result = _run_async(engine.recognize_async(bitmap))
+                    async def _run_winrt_pipeline():
+                        await writer.store_async()
+                        stream.seek(0)
+                        decoder = await imaging.BitmapDecoder.create_async(stream)
+                        bitmap = await decoder.get_software_bitmap_async()
+                        return await engine.recognize_async(bitmap)
+
+                    result = _run_async(_run_winrt_pipeline())
 
                     lines = []
                     for line in result.lines:

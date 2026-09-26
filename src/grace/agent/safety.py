@@ -49,14 +49,24 @@ class SafetyGuard:
         "ctrl+w",
         "ctrl+shift+w",
         "ctrl+q",
+        "ctrl+f4",
+        "shift+delete",
+        "win+l",
     }
 
-    # X11-style keysyms the CUA layer accepts, mapped to their plain names.
+    # X11-style keysyms and pyautogui's own native names, both mapped to their
+    # plain canonical form. The planner (and pyautogui itself) uses either
+    # depending on the path a key press took, so only aliasing one family let
+    # requests like "altleft+f4" or "ctrlleft+w" slip past this guard unseen.
     _KEY_ALIASES = {
         "control_l": "ctrl", "control_r": "ctrl", "control": "ctrl",
         "shift_l": "shift", "shift_r": "shift",
         "alt_l": "alt", "alt_r": "alt",
         "super_l": "win", "super_r": "win",
+        "ctrlleft": "ctrl", "ctrlright": "ctrl",
+        "altleft": "alt", "altright": "alt",
+        "shiftleft": "shift", "shiftright": "shift",
+        "winleft": "win", "winright": "win", "super": "win",
     }
 
     @classmethod

@@ -131,3 +131,59 @@ class TestAppIndexer:
         indexer = AppIndexer()
         res = indexer.launch("nonexistent_fake_app_12345")
         assert res["status"] in ("ok", "error")
+
+
+class TestLaunchIsShellSafe:
+    """`launch()` used to fall back to `cmd.exe /c start "" <name>`, and cmd
+    re-parses that argument for its own &|<>^ syntax - so a name containing
+    one of those could run a second, arbitrary command.
+
+    Uses `temp_cache` (see above) so construction stubs the scan instead of
+    paying for a real Program Files glob and Get-StartApps call per test.
+    """
+
+    def test_unsafe_characters_are_rejected_before_any_launch_attempt(self, temp_cache, monkeypatch):
+        indexer = AppIndexer()
+        run_calls = []
+        monkeypatch.setattr(app_indexer_module.subprocess, "run", lambda *a, **k: run_calls.append(a))
+        monkeypatch.setattr(app_indexer_module.os, "startfile", lambda *a, **k: run_calls.append(a))
+
+        res = indexer.launch("notepad&calc")
+
+        assert res["status"] == "error"
+        assert run_calls == [], "an unsafe name must never reach a process launch"
+
+    def test_uwp_fallback_uses_explorer_not_cmd(self, temp_cache, monkeypatch):
+        indexer = AppIndexer()  # _uwp_apps == {"stubuwp": "Stub.App_8wekyb!App"}
+        monkeypatch.setattr(
+            app_indexer_module.os, "startfile",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("blocked")),
+        )
+        run_calls = []
+
+        def fake_run(args, **kwargs):
+            run_calls.append(args)
+            return object()
+
+        monkeypatch.setattr(app_indexer_module.subprocess, "run", fake_run)
+
+        res = indexer.launch("stubuwp")
+
+        assert res["status"] == "ok"
+        assert run_calls == [["explorer.exe", "shell:AppsFolder\\Stub.App_8wekyb!App"]]
+
+    def test_unresolved_bare_name_fallback_reports_failure_honestly(self, temp_cache, monkeypatch):
+        # No cmd.exe fallback here either: an unresolved name is arbitrary
+        # text, and Windows either can open it directly or it cannot.
+        indexer = AppIndexer()
+        run_calls = []
+        monkeypatch.setattr(app_indexer_module.subprocess, "run", lambda *a, **k: run_calls.append(a))
+        monkeypatch.setattr(
+            app_indexer_module.os, "startfile",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("no association")),
+        )
+
+        res = indexer.launch("totally_unresolvable_thing")
+
+        assert res["status"] == "error"
+        assert run_calls == []
