@@ -219,6 +219,10 @@ class GraceApp:
             "Keep replies under 3 sentences unless the user asks for detail."
         )
 
+    # An activation that hears nothing still holds the pill open this long,
+    # counted from the wake word, so it never flashes open and shut.
+    MIN_WAKE_TO_IDLE_SECONDS = 3.0
+
     _STOP_COMMANDS = {
         "stop", "cancel", "never mind", "nevermind", "quiet", "be quiet",
         "shut up", "pause", "halt", "stop speaking", "stop that", "abort",
@@ -735,6 +739,9 @@ class GraceApp:
 
         if not transcript.strip():
             log.info("No speech detected.")
+            remaining = self.MIN_WAKE_TO_IDLE_SECONDS - (time.time() - listen_start)
+            if remaining > 0:
+                await asyncio.sleep(remaining)
             FeedbackSounds.play_cancel()
             await self.ws_server.emit({"type": "ConversationFinished"})
             await self.ws_server.emit({"type": "Idle"})
