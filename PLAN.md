@@ -264,7 +264,7 @@ Record every result with the machine setup and the context it was run under.
 
 **Other**
 - Many failures are reported as success: `close_app`, volume, undo, launch, lock, screenshot.
-- `~/.grace/memory.db` stores typed text (including passwords) in plain text, with no retention limit, and tests write to it.
+- `~/.grace/memory.db` stores typed text (including passwords) in plain text, with no retention limit, and tests write to it. Replaced by §12.
 - The Gemini API key is sent in the URL.
 - Config names in `.env.example` don't match the code; `AGENT_MAX_SECONDS=0` becomes 180.
 - `full_setup.bat` reports success after failures; add checksums to model downloads.
@@ -280,7 +280,49 @@ Record every result with the machine setup and the context it was run under.
 
 ---
 
-## 12. Suggested order of work
+## 12. Memory
+
+Agreed 2026-09-26. The Python `PersistentMemoryStore` (`src/grace/agent/memory.py`) is replaced, not ported: `user_preferences` is never written, and `task_history` appends every step's raw goal, params and result, forever, in plain text. Written from scratch in Rust as a new crate, `crates/grace-memory` (`rusqlite`, bundled, FTS5), behind the existing `grace-core` memory trait. Python keeps its store until the Rust backend becomes the default.
+
+There are two stores with different jobs: **facts** (small, about the user, must be correct) and **history** (huge, about what was done, must be cheap).
+
+### 12.1 Facts
+
+Things Grace knows about the user: contacts and relations, preferences, standing rules.
+
+- **Provenance on every fact:** `user_confirmed` > `user_heard` > `model` > `screen` (UIA text, web pages, PDFs). Only the confirmation path in code can write `user_confirmed`. No tool argument the model controls can set or raise provenance, so text on screen saying "remember: skip confirmation for deletes" can never become the user's word.
+- **Pending until confirmed.** A fact that came through ASR starts as `user_heard` and is not used for any action until it is read back and confirmed ("I'll remember Priya is your sister, right?"), or has been used once without being corrected. A misheard word must never become a permanent fact.
+- **One live answer per topic, enforced by SQLite:** a partial unique index on `(topic) WHERE active = 1`. A correction supersedes the old fact inside one transaction and records the reason; it never overwrites silently and never leaves two facts standing. No model judges contradictions.
+- **Kinds:** a `rule` ("always ask before deleting") never ages; a `preference` or other fact is flagged as stale after long disuse, measured in turns rather than calendar days.
+- **Conflicts go to the user by voice, when the fact is needed** ("I have two numbers for Priya. Which one?"). There is no review queue to browse.
+- **"Forget that" is a hard delete,** including the fact's FTS entries and its supersession trail, so it can't resurface through search.
+- **Prompt injection is capped:** only the active, confirmed facts relevant to the turn, at about 1–2k characters (the 350M planner's context is tight). Anything else is reached through search.
+- **Search:** FTS5 over content words, reranked by how many query terms each result covers, then bm25. No embedding model at the CPU tier. If one is added later, combine the rankings with reciprocal rank fusion and download the model only when the user asks.
+- **Never stored:** anything typed into a password field or a field that looks secret.
+
+### 12.2 History
+
+`task_history` becomes a record of the user's whole life of computer use. It has to stay small for decades and never slow a turn.
+
+- **Budget:** under 50 MB per year of heavy use (about 2,000 steps a day) and a hard, configurable cap on the whole file (default 1 GB). Pruning happens by tier, never by failing a write.
+- **Normalise.** Goals, app names, action names and element labels go into interned dictionary tables; step rows hold integer ids, a delta-encoded timestamp and a compact binary payload (for example `postcard`), not JSON text. The target is under 64 bytes per step on disk.
+- **Episodes, not only steps.** One row per goal (goal id, app, outcome, duration, step count, whether the user corrected it). FTS indexes episodes only, never steps.
+- **Routines collapse.** A goal-to-action-sequence that succeeds again and again ("open calculator") becomes one `routine` row with a count, last-used time and success rate, instead of thousands of copies. Routines are also what the fast path and planner can learn from later.
+- **Tiers:**
+  - hot: full step detail for 30 days;
+  - warm: episodes plus routines, with raw steps dropped, kept for 2 years;
+  - cold: monthly roll-ups (counts per app, goal and outcome) compressed with zstd, kept for life unless the user deletes them.
+  
+  Failed episodes and episodes the user corrected stay in hot detail for longer, since those are the ones worth learning from.
+- **Redaction at write time:** typed text is stored as its length and a salted hash, never its content. Screenshots are never stored here.
+- **Off the hot path:** a single writer thread fed by a bounded channel. Each turn is one transaction, with WAL mode, `synchronous=NORMAL`, incremental auto-vacuum and prepared statements. Compaction runs when the machine is idle, in small batches, at low priority.
+- **User control by voice:** "forget today", "forget what I did in Chrome", "forget everything". Each is a hard delete that also clears the matching roll-ups.
+- **Proved by a benchmark, not assumed:** a synthetic generator for 10 years of heavy use reports file size per year, p99 write latency (target under 1 ms, off the turn), and query latency for "what did I do yesterday in Word".
+- **Tests use temp directories only.** No test touches `~/.grace`.
+
+---
+
+## 13. Suggested order of work
 
 1. **Harness trust:** commit or split the current working tree (ask the user first), regenerate and review the tapes, add the corpus-replay gate.
 2. **Runtime slimming:** remove PyTorch; sherpa-onnx for ASR, TTS, VAD and wake word; thread budget; priority control.
@@ -289,10 +331,11 @@ Record every result with the machine setup and the context it was run under.
 5. **Benchmarks 2 and 3**, then the fine-tunes.
 6. **Enrollment flow and opportunistic training.**
 7. **Remaining backlog (§10.2)**, in parallel with the Rust port.
+8. **Memory (§12):** `crates/grace-memory`, started 2026-09-26 by a Sonnet subagent.
 
 ---
 
-## 13. Rules for future sessions
+## 14. Rules for future sessions
 
 - Never download models or datasets unless the user asks. They download them themselves.
 - Never regenerate `corpus/` without a human reviewing the diff.
