@@ -1,0 +1,18 @@
+[package]
+name = "grace-harness"
+description = "Tape reader + replay grader for corpus/, matching src/grace/harness/tape.py and replay.py."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+grace-contract.workspace = true
+grace-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+
+[[bin]]
+name = "grace-replay"
+path = "src/bin/replay.rs"

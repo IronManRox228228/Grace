@@ -19,6 +19,9 @@ tauri-build = { workspace = true, features = [] }
 tauri = { workspace = true, features = [] }
 tauri-plugin-global-shortcut.workspace = true
 serde.workspace = true
+grace-backend.workspace = true
+grace-contract.workspace = true
+tokio.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [

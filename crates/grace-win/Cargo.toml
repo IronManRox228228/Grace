@@ -1,0 +1,23 @@
+[package]
+name = "grace-win"
+description = "UIA inspector, win32 driver, app indexer, DPI and computer-use action traits. Concrete Windows-API implementations are behind cfg(windows) and traits; see PORT_STATUS.md for what's stubbed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+grace-core.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Accessibility",
+    "Win32_System_Com",
+    "Win32_UI_HiDpi",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }

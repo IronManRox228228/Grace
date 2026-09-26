@@ -1,0 +1,14 @@
+[package]
+name = "grace-core"
+description = "Config, safety guard, capability router/pattern fast path, sentence splitting, and other pure ported logic."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+grace-contract.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+thiserror.workspace = true

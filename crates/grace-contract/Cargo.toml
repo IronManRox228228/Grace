@@ -1,0 +1,14 @@
+[package]
+name = "grace-contract"
+description = "The frozen backend -> frontend event contract (contract/grace-events.schema.json), as Rust types."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true

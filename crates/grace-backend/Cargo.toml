@@ -1,0 +1,21 @@
+[package]
+name = "grace-backend"
+description = "The Rust backend's WebSocket event server, ported from src/grace/ws_server.py's Origin allowlist (ship-blocker #5). This is the seam src-tauri/src/backend.rs can point at instead of the Python child; see PORT_STATUS.md for exactly how much of the turn pipeline is wired up behind it (today: none - it proves the wiring, not a working turn)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+grace-contract.workspace = true
+grace-core.workspace = true
+grace-models.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tokio-tungstenite = { workspace = true, features = [] }
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "test-util"] }

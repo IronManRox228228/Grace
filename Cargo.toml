@@ -1,5 +1,14 @@
 [workspace]
-members = ["src-tauri"]
+members = [
+    "src-tauri",
+    "crates/grace-contract",
+    "crates/grace-core",
+    "crates/grace-audio",
+    "crates/grace-models",
+    "crates/grace-win",
+    "crates/grace-harness",
+    "crates/grace-backend",
+]
 resolver = "2"
 
 # Shared across every crate the migration adds. Phase 2 onwards puts the ported
@@ -17,7 +26,24 @@ tauri = "2.11"
 tauri-build = "2.6"
 tauri-plugin-global-shortcut = "2.3"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 windows = "0.62"
+# Ported backend crates (see crates/*). Kept as workspace deps so every crate
+# resolves to the same version.
+grace-contract = { path = "crates/grace-contract" }
+grace-core = { path = "crates/grace-core" }
+grace-audio = { path = "crates/grace-audio" }
+grace-models = { path = "crates/grace-models" }
+grace-win = { path = "crates/grace-win" }
+grace-harness = { path = "crates/grace-harness" }
+grace-backend = { path = "crates/grace-backend" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+tungstenite = "0.24"
+tokio-tungstenite = "0.24"
+regex = "1"
+thiserror = "2"
+anyhow = "1"
+jsonschema = "0.26"
 
 [profile.release]
 codegen-units = 1

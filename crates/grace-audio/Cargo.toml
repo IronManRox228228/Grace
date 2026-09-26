@@ -1,0 +1,11 @@
+[package]
+name = "grace-audio"
+description = "Capture/pump/VAD/wake-word traits, ported behind traits so tests never touch a real microphone or speaker."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+grace-core.workspace = true
+thiserror.workspace = true

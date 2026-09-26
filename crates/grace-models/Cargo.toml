@@ -1,0 +1,15 @@
+[package]
+name = "grace-models"
+description = "Traits for STT, LLM, TTS, element scoring and vision grounding, plus concrete HTTP backends. Native runtime bindings (sherpa-rs, llama.cpp, ort) are stubbed; see PORT_STATUS.md."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+grace-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
