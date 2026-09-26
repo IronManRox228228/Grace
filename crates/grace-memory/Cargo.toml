@@ -1,0 +1,25 @@
+[package]
+name = "grace-memory"
+description = "Rust replacement for src/grace/agent/memory.py's PersistentMemoryStore (PLAN.md §12): a facts store (small, about the user, must be correct) and a history store (huge, about what was done, must be cheap), both on SQLite/FTS5, behind grace-core's PersistentStore trait."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+grace-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# bundled: compile SQLite from source rather than link the system copy, so a
+# release build behaves the same on every machine. fts5: SQLite ships FTS5
+# disabled by default; this feature turns SQLITE_ENABLE_FTS5 on in the
+# bundled build (confirmed at crate-build time - see tests::fts5_is_available).
+rusqlite = { version = "0.32", features = ["bundled-full"] }
+# Compact binary step payloads (§12.2: "not JSON text").
+postcard = { version = "1", features = ["use-std"] }
+# Monthly cold-tier roll-ups ("monthly zstd roll-ups").
+zstd = "0.13"
+
+[dev-dependencies]
+tempfile = "3"

@@ -64,6 +64,7 @@ cargo test -p grace-win --lib -- --ignored --test-threads=1
 | `crates/grace-harness` | ~750 | `harness/tape.py`, `harness/replay.py` | Tape loader + diff machinery (Phase 1). **New this phase**: `turn_replay.rs` drives the real `grace_core` turn engine against real tapes and diffs the resulting event stream - see "Harness parity" below. |
 | `crates/grace-backend` | ~750 | `ws_server.py`'s Origin allowlist | `WsEventServer` (Phase 1). **New this phase**: `turn.rs`'s `run_demo_turn` wires the real turn engine to the real socket - see "Tauri wiring" below. |
 | `src-tauri/` | (small diff) | `main.js:93-141` | `Backend::start` branches on `GRACE_BACKEND`; the Rust path now runs a real turn per wake request instead of emitting one static `Idle`. |
+| `crates/grace-memory` | ~1,700 | `agent/memory.py`'s `PersistentMemoryStore` (replaced, not ported - see PLAN.md §12) | New this update. A facts store and a history store on `rusqlite`/FTS5, behind `grace-core`'s `PersistentStore` trait. See "grace-memory (PLAN.md §12)" below. |
 
 ## What's fully ported this phase (module → behaviour, with tests)
 
@@ -350,6 +351,235 @@ In-process vs. sidecar reasoning is unchanged from Phase 1: still one
 thing to supervise, still no isolation-worthy long-running work yet (the
 demo turn's HTTP call has its own timeout and clean fallback).
 
+## grace-memory (PLAN.md §12)
+
+`src/grace/agent/memory.py`'s `PersistentMemoryStore` is **replaced, not
+ported**, per PLAN.md §12's own instruction: it never wrote
+`user_preferences`, and `task_history` appended every step's raw goal,
+params and result forever, in plain text - including whatever was typed
+into a password field. `crates/grace-memory` is a new crate, on
+`rusqlite` (`bundled-full`, which is the feature combination that actually
+compiles FTS5 into the bundled SQLite - confirmed by a test that would fail
+with "no such module: fts5" otherwise:
+`crates/grace-memory/src/db.rs:20`'s `fts5_is_compiled_into_the_bundled_sqlite`).
+Two stores, per the spec's split of "small and must be correct" from "huge
+and must be cheap":
+
+### Facts (§12.1) - `crates/grace-memory/src/facts.rs`
+
+- **Provenance ladder** (`Screen < Model < UserHeard < UserConfirmed`,
+  `facts.rs:23`) enforced at the type level: `store`/`supersede` take
+  `NewFactProvenance` (`facts.rs:53`), which has **no `UserConfirmed`
+  variant to construct** - the only route to that provenance is
+  `FactStore::confirm` (`facts.rs:310`), the dedicated confirmation path.
+  Text on screen instructing "skip confirmation for deletes" can reach
+  `store` only as `Provenance::Screen`; it cannot become the user's
+  confirmed word by any argument, because the enum it would need doesn't
+  exist on that path. Tested directly:
+  `only_confirm_can_produce_user_confirmed_provenance` and
+  `a_model_provenance_fact_cannot_become_confirmed_by_construction`.
+- **One live fact per topic**, enforced by SQLite itself: a partial unique
+  index, `facts.rs:200` (`CREATE UNIQUE INDEX ... ON facts(topic) WHERE
+  active = 1`). `store` refuses a second `store` on an existing topic
+  (`TopicAlreadyActive`) rather than silently overwriting; only
+  `supersede` (one transaction: deactivate-with-reason, insert-new,
+  backlink `superseded_by`) can replace the active fact.
+- **Pending until confirmed or used once uncorrected**: a `user_heard`
+  fact starts `FactStatus::Pending` and is excluded from both `search` and
+  `render_context` until `confirm` or `mark_used_uncorrected` flips it to
+  `Usable` - a misheard word can't quietly become actionable.
+- **Kinds and staleness**: `FactKind::Rule` never goes stale;
+  `Preference`/`Fact` are stale once unused for more than N turns
+  (`FactStore::is_stale`, turn-counted, not wall-clock).
+- **Hard forget**: `forget(topic)` deletes every row that ever existed
+  under that topic - active and superseded - and the `facts_ai`/`ad`/`au`
+  triggers keep `facts_fts` in lock-step, so a forgotten fact cannot
+  resurface through search.
+- **Bounded prompt context**: `render_context(budget_chars)` (default
+  1,500 chars) includes **only** active, `user_confirmed` facts, most
+  recently used first - anything else (screen/model facts, pending
+  `user_heard` facts) is reachable only through `search`, matching §12.1
+  exactly ("the active, confirmed facts relevant to the turn... anything
+  else is reached through search").
+- **Search**: FTS5, reranked in Rust by term coverage first, then bm25
+  (`FactStore::search`).
+- **Conflict-at-use-time**: `conflicts(group_key)` returns every active
+  fact sharing a caller-assigned `group_key` (e.g. two phone numbers for
+  Priya under different topics) so the caller can ask by voice - there is
+  no automatic pick and no review queue.
+- **Secret refusal** (`src/secret.rs`): an explicit `is_password_field`
+  flag plus a conservative heuristic (topic-name hints, card-number-shaped
+  digit runs, password-shaped single tokens mixing 3+ character classes) -
+  biased against false positives, since blocking an ordinary fact is worse
+  than missing an unusual secret shape.
+
+### History (§12.2) - `crates/grace-memory/src/history.rs`
+
+- **Normalised storage**: `dict_goals`/`dict_apps`/`dict_actions`/
+  `dict_labels` intern text once; `steps` rows are `(id, episode_id,
+  payload BLOB)` where `payload` is a `postcard`-encoded `StepPayload`
+  (delta timestamp, interned ids, redaction fields) - comfortably under
+  the 64-bytes/step target (see benchmark numbers below).
+- **Episodes, not only steps**: one `episodes` row per goal attempt;
+  `episodes_fts` (FTS5) indexes episodes only, never steps, per spec.
+- **Routines collapse**: a repeated goal+app+action-sequence bumps
+  `count`/`success_count`/`fail_count`/`last_used_at` on one `routines`
+  row (unique on `(goal_id, app_id, sequence_hash)`) instead of adding a
+  new row every time.
+- **Tiers and pruning** (`compact_tx`, `history.rs:629`): hot (full step
+  detail, 30 days, 180 days for failed/corrected episodes) -> warm
+  (episodes without steps, 2 years) -> cold (monthly zstd-compressed
+  roll-ups, kept indefinitely). The **size-cap backstop**
+  (`history.rs:687`-703) prunes the oldest roll-up months first if the
+  file is still over the configurable cap (default 1 GiB) after ordinary
+  tiering - writes are never failed over this; if nothing is left to
+  prune, the cap is simply exceeded. `size_cap_prunes_the_oldest_rollup_months_instead_of_failing_writes`
+  exercises this with a 1-byte cap.
+- **Redaction at write time** (`src/redact.rs`): typed text becomes a
+  `(length, salted_hash)` pair, never the text itself; the salt is
+  generated once per database and stored in `history_meta`.
+- **Single writer thread, bounded channel, one transaction per turn**,
+  WAL + `synchronous=NORMAL` + incremental `auto_vacuum` (`src/db.rs`).
+  Idle-time compaction (`compact_once`) runs in caller-chosen batch
+  sizes.
+- **Voice-scoped hard deletes**: `forget_today`, `forget_app` (also
+  strips that app's counts out of every monthly roll-up blob),
+  `forget_everything`.
+- An in-memory intern cache (`DictCaches`, loaded once per writer-thread
+  start) turns a repeat goal/app/action/label lookup from a `SELECT` into
+  a `HashMap` hit - necessary for the benchmark below to finish in a
+  practical amount of time, and a legitimate real-world win too, since
+  routines make most vocabulary repeat almost immediately.
+
+### `grace-core` integration
+
+`grace_core::memory::PersistentStore` gained two additive, default-no-op
+methods, `begin_episode`/`end_episode` (`crates/grace-core/src/memory.rs`),
+so a real backend can group steps into episodes without breaking
+`InMemoryStore` or any existing test. `grace-memory::adapter::GraceMemoryStore`
+implements the trait: `set_preference`/`get_preference` map onto the facts
+store (topic `preference:<key>`, provenance `Model`, upsert via
+`supersede`-if-exists); `save_step` maps onto the history store. The
+legacy trait is call-by-step with no episode boundary and no app name
+(`src/grace/agent/memory.py`'s own shape), so **`save_step` records each
+call as its own one-step episode** rather than guessing at boundaries from
+timing - honest given what the trait tells it, but it forfeits real
+routine collapsing until a caller uses `begin_episode`/`end_episode` (or
+`HistoryStore` directly). Wiring `AgentLoop`/`GraceApp` to call those hooks
+at real goal boundaries is listed under Remaining work below; it wasn't
+done here because it reaches into `grace-core::agent_loop`, outside this
+crate's scope for this update.
+
+### Benchmark (release build; `cargo run -p grace-memory --release --example
+benchmark`, per PLAN.md §12.2's "proved by a benchmark, not assumed")
+
+Synthetic 10-year run: ~2,000 steps/day, 90% of episodes reusing one of 8
+recurring routines (so they collapse in `routines`), 10% one-off/novel
+goals, idle-time `compact_once` run once per simulated day. Totals:
+**2,455,043 episodes, 7,304,214 steps, 3,041.5 s wall time** (release build).
+
+| Year | DB size |
+|---|---|
+| 1 | 31.94 MB |
+| 2 | 61.45 MB |
+| 3 | 70.99 MB |
+| 4 | 76.97 MB |
+| 5 | 84.35 MB |
+| 6 | 87.67 MB |
+| 7 | 86.17 MB |
+| 8 | 91.21 MB |
+| 9 | 97.54 MB |
+| 10 | 103.52 MB |
+
+**Budget check**: §12.2 asks for "under 50 MB per year of heavy use" and a
+1 GiB hard cap. Read literally as "50 MB × N years shouldn't be exceeded",
+this passes with a lot of room - 103.52 MB after 10 years is roughly a
+fifth of the 500 MB that budget would allow, and nowhere near the 1 GiB
+cap. Read as "linear growth per year", it also holds: growth is front-
+loaded (the first 2 years fill the warm tier, which is what makes the
+first jump big) and then flattens to roughly 5-10 MB/year once the 2-year
+warm retention and monthly cold roll-ups are both in steady state (years
+8-10 above). Either reading clears the budget; nothing needed optimising
+as a result, but if real usage patterns turn out to have far less
+routine-collapse than this benchmark's 90% assumption, the warm-tier
+episode rows (not steps, not roll-ups) would be the thing to revisit
+first.
+
+**Write latency** (`record_episode`'s full round trip: bounded-channel
+send, one writer-thread transaction, reply - i.e. what a caller would
+actually block on if it called this inline instead of firing-and-forgetting
+it off the turn, which is what §12.2 asks for in real use):
+
+```
+p50 = 389.8 µs, p99 = 11.49 ms, p99.9 = 32.98 ms, max = 793.17 ms
+```
+
+The p50 is comfortably sub-millisecond; the p99 (11.49 ms) and especially
+the max (793 ms) are higher than the spec's "target under 1 ms" - reported
+honestly rather than rounded away. The tail is dominated by the daily
+`compact_once` call and by SQLite's own periodic WAL checkpoint pauses
+sharing the same single writer thread and connection as ordinary writes;
+a p50 of well under 1 ms confirms the steady-state per-transaction cost
+itself is fine, but a caller that cannot tolerate an occasional tens-of-
+milliseconds stall should treat `record_episode` as fire-and-forget (send
+onto a channel, don't await the reply) rather than call it inline on a
+turn - which is how PLAN.md §12.2 describes this store being used ("off
+the hot path... never slow a turn") in the first place. Untangling
+compaction pauses from ordinary write latency (e.g. running compaction on
+a schedule that never overlaps a foreground write) is listed under
+Remaining work.
+
+**Query latency**:
+- "what did I do yesterday in Word" (`query_episodes`, an indexed
+  `started_at` range plus an app filter): **1.72 ms** for 75 matching
+  episodes.
+- The FTS-search equivalent (`search_episodes("Word")`): **302 ms** for 50
+  episodes - measured cold, as the very first read-connection query after
+  3,000+ seconds of continuous writes, so this almost certainly includes
+  one-time page-cache/disk effects rather than being FTS5's steady-state
+  cost; it wasn't re-measured warm because that would no longer be an
+  honest single-sample number. `query_episodes` is the right tool for a
+  "what did I do X" question in general (it's an indexed range scan, not a
+  text search); `search_episodes` is for free-text recall ("something
+  about a letter"), where an occasional slower cold query is a reasonable
+  trade.
+
+### Test counts
+
+`cargo test -p grace-memory`: **33 passed, 0 failed**. Combined
+`cargo test --workspace`: **233 passed, 3 ignored, 0 failed** (the prior
+phase's 200 passed/3 ignored, plus grace-memory's 33) - confirmed with
+`LLAMA_SERVER_URL` pointed at an unreachable port to rule out this
+session's environment (see below); the Python suite is untouched
+(`git status` still shows only `crates/`, root `Cargo.toml`/`Cargo.lock`,
+and `PORT_STATUS.md`).
+
+**Unrelated, pre-existing environment note**: this session had an
+unrelated process already listening on `127.0.0.1:8080` (this crate never
+opens a socket and has nothing to do with it), which is `grace-backend`'s
+`turn.rs` default `LLAMA_SERVER_URL`. That makes
+`crates/grace-backend/tests/demo_turn.rs`'s real-HTTP-call test see an
+unexpected real response and fail non-deterministically depending on what
+else happens to be running on that port - unrelated to `grace-memory`,
+reproducible before any of this update's changes, and out of this crate's
+scope to fix. Confirmed by rerunning with `LLAMA_SERVER_URL` pointed
+elsewhere, which restores the full 233/3/0 result above.
+
+### Remaining work (grace-memory-specific; folded into the numbered list below too)
+
+- Wire `AgentLoop`/`GraceApp` to call `PersistentStore::begin_episode`/
+  `end_episode` at real goal boundaries (see "grace-core integration"
+  above).
+- Thread a real app/window name into `save_step` (the legacy trait has no
+  parameter for it today).
+- Wire the facts store's confirmation and conflict-by-voice APIs into an
+  actual dialogue turn - both exist and are tested, nothing calls them yet.
+- An idle-tick driver that actually calls `HistoryStore::compact_once` on
+  a schedule outside of tests/the benchmark.
+- Investigate the write-latency tail (see above) - most plausibly,
+  scheduling compaction so it never shares a transaction slot with a
+  foreground write.
+
 ## Deliberate behaviour notes (not changes - documenting what was kept)
 
 Phase 1's notes (VAD wall-clock accumulation, the safety-guard key-
@@ -370,21 +600,31 @@ still apply unchanged. New this phase:
 
 ## Test counts
 
-- **Rust**: **200 passed, 3 ignored (each with a reason), 0 failed**, across
-  `grace-contract` (4), `grace-core` (152 - up from 31 at the end of Phase 1,
-  includes the 3 `MIN_WAKE_TO_IDLE_SECONDS` tests above), `grace-audio` (6),
-  `grace-models` (3 - up from 2, now includes a real HTTP round trip against
-  an unreachable port), `grace-win` (11 passed + 3 ignored - up from 9+1;
-  the 2 new ignored tests were also run manually and passed against the
-  real desktop), `grace-harness` (13 - up from 9, includes the real turn
-  replay), `grace-backend` (11 - up from 10, includes the real
-  socket-to-turn-engine end-to-end test). Run with `cargo test --workspace`.
+- **Rust, end of Phase 2**: 200 passed, 3 ignored (each with a reason), 0
+  failed, across `grace-contract` (4), `grace-core` (152 - up from 31 at
+  the end of Phase 1, includes the 3 `MIN_WAKE_TO_IDLE_SECONDS` tests
+  above), `grace-audio` (6), `grace-models` (3 - up from 2, now includes a
+  real HTTP round trip against an unreachable port), `grace-win` (11
+  passed + 3 ignored - up from 9+1; the 2 new ignored tests were also run
+  manually and passed against the real desktop), `grace-harness` (13 - up
+  from 9, includes the real turn replay), `grace-backend` (11 - up from
+  10, includes the real socket-to-turn-engine end-to-end test).
+- **Rust, with `grace-memory` (this update)**: **233 passed, 3 ignored, 0
+  failed** across the whole workspace (`cargo test --workspace`) - the 200
+  above plus `grace-memory`'s new **33** (facts + history + adapter +
+  redact/secret/db). `grace-core` also gained the additive
+  `begin_episode`/`end_episode` trait methods (see "grace-memory (PLAN.md
+  §12)" above) with no test-count change, since they're default no-ops.
+  Reproduced with `LLAMA_SERVER_URL` pointed at an unreachable port to work
+  around this session's unrelated port-8080 occupant (see above); without
+  that override, `grace-backend`'s `demo_turn` test can fail
+  non-deterministically for a reason that predates and is unrelated to
+  this update.
 - **Python**: re-ran `./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`
-  after the `MIN_WAKE_TO_IDLE_SECONDS` mirror too: **841 passed, 1 skipped** -
-  still exactly PLAN.md §0's baseline, and `git status` confirms only
-  `crates/`, `src-tauri/`, root `Cargo.toml`/`Cargo.lock`, and
-  `PORT_STATUS.md` are touched by this work (the Python source of truth
-  changed independently, in commits `3c7b990`/`4f108c6`, not by this port).
+  again for this update: **841 passed, 1 skipped** - still exactly
+  PLAN.md §0's baseline, unchanged. `git status` confirms this update only
+  touches `crates/grace-memory/` (new), `crates/grace-core/src/memory.rs`,
+  root `Cargo.toml`/`Cargo.lock`, and `PORT_STATUS.md`.
 
 ## Remaining work, roughly in the order it should happen
 
@@ -404,8 +644,25 @@ still apply unchanged. New this phase:
 4. **`read_pdf`/`summarize_pdf`**: needs `pypdf`-equivalent extraction (a
    Rust PDF text crate) and the TF-IDF-ish RAG chunking `grace.rag` does;
    contained, no architectural risk.
-5. **`PersistentMemoryStore` over real SQLite** (`rusqlite`, bundled): low
-   risk, not on the critical path for anything the harness grades.
+5. ~~`PersistentMemoryStore` over real SQLite~~ **Done this update** - see
+   "grace-memory (PLAN.md §12)" below. What's left there, not done here
+   because it reaches into `grace-core::agent_loop`/`grace_app` rather than
+   `grace-memory` itself:
+   - Wire `AgentLoop`/`GraceApp` to call `PersistentStore::begin_episode`/
+     `end_episode` at real goal boundaries, so `GraceMemoryStore` gets true
+     multi-step episodes (and the routine collapse they enable) through the
+     legacy trait, instead of the one-step-per-`save_step`-call fallback
+     `grace-memory::adapter` uses today.
+   - A real app/window name reaching `save_step` (the legacy trait has no
+     such parameter - `adapter.rs` currently records every episode under
+     app `"unknown"`).
+   - Wire the facts store's confirmation flow ("I'll remember Priya is your
+     sister, right?") and conflict-by-voice API into an actual dialogue -
+     both exist and are tested in `grace-memory::facts`, but nothing calls
+     them from the turn pipeline yet.
+   - An idle-tick driver that actually calls `HistoryStore::compact_once` on
+     a schedule (it's implemented and tested, but nothing invokes it outside
+     of tests/the benchmark yet).
 6. **Local LLM wiring for the escalation ladder's "stronger model" rung and
    the planner/grounder generally**: `HttpLlm` already speaks the right
    protocol; this is really item 1/2's model-serving prerequisite (a

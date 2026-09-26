@@ -8,6 +8,7 @@ members = [
     "crates/grace-win",
     "crates/grace-harness",
     "crates/grace-backend",
+    "crates/grace-memory",
 ]
 resolver = "2"
 
@@ -37,6 +38,7 @@ grace-models = { path = "crates/grace-models" }
 grace-win = { path = "crates/grace-win" }
 grace-harness = { path = "crates/grace-harness" }
 grace-backend = { path = "crates/grace-backend" }
+grace-memory = { path = "crates/grace-memory" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 tungstenite = "0.24"
 tokio-tungstenite = "0.24"

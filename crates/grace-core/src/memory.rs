@@ -40,12 +40,38 @@ impl StepRecord {
     }
 }
 
-/// Cross-session persistence boundary. A real implementation persists to
-/// `~/.grace/memory.db`; tests use `InMemoryStore`.
+/// A caller's coarse hint about how a goal ended, for a store that groups
+/// steps into episodes (see `grace-memory::history`) rather than logging
+/// them as an unbounded flat list. Default-implemented as no-ops on
+/// `begin_episode`/`end_episode` below, so this is additive: no existing
+/// implementor of `PersistentStore` needs to change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EpisodeOutcomeHint {
+    Success,
+    Failure,
+    Unknown,
+}
+
+/// Cross-session persistence boundary. `grace-memory::adapter::GraceMemoryStore`
+/// is the real SQLite-backed implementation (PLAN.md §12); tests use
+/// `InMemoryStore`.
+///
+/// `save_step` mirrors the Python original's per-step, flat-log shape
+/// (`task_history`: one row per step, no episode boundary). A real backend
+/// that groups steps into episodes has to infer episode boundaries from
+/// that shape alone unless a caller also calls `begin_episode`/`end_episode`
+/// - see `grace-memory`'s adapter module for exactly how it copes without
+/// them, and PORT_STATUS.md for wiring `AgentLoop` to call them directly as
+/// a follow-up.
 pub trait PersistentStore: Send {
     fn save_step(&mut self, user_goal: &str, action: &str, params: &Value, result: &Value);
     fn set_preference(&mut self, key: &str, value: &str);
     fn get_preference(&self, key: &str) -> Option<String>;
+
+    /// Called when a goal starts, if the caller tracks that boundary.
+    fn begin_episode(&mut self, _user_goal: &str) {}
+    /// Called when a goal ends, if the caller tracks that boundary.
+    fn end_episode(&mut self, _outcome: EpisodeOutcomeHint) {}
 }
 
 #[derive(Default)]
