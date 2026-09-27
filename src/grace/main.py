@@ -232,6 +232,56 @@ class GraceApp:
         "say again", "pardon", "what was that", "can you repeat that",
     }
 
+    async def _pump_audio_to_wake_word(self) -> None:
+        """Keep the wake-word queue fed while an agent goal runs.
+
+        The main loop normally does this feeding as part of its own
+        while-loop, but it is blocked on the single `await` in
+        `_run_agent_goal` for the whole goal, so without this the Vosk
+        detector - even though left unpaused - would see no new audio and
+        never hear a spoken "stop" (R5).
+        """
+        while True:
+            try:
+                chunk = await self.pump.get(timeout=0.5)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.debug(f"Audio forwarding to wake word paused briefly: {e}")
+                await asyncio.sleep(0.1)
+                continue
+            if chunk is None:
+                continue
+            if self._audio_queue is not None:
+                try:
+                    self._audio_queue.put_nowait(chunk)
+                except queue.Full:
+                    pass
+
+    async def _run_agent_goal(self, transcript: str) -> dict:
+        """Run one agent goal while listening for a spoken "stop"/"cancel".
+
+        `AgentLoop.run` used to be awaited with nothing listening for more
+        audio until it returned, so a task once started could not be stopped
+        by voice or any other channel (R5). This keeps the wake-word detector
+        unpaused and fed with live audio for the duration, armed to call
+        `agent_loop.request_cancel()` on a stop phrase instead of treating it
+        as a new activation.
+        """
+        self.wake_word.arm_cancel_watch(self.agent_loop.request_cancel)
+        self.wake_word.resume()
+        forwarder = asyncio.create_task(self._pump_audio_to_wake_word())
+        try:
+            return await self.agent_loop.run(user_goal=transcript)
+        finally:
+            forwarder.cancel()
+            try:
+                await forwarder
+            except asyncio.CancelledError:
+                pass
+            self.wake_word.disarm_cancel_watch()
+            self.wake_word.pause()
+
     async def _speak_response(self, text: str) -> None:
         """Speak response text and record it for voice repeat requests."""
         if not text or not text.strip():
@@ -824,7 +874,7 @@ class GraceApp:
                     await asyncio.sleep(2.0)
 
             async with trace.stage("agent_loop") as agent_stage:
-                agent_res = await self.agent_loop.run(user_goal=transcript)
+                agent_res = await self._run_agent_goal(transcript)
                 agent_stage.detail(f"{len(agent_res.get('steps') or [])} steps")
 
             log.info(f"AgentLoop Result: {agent_res}")
@@ -985,7 +1035,7 @@ class GraceApp:
                 await self.dispatcher.execute(intent)
                 await asyncio.sleep(2.0)
 
-            agent_res = await self.agent_loop.run(user_goal=transcript)
+            agent_res = await self._run_agent_goal(transcript)
             response_text = self._agent_response_text(agent_res)
             if response_text:
                 await self._speak_response(response_text)

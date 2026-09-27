@@ -752,3 +752,89 @@ class TestPlannerFailureModes:
         res = asyncio.run(loop.run(user_goal="open notepad"))
         assert res["status"] == "rate_limited"
         assert "limit" in res["final_response"].lower()
+
+
+class TestCancellation:
+    """R5: once a goal is running, a spoken "stop" must actually stop it.
+
+    Before this, `AgentLoop.run` consulted no cancellation source at all - its
+    own step/time/repeat budgets were the only way it ever ended early. These
+    exercise `request_cancel()` at the loop's own two checkpoints, deterministic
+    and without any real concurrency: a mock's side effect sets the flag at the
+    exact moment being tested, rather than racing a background task against it.
+    """
+
+    CLICK = '{"action": "cua_click", "params": {"x": 1, "y": 2}, "expect": "something"}'
+
+    def test_cancel_between_steps_stops_before_the_next_plan(self):
+        # The flag is set from inside the first dispatch, which stands in for
+        # a "stop" heard while that action was running. The top-of-loop check
+        # must catch it before a second plan is even requested.
+        loop, gemma, dispatcher = make_loop([self.CLICK, self.CLICK, DONE])
+
+        async def dispatch_then_cancel(*args, **kwargs):
+            loop.request_cancel()
+            return {"status": "ok"}
+
+        dispatcher.execute.side_effect = dispatch_then_cancel
+
+        res = asyncio.run(loop.run(user_goal="click twice"))
+
+        assert res["status"] == "cancelled"
+        assert len(res["steps"]) == 1
+        assert gemma.generate_text.call_count == 1
+
+    def test_cancel_during_planning_stops_before_that_steps_dispatch(self):
+        # The flag is set while the *second* step is being planned - after the
+        # first step already dispatched, before the second one does. Only the
+        # pre-dispatch checkpoint (not the top-of-loop one) can catch this.
+        loop, gemma, dispatcher = make_loop([self.CLICK, self.CLICK, DONE])
+        calls = {"n": 0}
+
+        def plan_then_cancel_on_second_call(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                loop.request_cancel()
+            return self.CLICK
+        gemma.generate_text.side_effect = plan_then_cancel_on_second_call
+
+        res = asyncio.run(loop.run(user_goal="click twice"))
+
+        assert res["status"] == "cancelled"
+        assert dispatcher.execute.await_count == 1
+
+    def test_cancellation_ends_the_goal_like_a_timeout_does(self):
+        # Same shape as `_timeout_result`: a spoken acknowledgement and the
+        # steps taken so far, not an error - main.py's normal end-of-turn
+        # handling needs no special case for a voice-cancelled goal.
+        loop, _, dispatcher = make_loop([self.CLICK, DONE])
+
+        async def dispatch_then_cancel(*args, **kwargs):
+            loop.request_cancel()
+            return {"status": "ok"}
+        dispatcher.execute.side_effect = dispatch_then_cancel
+
+        res = asyncio.run(loop.run(user_goal="click something"))
+
+        assert res["status"] == "cancelled"
+        assert "stopped" in res["final_response"].lower()
+        assert res["steps"]
+
+    def test_a_finished_cancellation_does_not_carry_into_the_next_goal(self):
+        # `run()` must reset the flag for each new goal, or a cancelled task
+        # would leave every goal after it silently dying at the first
+        # checkpoint too.
+        loop, gemma, dispatcher = make_loop([self.CLICK, DONE, self.CLICK, DONE])
+
+        async def dispatch_then_cancel(*args, **kwargs):
+            loop.request_cancel()
+            return {"status": "ok"}
+        dispatcher.execute.side_effect = dispatch_then_cancel
+
+        first = asyncio.run(loop.run(user_goal="first goal"))
+        assert first["status"] == "cancelled"
+
+        dispatcher.execute.side_effect = None
+        dispatcher.execute.return_value = {"status": "ok"}
+        second = asyncio.run(loop.run(user_goal="second goal"))
+        assert second["status"] == "ok"

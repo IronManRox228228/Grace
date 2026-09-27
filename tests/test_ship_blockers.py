@@ -160,6 +160,70 @@ class TestResumeSpeaksANewConfirmation:
         assert spoken == "Done."
 
 
+class TestAgentGoalIsVoiceCancellable:
+    """R5: a running agent goal must be stoppable by voice.
+
+    `agent_loop.run` used to be awaited with nothing listening for more audio
+    until it returned. `_run_agent_goal` is the fix: it arms the wake-word
+    detector's cancel watch and keeps it fed with live audio for the duration.
+    """
+
+    def test_wake_word_is_armed_unpaused_then_disarmed_and_repaused(self):
+        app = make_app(agent_loop=MagicMock())
+        app.agent_loop.run = AsyncMock(
+            return_value={"status": "ok", "final_response": "Done.", "steps": []}
+        )
+        app.pump = MagicMock()
+        app.pump.get = AsyncMock(return_value=None)
+        app._audio_queue = None
+
+        res = asyncio.run(app._run_agent_goal("open notepad"))
+
+        assert res["status"] == "ok"
+        app.wake_word.arm_cancel_watch.assert_called_once_with(app.agent_loop.request_cancel)
+        app.wake_word.resume.assert_called_once()
+        app.wake_word.disarm_cancel_watch.assert_called_once()
+        app.wake_word.pause.assert_called_once()
+
+    def test_cleans_up_even_when_the_goal_raises(self):
+        app = make_app(agent_loop=MagicMock())
+        app.agent_loop.run = AsyncMock(side_effect=RuntimeError("planner blew up"))
+        app.pump = MagicMock()
+        app.pump.get = AsyncMock(return_value=None)
+        app._audio_queue = None
+
+        with pytest.raises(RuntimeError):
+            asyncio.run(app._run_agent_goal("open notepad"))
+
+        app.wake_word.disarm_cancel_watch.assert_called_once()
+        app.wake_word.pause.assert_called_once()
+
+    def test_a_spoken_stop_reaches_request_cancel_through_the_real_detector(self):
+        """Wires a real WakeWordDetector in (not a mock) so the path from
+        recognized speech to `agent_loop.request_cancel()` is actually
+        exercised, not just asserted to have been wired.
+        """
+        from grace.audio.wake_word import WakeWordDetector
+
+        app = make_app(agent_loop=MagicMock(), wake_word=WakeWordDetector(model_path="dummy_path"))
+        app.agent_loop.request_cancel = MagicMock()
+
+        async def run_and_say_stop(*args, **kwargs):
+            # Stands in for audio arriving mid-goal and Vosk finalizing on it.
+            app.wake_word._check_keyword('{"text": "grace stop"}')
+            return {"status": "cancelled", "final_response": "Okay, I've stopped.", "steps": []}
+
+        app.agent_loop.run = AsyncMock(side_effect=run_and_say_stop)
+        app.pump = MagicMock()
+        app.pump.get = AsyncMock(return_value=None)
+        app._audio_queue = None
+
+        res = asyncio.run(app._run_agent_goal("delete everything in Documents"))
+
+        app.agent_loop.request_cancel.assert_called_once()
+        assert res["status"] == "cancelled"
+
+
 class TestTurnCrashesDoNotKillGrace:
     """main.py's main loop only caught KeyboardInterrupt, so any exception
     escaping a turn - a bad transcript, a dispatcher bug - shut Grace down

@@ -1,10 +1,18 @@
 import logging
 import queue
+import re
 import threading
 import time
 from typing import Optional, Callable, Any
 
 logger = logging.getLogger("grace.wake_word")
+
+# Word-boundary match so "stop"/"cancel" fire on "grace stop" and "please
+# cancel that" alike, but not on a word that merely contains them ("nonstop",
+# "cancellation"). Checked only while a caller has armed the cancel watch
+# (i.e. while an agent goal is running), so it never competes with the wake
+# keyword the rest of the time.
+_CANCEL_RE = re.compile(r"\b(stop|cancel)\b")
 
 
 class WakeWordDetector:
@@ -34,6 +42,20 @@ class WakeWordDetector:
         self._last_detection_time = 0.0
         self._audio_buffer = bytearray()
         self._audio_queue: Optional[queue.Queue] = None
+
+        # Guards every access to `self._rec` (R7): the detector thread calls
+        # AcceptWaveform/Result/PartialResult on it continuously, while
+        # `reset()` (called from the main coroutine on a wake trigger) mutates
+        # the same native Kaldi object from outside that thread with no
+        # synchronization at all. One lock shared by both sides closes that race.
+        self._rec_lock = threading.Lock()
+
+        # Set only while an agent goal is running (R5): lets a spoken
+        # "stop"/"cancel" interrupt a running task without needing the wake
+        # keyword itself, and without waiting for the goal to finish before
+        # anything is listened for again.
+        self._cancel_callback: Optional[Callable[[], None]] = None
+        self._last_cancel_time = 0.0
 
     @property
     def keyword(self) -> str:
@@ -111,14 +133,14 @@ class WakeWordDetector:
         self._audio_buffer.clear()
 
         try:
-            if self._rec.AcceptWaveform(data):
-                res = self._rec.Result()
-                if res:
-                    self._check_vosk_keyword(res)
-            else:
-                part = self._rec.PartialResult()
-                if part:
-                    self._check_vosk_keyword(part, is_partial=True)
+            with self._rec_lock:
+                is_final = self._rec.AcceptWaveform(data)
+                res = self._rec.Result() if is_final else None
+                part = self._rec.PartialResult() if not is_final else None
+            if res:
+                self._check_vosk_keyword(res)
+            if part:
+                self._check_vosk_keyword(part, is_partial=True)
         except Exception as e:
             logger.debug(f"Vosk AcceptWaveform error ignored: {e}")
 
@@ -131,6 +153,15 @@ class WakeWordDetector:
             self._event.set()
             if self._callback:
                 self._callback()
+
+    def _trigger_cancel(self, text: str) -> None:
+        """Fire the armed cancel watch. Debounced the same way wake detection is."""
+        now = time.time()
+        if now - self._last_cancel_time > 1.0:
+            logger.info(f"Voice stop detected during agent run: '{text}'")
+            self._last_cancel_time = now
+            if self._cancel_callback:
+                self._cancel_callback()
 
     def _check_keyword(self, result_json: str, is_partial: bool = False) -> None:
         """Compatibility method for tests checking keyword parsing."""
@@ -148,6 +179,9 @@ class WakeWordDetector:
         matched = (self._keyword in text) or ("grace" in text) or ("hey grace" in text)
         if matched:
             self._trigger_detection("vosk_" + text, 0.85)
+
+        if self._cancel_callback is not None and _CANCEL_RE.search(text):
+            self._trigger_cancel(text)
 
     def start(self, audio_queue: Optional["queue.Queue"] = None) -> None:
         """Start Vosk wake word detection."""
@@ -190,6 +224,21 @@ class WakeWordDetector:
         self._audio_buffer.clear()
         if self._rec is not None:
             try:
-                self._rec.Reset()
+                with self._rec_lock:
+                    self._rec.Reset()
             except Exception:
                 pass
+
+    def arm_cancel_watch(self, callback: Callable[[], None]) -> None:
+        """Start watching recognized speech for a spoken "stop"/"cancel".
+
+        Used while an agent goal is running so the user can interrupt it by
+        voice (R5) without needing the wake keyword itself - the keyword
+        stays available too, but this fires independently and immediately.
+        Arming replaces any previously armed watch.
+        """
+        self._cancel_callback = callback
+
+    def disarm_cancel_watch(self) -> None:
+        """Stop watching for a spoken stop/cancel once nothing needs it."""
+        self._cancel_callback = None

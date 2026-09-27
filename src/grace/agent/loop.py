@@ -178,6 +178,11 @@ class AgentLoop:
             "stronger_planner_model", DEFAULT_STRONGER_PLANNER_MODEL
         )
         self._pending: Optional[dict[str, Any]] = None
+        # Set by `request_cancel()`, checked between steps and again just
+        # before a step is dispatched (R5). This is the only way a goal already
+        # running can be stopped - the loop's own budgets all end it on their
+        # own terms, none of them on the user's.
+        self._cancel_requested = False
 
     # -- safety resumption -------------------------------------------------
 
@@ -199,6 +204,18 @@ class AgentLoop:
 
     def cancel_pending(self) -> None:
         self._pending = None
+
+    def request_cancel(self) -> None:
+        """Ask a running goal to stop at the next checkpoint.
+
+        Meant to be called from outside the loop - the caller wires this to a
+        spoken "stop"/"cancel" heard while a goal is in flight (R5), since
+        nothing else can reach a running goal at all. It only sets a flag:
+        the loop itself decides when it is safe to act on it, between steps
+        and again immediately before dispatching one, so a step already
+        announced to the user is never abandoned mid-way.
+        """
+        self._cancel_requested = True
 
     def _expire_pending(self) -> None:
         """Drop a parked confirmation once it has waited too long to still apply.
@@ -277,6 +294,7 @@ class AgentLoop:
                              max_seconds=self._max_seconds)
         self._planner.reset()
         self._pending = None
+        self._cancel_requested = False
         logger.info(
             f"AgentLoop started for goal: '{user_goal}' "
             f"({'unlimited' if not limit or limit <= 0 else f'max {limit}'} steps, "
@@ -296,6 +314,10 @@ class AgentLoop:
         attempts: dict[str, int] = {}
 
         while not memory.is_completed and not memory.is_exceeded:
+            if self._cancel_requested:
+                logger.info("AgentLoop: cancelled by voice stop request.")
+                return self._cancel_result(memory)
+
             if memory.is_out_of_time:
                 logger.error(
                     f"AgentLoop: out of time after {memory.elapsed_seconds:.0f}s "
@@ -435,6 +457,14 @@ class AgentLoop:
             if step.needs_grounding or rung == "reground":
                 async with stage(f"ground#{step_no}"):
                     await self._ground(step, snapshot, force=(rung == "reground"))
+
+            # Checked again here, not just at the top of the loop: planning
+            # (and grounding, above) can take long enough that a "stop" heard
+            # while this step was being worked out must still be honoured
+            # before the step it produced is ever sent to the desktop.
+            if self._cancel_requested:
+                logger.info("AgentLoop: cancelled by voice stop request.")
+                return self._cancel_result(memory)
 
             await self._emit({
                 "type": "ToolExecutionStarted",
@@ -748,6 +778,22 @@ class AgentLoop:
                 f"I spent {memory.elapsed_seconds:.0f} seconds on that without "
                 f"finishing, so I've stopped.{where}"
             ),
+            "steps": [s.to_dict() for s in memory.steps_taken],
+        }
+
+    def _cancel_result(self, memory: AgentMemory) -> dict[str, Any]:
+        """Stop because the user said so, not because a budget ran out.
+
+        Same envelope `_timeout_result` returns: a spoken acknowledgement plus
+        whatever steps already happened, so main.py's ordinary end-of-turn
+        handling - speak the response, then ConversationFinished/Idle - needs
+        no special case for a voice-cancelled goal.
+        """
+        last = memory.steps_taken[-1] if memory.steps_taken else None
+        where = f" The last thing I did was `{last.action}`." if last is not None else ""
+        return {
+            "status": "cancelled",
+            "final_response": memory.final_response or f"Okay, I've stopped.{where}",
             "steps": [s.to_dict() for s in memory.steps_taken],
         }
 

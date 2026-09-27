@@ -21,6 +21,8 @@ use crate::safety::evaluate as safety_evaluate;
 use grace_contract::GraceEvent;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Tools whose execution constitutes actually doing something to the
@@ -116,11 +118,39 @@ impl Default for AgentLoopConfig {
 pub struct AgentLoop {
     config: AgentLoopConfig,
     pending: Option<Pending>,
+    /// Set from outside `run`/`continue_loop` (R5, mirroring
+    /// `AgentLoop.request_cancel` in `loop.py`) - `run` blocks the calling
+    /// thread for the whole goal, so a caller wanting to stop it in flight
+    /// needs a handle it can set from elsewhere, not a method it can only
+    /// call once this returns. Checked between steps and again immediately
+    /// before a step is dispatched.
+    cancel: Arc<AtomicBool>,
 }
 
 impl AgentLoop {
     pub fn new(config: AgentLoopConfig) -> Self {
-        Self { config, pending: None }
+        Self { config, pending: None, cancel: Arc::new(AtomicBool::new(false)) }
+    }
+
+    // -- cancellation (R5) ----------------------------------------------
+
+    /// A clone of the cancellation flag, for a caller on another thread to
+    /// hold onto and set once a goal is running - e.g. a wake-word/voice
+    /// listener wired to fire this on a spoken "stop"/"cancel" while `run`
+    /// is blocking the calling thread.
+    pub fn cancel_handle(&self) -> Arc<AtomicBool> {
+        self.cancel.clone()
+    }
+
+    /// Ask a running goal to stop at the next checkpoint. Equivalent to
+    /// `cancel_handle().store(true, Ordering::SeqCst)`, for a caller that
+    /// already holds `&AgentLoop` on the same thread (mostly tests).
+    pub fn request_cancel(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    fn cancel_requested(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
     }
 
     // -- safety resumption --------------------------------------------
@@ -215,6 +245,7 @@ impl AgentLoop {
     ) -> Value {
         let memory = AgentMemory::new(user_goal, self.config.max_iterations, self.config.max_seconds);
         self.pending = None;
+        self.cancel.store(false, Ordering::SeqCst);
         self.continue_loop(memory, None, None, planner_llm, vision_llm, dispatcher, perception, sink)
     }
 
@@ -236,6 +267,10 @@ impl AgentLoop {
         let mut attempts: BTreeMap<String, u32> = BTreeMap::new();
 
         while !memory.is_completed && !memory.is_exceeded() {
+            if self.cancel_requested() {
+                return cancel_result(&memory);
+            }
+
             if memory.is_out_of_time() {
                 return timeout_result(&memory);
             }
@@ -325,6 +360,14 @@ impl AgentLoop {
 
             if step.needs_grounding() || rung == "reground" {
                 self.ground_step(&mut step, &snapshot, rung == "reground", vision_llm);
+            }
+
+            // Checked again here, not just at the top of the loop: planning
+            // and grounding can take long enough that a "stop" heard while
+            // this step was being worked out must still be honoured before
+            // it is ever sent to the desktop.
+            if self.cancel_requested() {
+                return cancel_result(&memory);
             }
 
             let step_no = memory.current_iteration + 1;
@@ -611,6 +654,12 @@ fn timeout_result(memory: &AgentMemory) -> Value {
         format!("I spent {:.0} seconds on that without finishing, so I've stopped.{where_clause}", memory.elapsed_seconds())
     });
     json!({"status": "timed_out", "final_response": response, "steps": steps_json(memory)})
+}
+
+fn cancel_result(memory: &AgentMemory) -> Value {
+    let where_clause = memory.steps_taken.last().map(|s| format!(" The last thing I did was `{}`.", s.action)).unwrap_or_default();
+    let response = memory.final_response.clone().unwrap_or_else(|| format!("Okay, I've stopped.{where_clause}"));
+    json!({"status": "cancelled", "final_response": response, "steps": steps_json(memory)})
 }
 
 fn plan_failure_result(memory: &AgentMemory) -> Value {
@@ -1027,5 +1076,145 @@ mod tests {
         let a = PlannedStep { action: "cua_click".into(), params: json!({"element_id": 1, "window": {"title": "A"}}), ..Default::default() };
         let b = PlannedStep { action: "cua_click".into(), params: json!({"element_id": 1, "window": {"title": "B"}}), ..Default::default() };
         assert_eq!(step_signature(&a), step_signature(&b));
+    }
+
+    /// R5: a running agent goal must be stoppable. These check `run`'s two
+    /// cancellation checkpoints deterministically - no threads, no timing -
+    /// by having a `SystemActions` double flip the same `Arc<AtomicBool>`
+    /// `cancel_handle()` hands out, from inside the dispatch it stands in for.
+    struct CancellingActions {
+        cancel: Arc<AtomicBool>,
+    }
+    impl SystemActions for CancellingActions {
+        fn open_url(&mut self, _url: &str) -> bool { true }
+        fn launch_app(&mut self, _name: &str) -> Value { json!({"status": "ok"}) }
+        fn close_app(&mut self, _name: &str) -> Result<(), String> { Ok(()) }
+        fn search_files(&mut self, _query: &str) -> Vec<String> { vec![] }
+        fn open_file(&mut self, _name: &str) -> Result<(), String> { Ok(()) }
+        fn adjust_volume(&mut self, _amount: i64, _mode: &str) -> Result<i64, String> { Ok(50) }
+        fn lock_computer(&mut self) -> Result<(), String> { Ok(()) }
+        fn open_calculator(&mut self) -> Result<(), String> {
+            // Stands in for a spoken "stop" arriving while this action ran.
+            self.cancel.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        fn delete_file(&mut self, name: &str) -> Result<String, String> { Ok(name.to_string()) }
+        fn press_undo(&mut self) -> Result<(), String> { Ok(()) }
+        fn describe_screen(&mut self) -> (String, Vec<String>) { (String::new(), vec![]) }
+        fn set_speech_rate(&mut self, _speed: f32) {}
+        fn play_success_earcon(&mut self) {}
+        fn play_error_earcon(&mut self) {}
+    }
+
+    #[test]
+    fn cancel_between_steps_stops_before_the_next_plan() {
+        let step = r#"{"action": "open_calculator", "params": {}, "user_update": "Opening...", "expect": "opened"}"#;
+        let mut planner_llm = ScriptedLlm::new(vec![ScriptedLlm::text(step), ScriptedLlm::text(step)]);
+        let mut vision_llm = ScriptedLlm::new(vec![]);
+
+        let mut loop_ = AgentLoop::new(AgentLoopConfig::default());
+        let mut actions = CancellingActions { cancel: loop_.cancel_handle() };
+        let mut dispatcher = Dispatcher::new(None, &mut actions);
+        let mut perception = ScriptedPerception::new(vec![blind_snapshot()]);
+        let mut sink = crate::events::RecordingEventSink::default();
+
+        let result = loop_.run("open calculator twice", &mut planner_llm, &mut vision_llm, &mut dispatcher, &mut perception, &mut sink);
+
+        assert_eq!(result["status"], "cancelled");
+        // The top-of-loop check must catch the flag before a second plan is
+        // even requested.
+        assert_eq!(planner_llm.requests_seen.len(), 1);
+    }
+
+    #[test]
+    fn cancellation_ends_the_goal_like_a_timeout_does() {
+        let step = r#"{"action": "open_calculator", "params": {}, "user_update": "Opening...", "expect": "opened"}"#;
+        let mut planner_llm = ScriptedLlm::new(vec![ScriptedLlm::text(step)]);
+        let mut vision_llm = ScriptedLlm::new(vec![]);
+
+        let mut loop_ = AgentLoop::new(AgentLoopConfig::default());
+        let mut actions = CancellingActions { cancel: loop_.cancel_handle() };
+        let mut dispatcher = Dispatcher::new(None, &mut actions);
+        let mut perception = ScriptedPerception::new(vec![blind_snapshot()]);
+        let mut sink = crate::events::RecordingEventSink::default();
+
+        let result = loop_.run("open calculator", &mut planner_llm, &mut vision_llm, &mut dispatcher, &mut perception, &mut sink);
+
+        // Same envelope `timeout_result` returns: a spoken acknowledgement
+        // and whatever steps already happened, not an error.
+        assert_eq!(result["status"], "cancelled");
+        assert!(result["final_response"].as_str().unwrap().to_lowercase().contains("stopped"));
+        assert!(!result["steps"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_finished_cancellation_does_not_carry_into_the_next_goal() {
+        let click = r#"{"action": "open_calculator", "params": {}, "user_update": "Opening...", "expect": "opened"}"#;
+        let done = r#"{"action": "converse", "params": {}, "is_completed": true, "final_response": "All done."}"#;
+        let mut planner_llm = ScriptedLlm::new(vec![ScriptedLlm::text(click), ScriptedLlm::text(click), ScriptedLlm::text(done)]);
+        let mut vision_llm = ScriptedLlm::new(vec![]);
+        let mut loop_ = AgentLoop::new(AgentLoopConfig::default());
+
+        {
+            // Run 1: the loop's own dispatch requests the cancellation,
+            // exactly like `cancel_between_steps_stops_before_the_next_plan`.
+            let mut actions = CancellingActions { cancel: loop_.cancel_handle() };
+            let mut dispatcher = Dispatcher::new(None, &mut actions);
+            let mut perception = ScriptedPerception::new(vec![blind_snapshot()]);
+            let mut sink = crate::events::RecordingEventSink::default();
+            let first = loop_.run("first goal", &mut planner_llm, &mut vision_llm, &mut dispatcher, &mut perception, &mut sink);
+            assert_eq!(first["status"], "cancelled");
+        }
+
+        // The cancellation above leaves the flag set internally; `run()`
+        // must still reset it for this unrelated next goal, or it would
+        // silently die at the first checkpoint too.
+        let mut actions = NoopActions::default();
+        let mut dispatcher = Dispatcher::new(None, &mut actions);
+        let mut perception = ScriptedPerception::new(vec![blind_snapshot()]);
+        let mut sink = crate::events::RecordingEventSink::default();
+        let second = loop_.run("second goal", &mut planner_llm, &mut vision_llm, &mut dispatcher, &mut perception, &mut sink);
+        assert_eq!(second["status"], "ok", "{second:?}");
+    }
+
+    /// A planner double that sets the cancel flag partway through planning
+    /// the *second* step, mimicking a "stop" heard during that (potentially
+    /// slow) call - after the first step already dispatched, before the
+    /// second one does. Only the pre-dispatch checkpoint, not the
+    /// top-of-loop one, can catch this.
+    struct CancelDuringSecondPlan {
+        cancel: Arc<AtomicBool>,
+        response: String,
+        calls: u32,
+    }
+    impl crate::models::LargeLanguageModel for CancelDuringSecondPlan {
+        fn generate_text(&mut self, _request: &crate::models::LlmRequest) -> Result<Option<String>, crate::models::RateLimitError> {
+            self.calls += 1;
+            if self.calls == 2 {
+                self.cancel.store(true, Ordering::SeqCst);
+            }
+            Ok(Some(self.response.clone()))
+        }
+    }
+
+    #[test]
+    fn cancel_during_planning_stops_before_that_steps_dispatch() {
+        let click = r#"{"action": "open_calculator", "params": {}, "user_update": "Opening...", "expect": "opened"}"#;
+
+        let mut loop_ = AgentLoop::new(AgentLoopConfig::default());
+        let mut planner_llm = CancelDuringSecondPlan { cancel: loop_.cancel_handle(), response: click.to_string(), calls: 0 };
+        let mut vision_llm = ScriptedLlm::new(vec![]);
+        let mut actions = NoopActions::default();
+        let mut dispatcher = Dispatcher::new(None, &mut actions);
+        let mut perception = ScriptedPerception::new(vec![blind_snapshot()]);
+        let mut sink = crate::events::RecordingEventSink::default();
+
+        let result = loop_.run("click twice", &mut planner_llm, &mut vision_llm, &mut dispatcher, &mut perception, &mut sink);
+
+        assert_eq!(result["status"], "cancelled");
+        // Two plans happened (the second is what set the flag), but only
+        // one step - the first - was ever dispatched.
+        assert_eq!(planner_llm.calls, 2);
+        assert_eq!(result["steps"].as_array().unwrap().len(), 1);
     }
 }

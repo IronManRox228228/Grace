@@ -76,7 +76,10 @@ class TestBothTurnsMakeTheSameDecisions:
         "self.intent_parser.parse",
         "self.gemma.generate_intent",
         "self.dispatcher.execute",
-        "self.agent_loop.run",
+        # Not "self.agent_loop.run" directly any more (R5): both paths now go
+        # through `_run_agent_goal`, which arms the wake-word cancel watch
+        # around that same call so a running goal can be stopped by voice.
+        "self._run_agent_goal",
     ])
     def test_both_paths_make_the_call(self, call):
         assert call in calls_in(ACTIVATION), f"{ACTIVATION} no longer calls {call}"

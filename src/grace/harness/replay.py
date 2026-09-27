@@ -561,6 +561,8 @@ class NullWakeWord(_Constructible):
     def pause(self): return None
     def resume(self): return None
     def reset(self): return None
+    def arm_cancel_watch(self, callback): return None
+    def disarm_cancel_watch(self): return None
 
 
 class NullComputerUse(_Constructible):
