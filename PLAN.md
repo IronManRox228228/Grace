@@ -62,6 +62,23 @@ Grace detects the hardware at startup and picks where each model runs. Same mode
 - VL-450M's backbone *is* LFM2.5-350M, so one model might cover both tool calling and vision.
 - The 350M might replace GLiNER by scoring the probability of "yes" for each element.
 
+**Contrastive decision heads** (added 2026-09-27; to be benchmarked, nothing downloaded):
+- **Source.** CLM-v0.1-8B (Stanford + NVIDIA, Apache 2.0; `Contrastive-LM/CLM-v0.1-8B` on Hugging Face). It is a frozen Qwen3-8B with two small projection heads, one for the state and one for each action, trained with InfoNCE.
+- **What it returns.** Probabilities over the candidates it is given, as a choice, a yes/no probability, a score or a ranking. It generates no text. Action embeddings are computed once and reused, which makes it up to 9× faster than Jev (13× with about 1k candidates).
+- **Limits.**
+  - It is slightly less accurate than Jev: BFCL v4 95.2% vs 99.2%.
+  - It can't plan.
+  - When every candidate is wrong, it still ranks one of them first.
+- **As-is it doesn't fit the floor.** 8B is about 5 GB at Q4, and the prefill for one screen state would take tens of seconds on the i5-8300H (an estimate). There's no GGUF or ONNX yet. A multimodal CLM-35B-A3B is due in early October.
+- **What to copy is the recipe.** Train the two heads on a frozen small backbone (LFM2.5-350M or Qwen3-0.6B), using Grace's tapes and agent trajectories. Only the heads train, so this fits the 4060, and it runs at the CPU tier.
+- **Where it fits in Grace:**
+  - element selection: state = goal plus window, candidates = element summaries;
+  - yes/no on confirmation answers;
+  - routing between tools and between the fast path and the agent. The tool list is fixed, so its embeddings are computed once at install.
+- **Benchmark it** against GLiNER2.5-Decide and Laya, on the same held-out apps.
+- **Always offer "none of these".** Add a "none of these / ask the user" candidate and a calibrated abstain threshold, because a ranker always picks something.
+- **The class is moving fast.** Jev (TypeSafe, 2026-09-15) and several competitors shipped within days of each other. Re-survey before the benchmark instead of trusting this list.
+
 **Safety.** The safety check stays **after** the decision model. Act only when the top score clears a threshold and beats the runner-up by a margin; otherwise escalate. Off-distribution overconfidence is the known risk for small models, so the thresholds must be calibrated on apps that were held out of training.
 
 ---
