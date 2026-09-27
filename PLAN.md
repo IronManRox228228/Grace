@@ -79,6 +79,27 @@ Grace detects the hardware at startup and picks where each model runs. Same mode
 - **Always offer "none of these".** Add a "none of these / ask the user" candidate and a calibrated abstain threshold, because a ranker always picks something.
 - **The class is moving fast.** Jev (TypeSafe, 2026-09-15) and several competitors shipped within days of each other. Re-survey before the benchmark instead of trusting this list.
 
+**Survey of decision models, 2026-09-27.** Only facts checked against the model cards are listed. Nothing has been downloaded.
+- **Julia-1** (Supersonic Labs, Apache 2.0): 144M, on mmBERT-small, multilingual. It has an official ONNX export (the separate Julia-1-ONNX repo, so it runs through `ort`).
+  - choice or score over 2–20 options, and yes/no, with full softmax output
+  - 73.15% on a 2k-question typed-decision set
+  - no CPU latency figure is published
+  - element selection needs a top-20 shortlist first
+  - **The strongest new candidate for the CPU floor.**
+- **Intern-Decision-0.8B** (InternLM, Apache 2.0 plus the Qwen notice): 0.9B, on Qwen3.5-0.8B, multimodal (up to 8 images).
+  - up to 62 options, with ECE 0.066
+  - F32/BF16 only; latency was measured on an RTX 4090
+  - a candidate for the no-tree vision slot as a calibrated choice over numbered marks, if it's fast enough on CPU
+- **AnyJev** (Nokia, Apache 2.0): not a model but a training-free readout. It turns any LLM's single prefill into calibrated typed decisions, correcting position bias across cyclic option shifts.
+  - L0 needs no labels, L1 needs 100–500 labels per question, and L2 fits a closed-form head on mid-layer activations
+  - at most 26 options
+  - tested only down to Qwen3-1.7B
+  - **The cheapest experiment: try it on the LFM2.5-350M Grace already ships, before training anything.** If it works, the tool caller doubles as the decision model.
+- **GLiNER2.5-Decide** (the current pick): the card confirms 340M, a DeBERTa-v3-large encoder and Apache 2.0, runnable on CPU. It is safetensors only (no GGUF or ONNX is listed) and scores 60.2% on Fastino's 17-domain routing set.
+- **Too heavy for the CPU tier:** CLM-8B, Kev-9B (a LoRA on Qwen3.5-9B), OpenJev/SemIf (4B), Intern-Decision-2B/4B and this-that-model-1.0 (2B).
+- **Ruled out:** Jev, which is API-only and so incompatible with offline use.
+- **The benchmark set for element selection and yes/no:** GLiNER2.5-Decide, Laya, Julia-1, AnyJev on LFM2.5-350M, and contrastive heads on a small backbone. Intern-Decision-0.8B goes into the vision-slot benchmark.
+
 **Safety.** The safety check stays **after** the decision model. Act only when the top score clears a threshold and beats the runner-up by a margin; otherwise escalate. Off-distribution overconfidence is the known risk for small models, so the thresholds must be calibrated on apps that were held out of training.
 
 ---
