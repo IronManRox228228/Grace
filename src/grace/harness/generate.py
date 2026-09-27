@@ -396,7 +396,10 @@ def _scripted_handler(tool: str, scripted: dict[str, Any], overruns: Overruns):
     configured = scripted.get(tool)
     queue = list(configured) if isinstance(configured, list) else None
 
-    async def _handler(self, params):
+    async def _handler(self, params, confirmed: bool = False):
+        # `confirmed` is accepted (not used - the queued/overrun logic already
+        # ignores what would have driven a real decision) so this can replace
+        # `_open_file`, which since R2 takes it as an extra bound kwarg.
         if queue:
             return queue.pop(0)
         if queue is None and configured is not None:
