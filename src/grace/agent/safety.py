@@ -6,6 +6,7 @@ and requiring explicit voice confirmation before execution.
 """
 
 import logging
+import os
 from typing import Any, Optional
 
 logger = logging.getLogger("grace.agent.safety")
@@ -21,6 +22,16 @@ class SafetyGuard:
         "lock_computer",
     }
 
+    # Extensions that can run code or a script just by being "opened" - an
+    # `open_file` naming one of these is refused unless the user has actually
+    # said yes (R2). `open_file` is otherwise a fast-path tool with no
+    # confirmation gate at all, so this is the only thing standing between a
+    # misheard/hallucinated/injected name and silent code execution.
+    DANGEROUS_OPEN_EXTENSIONS = {
+        ".exe", ".bat", ".cmd", ".com", ".ps1", ".vbs", ".js", ".jse", ".wsf",
+        ".msi", ".lnk", ".scr", ".pif", ".hta", ".reg", ".cpl",
+    }
+
     @classmethod
     def evaluate(cls, action: str, params: dict[str, Any]) -> tuple[bool, Optional[str]]:
         """Evaluate action.
@@ -33,6 +44,13 @@ class SafetyGuard:
             logger.warning(f"Safety guard intercepted action '{action}': {prompt}")
             return False, prompt
 
+        if action == "open_file":
+            name = params.get("name") or params.get("path") or ""
+            if cls.has_dangerous_open_extension(name):
+                prompt = f"{name} can run code just by being opened. Should I open it anyway?"
+                logger.warning(f"Safety guard intercepted action '{action}': {prompt}")
+                return False, prompt
+
         # Parameter checks for generic tools. Normalised because the model
         # writes "Alt+F4" and "Control_L+w" at least as often as "alt+f4",
         # and the old exact-string comparison let those straight through.
@@ -42,6 +60,17 @@ class SafetyGuard:
                 return False, "Closing windows can cause loss of unsaved work. Should I proceed?"
 
         return True, None
+
+    @classmethod
+    def has_dangerous_open_extension(cls, name_or_path: str) -> bool:
+        """True when a name/path ends in an extension that can execute code.
+
+        A free function of just the extension, not full path resolution, so
+        `dispatcher._open_file` can re-run this same check on the path it
+        actually resolves to (which may reveal an extension the raw model
+        text did not show) without a circular import back into dispatcher.
+        """
+        return os.path.splitext(name_or_path or "")[1].lower() in cls.DANGEROUS_OPEN_EXTENSIONS
 
     # Hotkeys that close or discard work, in normalised form.
     CONFIRMATION_REQUIRED_KEYS = {

@@ -64,6 +64,16 @@ static TOOL_LABELS: LazyLock<BTreeMap<&'static str, &'static str>> = LazyLock::n
     ])
 });
 
+/// True when `value` is an http(s) URL - the only scheme this port ever
+/// hands to the OS's default browser opener unconfirmed (R15). Anything
+/// else (`file://`, a UNC path, a custom registered scheme) is the same
+/// class of unconfirmed local-open `os.startfile` is.
+fn is_http_url(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    let rest = lower.strip_prefix("http://").or_else(|| lower.strip_prefix("https://"));
+    rest.is_some_and(|r| !r.is_empty())
+}
+
 static WEBSITE_ALIASES: LazyLock<BTreeMap<&'static str, &'static str>> = LazyLock::new(|| {
     BTreeMap::from([
         ("youtube", "https://www.youtube.com"),
@@ -281,9 +291,23 @@ impl<'a> Dispatcher<'a> {
             return json!({"status": "error", "error": "Missing 'name' or 'url' parameter"});
         }
 
-        let lower_name = name.to_lowercase();
-        let mut target_url = url.clone();
-        if target_url.is_empty() {
+        // An explicit `url` used to reach `open_url` completely unvalidated -
+        // unlike the name-inference branch below, which only ever builds an
+        // http(s) string in the first place. `open_app` is a fast-path tool
+        // (no confirmation gate), so a model-supplied `file://` URI, a UNC
+        // path, or a registered custom scheme there was a known local-RCE/
+        // credential-leak class (R15). Only http(s) is allowed through.
+        let mut target_url = String::new();
+        if !url.is_empty() {
+            if !is_http_url(&url) {
+                return json!({
+                    "status": "error",
+                    "error": format!("Refusing to open '{url}': only http/https links are allowed."),
+                });
+            }
+            target_url = url;
+        } else {
+            let lower_name = name.to_lowercase();
             if let Some(known) = WEBSITE_ALIASES.get(lower_name.as_str()) {
                 target_url = known.to_string();
             } else if lower_name.starts_with("http://")
@@ -291,7 +315,10 @@ impl<'a> Dispatcher<'a> {
                 || lower_name.starts_with("www.")
                 || [".com", ".org", ".net", ".io", ".edu", ".gov"].iter().any(|ext| lower_name.contains(ext))
             {
-                target_url = if lower_name.starts_with("http") { name.clone() } else { format!("https://{name}") };
+                let candidate = if lower_name.starts_with("http") { name.clone() } else { format!("https://{name}") };
+                if is_http_url(&candidate) {
+                    target_url = candidate;
+                }
             }
         }
 
@@ -616,6 +643,48 @@ mod tests {
         let mut dispatcher = Dispatcher::new(None, &mut actions);
         let intent = Intent::new("open_app", json!({"name": "Notepad"}), None);
         dispatcher.execute(&intent, true);
+        assert!(actions.opened_urls.is_empty());
+    }
+
+    #[test]
+    fn open_app_with_an_http_url_opens_it() {
+        let mut actions = FakeActions::default();
+        let mut dispatcher = Dispatcher::new(None, &mut actions);
+        let intent = Intent::new("open_app", json!({"url": "https://example.com/page"}), None);
+        let result = dispatcher.execute(&intent, true);
+        assert_eq!(result["status"], "ok");
+        assert_eq!(actions.opened_urls, vec!["https://example.com/page".to_string()]);
+    }
+
+    #[test]
+    fn open_app_refuses_a_file_url() {
+        // R15: the `url` param used to reach `open_url` completely
+        // unvalidated - a `file://` URI there is a known local-RCE class.
+        let mut actions = FakeActions::default();
+        let mut dispatcher = Dispatcher::new(None, &mut actions);
+        let intent = Intent::new("open_app", json!({"url": "file:///C:/Windows/System32/cmd.exe"}), None);
+        let result = dispatcher.execute(&intent, true);
+        assert_eq!(result["status"], "error");
+        assert!(actions.opened_urls.is_empty());
+    }
+
+    #[test]
+    fn open_app_refuses_a_unc_path_as_url() {
+        let mut actions = FakeActions::default();
+        let mut dispatcher = Dispatcher::new(None, &mut actions);
+        let intent = Intent::new("open_app", json!({"url": r"\\attacker\share\x"}), None);
+        let result = dispatcher.execute(&intent, true);
+        assert_eq!(result["status"], "error");
+        assert!(actions.opened_urls.is_empty());
+    }
+
+    #[test]
+    fn open_app_refuses_a_custom_uri_scheme_as_url() {
+        let mut actions = FakeActions::default();
+        let mut dispatcher = Dispatcher::new(None, &mut actions);
+        let intent = Intent::new("open_app", json!({"url": "myapp://do-something-bad"}), None);
+        let result = dispatcher.execute(&intent, true);
+        assert_eq!(result["status"], "error");
         assert!(actions.opened_urls.is_empty());
     }
 

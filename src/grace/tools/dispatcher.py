@@ -6,6 +6,7 @@ backend, system tools execute directly via Python Windows APIs.
 """
 
 import asyncio
+import glob
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 import re
 import subprocess
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from grace.agent.safety import SafetyGuard
 from grace.intent.parser import Intent
@@ -108,6 +110,47 @@ _WEBSITE_ALIASES: dict[str, str] = {
 }
 
 
+def _validated_http_url(value: str) -> str:
+    """Normalise and validate a browser-open target: http(s) only, or "".
+
+    `open_app`'s `url` param used to reach `webbrowser.open` verbatim - the
+    same class of unconfirmed local-open `os.startfile` is, since a
+    `file://` URI, a UNC path, or a registered custom scheme there can launch
+    or leak credentials with zero confirmation (R15's Python analogue).
+    """
+    v = (value or "").strip()
+    if not v:
+        return ""
+    if v.lower().startswith("www."):
+        v = f"https://{v}"
+    parsed = urlparse(v)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
+    return v
+
+
+# Roots `open_file` may ever open a file from (R2). Resolved fresh each call
+# (not cached at import time) so tests can point USERPROFILE elsewhere.
+_OPEN_FILE_SAFE_DIRS = ("Documents", "Desktop", "Downloads")
+
+
+def _open_file_safe_roots() -> list[str]:
+    user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+    return [os.path.realpath(os.path.join(user_profile, d)) for d in _OPEN_FILE_SAFE_DIRS]
+
+
+def _is_within_open_file_roots(path: str) -> bool:
+    """True when `path` resolves inside Documents, Desktop or Downloads.
+
+    Checked against the fully resolved path, not the raw name: `os.path.join`
+    silently discards its first argument when the second is itself absolute,
+    so this - not the join - is what actually stops a name like
+    `C:\\Windows\\System32\\cmd.exe` from being "found" via that quirk.
+    """
+    real = os.path.realpath(path)
+    return any(real == root or real.startswith(root + os.sep) for root in _open_file_safe_roots())
+
+
 class Dispatcher:
     """Routes intents to CUA or hardcoded tool implementations."""
 
@@ -157,7 +200,7 @@ class Dispatcher:
             return refusal
 
         recorder = get_recorder()
-        result = await self._execute(intent)
+        result = await self._execute(intent, confirmed=confirmed)
         if recorder is not None:
             recorder.record_dispatch(intent.tool, intent.params, result)
         return result
@@ -188,8 +231,14 @@ class Dispatcher:
             "params": intent.params,
         }
 
-    async def _execute(self, intent: Intent) -> dict[str, Any]:
-        """Route to CUA for cua_* tools, or to a hardcoded system tool."""
+    async def _execute(self, intent: Intent, confirmed: bool = False) -> dict[str, Any]:
+        """Route to CUA for cua_* tools, or to a hardcoded system tool.
+
+        `confirmed` reaches only `open_file`: it is the one handler whose
+        answer can depend on it directly (a name with no visible extension
+        can still resolve to an executable), so it is bound into that one
+        entry rather than changing every handler's signature.
+        """
         tool = intent.tool
         params = intent.params
 
@@ -201,7 +250,7 @@ class Dispatcher:
             "open_app": self._open_app,
             "close_app": self._close_app,
             "search_files": self._search_files,
-            "open_file": self._open_file,
+            "open_file": lambda p: self._open_file(p, confirmed=confirmed),
             "read_pdf": self._read_pdf,
             "summarize_pdf": self._summarize_pdf,
             "adjust_volume": self._adjust_volume,
@@ -302,16 +351,30 @@ class Dispatcher:
         if not name and not url:
             return {"status": "error", "error": "Missing 'name' or 'url' parameter"}
 
-        # 1. Check if url or name is a website/URL
-        target_url = url
-        lower_name = name.lower()
-        if not target_url:
+        # 1. An explicit `url` used to reach `webbrowser.open` completely
+        # unvalidated - `open_app` is a fast-path tool with no confirmation
+        # gate, so a model-supplied `file://` URI, a UNC path, or a
+        # registered custom scheme there was a known local-RCE/credential-
+        # leak class (R15's Python analogue). Only http(s) is allowed.
+        target_url = ""
+        if url:
+            target_url = _validated_http_url(url)
+            if not target_url:
+                return {
+                    "status": "error",
+                    "error": f"Refusing to open '{url}': only http/https links are allowed.",
+                }
+        else:
+            # 2. Otherwise, infer a website from the name (a known alias, or
+            # text that already looks like a bare URL/domain).
+            lower_name = name.lower()
             if lower_name in _WEBSITE_ALIASES:
                 target_url = _WEBSITE_ALIASES[lower_name]
             elif lower_name.startswith(("http://", "https://", "www.")) or any(
                 ext in lower_name for ext in [".com", ".org", ".net", ".io", ".edu", ".gov"]
             ):
-                target_url = name if name.startswith("http") else f"https://{name}"
+                candidate = name if name.startswith("http") else f"https://{name}"
+                target_url = _validated_http_url(candidate)
 
         if target_url:
             import webbrowser
@@ -413,18 +476,44 @@ class Dispatcher:
         except Exception as e:
             return {"status": "error", "error": str(e), "text": f"Search failed: {e}"}
 
-    async def _open_file(self, params: dict) -> dict:
+    async def _open_file(self, params: dict, confirmed: bool = False) -> dict:
+        """Open a file by name - but only one Grace can actually vouch for (R2).
+
+        Used to fall back to `os.startfile(name)` on the raw, unvalidated
+        model text whenever nothing else matched - no extension check, no
+        location check, no UNC/path-separator check. That fallback is gone
+        outright: a name this cannot resolve inside Documents, Desktop or
+        Downloads is refused, never handed to the OS opener as-is.
+        """
         name = params.get("name", "")
         if not name:
             return {"status": "error", "error": "Missing 'name' parameter"}
 
-        try:
-            if name in self._last_search_results:
-                os.startfile(name)
-                return {"status": "ok", "text": f"I've opened {name}."}
+        if name.startswith("\\\\") or name.startswith("//"):
+            return {
+                "status": "error",
+                "error": f"Refusing to open a network path: {name}",
+                "text": "I don't open files over the network.",
+            }
 
-            import glob
+        # A bare filename only, e.g. "budget.pdf" - not a path. This is what
+        # actually stops `name` from escaping the search directories below:
+        # `os.path.join(search_dir, name)` silently discards `search_dir` if
+        # `name` is itself absolute, and a name containing ".." or a drive
+        # letter would otherwise ride that straight past this function's own
+        # allowed roots.
+        if name != os.path.basename(name):
+            return {
+                "status": "error",
+                "error": f"Refusing '{name}': expected a file name, not a path.",
+                "text": "I can only open a file by name, not a path.",
+            }
 
+        target_path: Optional[str] = None
+
+        if name in self._last_search_results:
+            target_path = name
+        else:
             user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
             search_dirs = [
                 os.path.join(user_profile, "Documents"),
@@ -432,14 +521,46 @@ class Dispatcher:
                 os.path.join(user_profile, "Downloads"),
             ]
 
+            # 1. An exact filename match first - a substring glob must never
+            # win over the file the user actually named.
             for search_dir in search_dirs:
-                matches = glob.glob(os.path.join(search_dir, f"*{name}*"))
-                if matches:
-                    path = matches[0]
-                    os.startfile(path)
-                    return {"status": "ok", "text": f"I've opened {name}."}
+                candidate = os.path.join(search_dir, name)
+                if os.path.isfile(candidate):
+                    target_path = candidate
+                    break
 
-            os.startfile(name)
+            # 2. Fall back to a substring search. Glob metacharacters in
+            # `name` (`*`, `?`, `[`) are escaped so model-supplied text
+            # narrows the match instead of widening it.
+            if target_path is None:
+                for search_dir in search_dirs:
+                    matches = glob.glob(os.path.join(search_dir, f"*{glob.escape(name)}*"))
+                    if matches:
+                        target_path = matches[0]
+                        break
+
+        if target_path is None or not _is_within_open_file_roots(target_path):
+            return {
+                "status": "error",
+                "error": f"'{name}' was not found in Documents, Desktop or Downloads.",
+                "text": f"I couldn't find {name} in Documents, Desktop or Downloads.",
+            }
+
+        if SafetyGuard.has_dangerous_open_extension(target_path) and not confirmed:
+            # The common case (the name itself names an .exe/.lnk/etc.) was
+            # already stopped upstream at the confirmation gate - reaching
+            # here unconfirmed means the danger only became visible after
+            # resolving a bare name, which this refuses outright rather than
+            # invent a second, ad-hoc confirmation round mid-handler.
+            return {
+                "status": "error",
+                "error": f"Refusing to open '{target_path}' without confirmation: "
+                         f"{os.path.splitext(target_path)[1]} files can run code.",
+                "text": f"{name} could run code on your computer, so I won't open it without your say-so.",
+            }
+
+        try:
+            os.startfile(target_path)
             return {"status": "ok", "text": f"I've opened {name}."}
         except Exception as e:
             return {"status": "error", "error": str(e), "text": f"I couldn't open {name}. {e}"}

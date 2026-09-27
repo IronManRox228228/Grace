@@ -35,7 +35,7 @@ class RecordingDispatcher(Dispatcher):
         super().__init__()
         self.executed: list[str] = []
 
-    async def _execute(self, intent: Intent) -> dict:
+    async def _execute(self, intent: Intent, confirmed: bool = False) -> dict:
         self.executed.append(intent.tool)
         return {"status": "ok", "text": "done"}
 

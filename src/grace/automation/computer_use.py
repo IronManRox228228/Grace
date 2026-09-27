@@ -236,10 +236,15 @@ class ComputerUse:
 
     def __init__(self):
         self._available = False
+        self._app_indexer = None
 
     @property
     def is_ready(self) -> bool:
         return self._available
+
+    def set_app_indexer(self, indexer) -> None:
+        """Inject a pre-built `AppIndexer` (also lets tests stub it out)."""
+        self._app_indexer = indexer
 
     def start(self) -> None:
         """Initialize the computer-use backend."""
@@ -1058,10 +1063,40 @@ class ComputerUse:
         }
 
     def _launch(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Launch an application by name.
+
+        Used to alias a handful of names then hand the raw (possibly
+        aliased) text straight to `os.startfile` with no other validation at
+        all (R3): no path/protocol/character restriction, unlike the app
+        indexer's own safer launch path. A UNC path there leaks the Windows
+        user's NTLM handshake unconfirmed; any other URI scheme just runs.
+        This now goes through that same validated resolution `open_app`
+        already uses (`AppIndexer.launch`) - which resolves against the
+        installed-app index, a small set of known protocol handlers, or
+        `os.startfile`'s own PATH search, and refuses unsafe shell characters
+        itself - after refusing outright what is not "an app name" at all:
+        a UNC path, a path with separators, or a scheme other than http/https.
+        """
         app = params.get("app", "").strip()
         if not app:
             return {"ok": False, "action": "launch", "message": "Missing app parameter"}
-        
+
+        if app.startswith("\\\\") or app.startswith("//"):
+            return {"ok": False, "action": "launch", "message": f"Refusing a network path: {app}"}
+
+        lower = app.lower()
+        if "://" in lower:
+            if not lower.startswith(("http://", "https://")):
+                return {
+                    "ok": False, "action": "launch",
+                    "message": f"Refusing '{app}': only http/https links are allowed.",
+                }
+        elif "\\" in app or "/" in app:
+            return {
+                "ok": False, "action": "launch",
+                "message": f"Refusing '{app}': expected an app name, not a path.",
+            }
+
         aliases = {
             "edge": "msedge", "microsoft edge": "msedge", "browser": "msedge",
             "chrome": "chrome", "google chrome": "chrome", "firefox": "firefox",
@@ -1069,15 +1104,19 @@ class ComputerUse:
             "word": "winword", "excel": "excel", "powerpoint": "powerpnt",
             "settings": "ms-settings:", "explorer": "explorer",
         }
-        target = aliases.get(app.lower(), app)
-        try:
-            os.startfile(target)
-            return {"ok": True, "action": "launch", "message": f"Launched {app}"}
-        except Exception as e:
-            # No shell fallback: `target` can be model-generated text, and a
-            # shell=True Popen re-parses it for &|<>^ - a launch request is not
-            # supposed to be able to run a second, arbitrary command.
-            return {"ok": False, "action": "launch", "message": f"Failed to launch {app}: {e}"}
+        target = aliases.get(lower, app)
+
+        if self._app_indexer is None:
+            from grace.automation.app_indexer import AppIndexer
+
+            self._app_indexer = AppIndexer()
+
+        result = self._app_indexer.launch(target)
+        ok = result.get("status") == "ok"
+        message = result.get("text") or result.get("error") or (
+            f"Launched {app}" if ok else f"Failed to launch {app}"
+        )
+        return {"ok": ok, "action": "launch", "message": message}
 
     def _text(self, params: dict[str, Any] = None) -> dict[str, Any]:
         return self._get_text(params)
