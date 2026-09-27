@@ -7,7 +7,8 @@ import os
 import shutil
 import subprocess
 import sys
-import urllib.request
+
+from verified_download import HashMismatch, download_and_verify, verify_sha256
 
 if sys.platform == "win32":
     try:
@@ -33,6 +34,13 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 LIBS_DIR = os.path.join(PROJECT_ROOT, "libs")
 OCULIX_JAR_PATH = os.path.join(LIBS_DIR, f"oculixapi-{OCULIX_VERSION}.jar")
 OPENCV_JAR_PATH = os.path.join(LIBS_DIR, f"opencv-{OPENCV_JAR_VERSION}.jar")
+
+# Pinned SHA-256 for each JAR (R32/theme 3: these used to be pulled from Maven
+# Central with no integrity check at all, into the same process that issues
+# real clicks). Computed from the copies already present in this repo's
+# libs/ directory, matching the exact versions pinned above - not invented.
+OCULIX_JAR_SHA256 = "d1e8c2e9290550abb1c6c96ded791eac95f7bcce911cc7f839b70cab75f83cea"
+OPENCV_JAR_SHA256 = "f022c042faad7e2fc1d4fd5fb181929f410b9a5f9da910da158e0199fd213f3b"
 
 
 def check_java() -> bool:
@@ -65,39 +73,44 @@ def check_java() -> bool:
         return False
 
 
+def _ensure_jar(label: str, url: str, path: str, expected_sha256: str) -> bool:
+    """Verify a JAR already on disk, or download and verify a fresh one.
+
+    Every run re-checks a JAR that already exists, not just a freshly
+    downloaded one - a compromised JAR left over from an earlier, unverified
+    run must not keep being trusted just because it is already present (R32).
+    """
+    if os.path.isfile(path):
+        try:
+            verify_sha256(path, expected_sha256)
+        except HashMismatch as e:
+            print(f"[X] {label} JAR on disk failed verification: {e}")
+            return False
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        print(f"[OK] {label} JAR verified ({size_mb:.1f} MB): {path}")
+        return True
+
+    print(f"[-->] Downloading {label} JAR from Maven Central...")
+    try:
+        download_and_verify(url, path, expected_sha256, progress=False)
+    except HashMismatch as e:
+        print(f"[X] {label} JAR failed verification after download: {e}")
+        return False
+    except Exception as e:
+        print(f"[X] Failed to download {label} JAR: {e}")
+        return False
+    size_mb = os.path.getsize(path) / (1024 * 1024)
+    print(f"[OK] Downloaded {label} JAR ({size_mb:.1f} MB) -> {path}")
+    return True
+
+
 def download_jars() -> bool:
-    """Download OculiX API and OpenCV JARs from Maven Central."""
+    """Download (or verify already-present) OculiX and OpenCV JARs."""
     os.makedirs(LIBS_DIR, exist_ok=True)
 
-    # 1. Download OculiX JAR
-    if not os.path.isfile(OCULIX_JAR_PATH):
-        print(f"[-->] Downloading OculiX {OCULIX_VERSION} JAR from Maven Central...")
-        try:
-            urllib.request.urlretrieve(OCULIX_MAVEN_URL, OCULIX_JAR_PATH)
-            size_mb = os.path.getsize(OCULIX_JAR_PATH) / (1024 * 1024)
-            print(f"[OK] Downloaded OculiX JAR ({size_mb:.1f} MB) -> {OCULIX_JAR_PATH}")
-        except Exception as e:
-            print(f"[X] Failed to download OculiX JAR: {e}")
-            return False
-    else:
-        size_mb = os.path.getsize(OCULIX_JAR_PATH) / (1024 * 1024)
-        print(f"[OK] OculiX JAR exists ({size_mb:.1f} MB): {OCULIX_JAR_PATH}")
-
-    # 2. Download OpenCV JAR
-    if not os.path.isfile(OPENCV_JAR_PATH):
-        print(f"[-->] Downloading OpenCV {OPENCV_JAR_VERSION} JAR from Maven Central...")
-        try:
-            urllib.request.urlretrieve(OPENCV_MAVEN_URL, OPENCV_JAR_PATH)
-            size_mb = os.path.getsize(OPENCV_JAR_PATH) / (1024 * 1024)
-            print(f"[OK] Downloaded OpenCV JAR ({size_mb:.1f} MB) -> {OPENCV_JAR_PATH}")
-        except Exception as e:
-            print(f"[X] Failed to download OpenCV JAR: {e}")
-            return False
-    else:
-        size_mb = os.path.getsize(OPENCV_JAR_PATH) / (1024 * 1024)
-        print(f"[OK] OpenCV JAR exists ({size_mb:.1f} MB): {OPENCV_JAR_PATH}")
-
-    return True
+    oculix_ok = _ensure_jar("OculiX", OCULIX_MAVEN_URL, OCULIX_JAR_PATH, OCULIX_JAR_SHA256)
+    opencv_ok = _ensure_jar("OpenCV", OPENCV_MAVEN_URL, OPENCV_JAR_PATH, OPENCV_JAR_SHA256)
+    return oculix_ok and opencv_ok
 
 
 def test_jpype_bridge() -> bool:
