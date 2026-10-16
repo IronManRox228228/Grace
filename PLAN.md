@@ -6,6 +6,7 @@ Agreed on 2026-09-26. This file is the handoff between sessions: read it before 
 
 ## 0. Where things stand
 
+- **Current phase (from 2026-10-16): the Symphony 2026 Buildathon (Bolna).** It is virtual. Submit by 2026-10-31. The shortlist comes on 11-03, interviews are 11-05 to 11-07, and the finale is on 11-20 in Bengaluru. Until then the micromodel fleet (§3) is deferred and one mid-size model runs every LLM slot (see "Interim" in §3). The demo targets the RTX 4060. CPU-floor work (§2, §4) waits until after the buildathon.
 - **Branch:** `migration/phase-0-contract-and-harness`. The Python → Rust/Tauri end-to-end port was already in progress before this plan; everything below assumes it continues.
 - **Committed and pushed (2026-09-26):** the user's QoL/accessibility batch plus the nine ship-blocker fixes (`3c7b990`), the 3 s minimum from wake word to idle on a silent activation (`4f108c6`), and phase 2 of the Rust port (`470c51b`; status in `PORT_STATUS.md`).
 - **Tests:** Python 841 passed, 1 skipped (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`). Rust 200 passed, 3 ignored (`cargo test --workspace`).
@@ -45,6 +46,25 @@ Grace detects the hardware at startup and picks where each model runs. Same mode
 ---
 
 ## 3. Model stack
+
+**Interim: one model for every slot (decided 2026-10-16, for the buildathon).**
+- **Model:** Qwythos 4B or Qwythos 9B v2. The user picks and downloads it. It is served by the existing llama-server.
+- **It covers every LLM slot:**
+  - tool calling
+  - planning
+  - element selection (picking an element id from the summarised list)
+  - yes/no on confirmation answers
+  - routing
+  
+  That means one prompt format, one server and one set of tapes.
+- **Why:** tuning and benchmarking five small models doesn't fit in 15 days. One model keeps iteration fast while the harness is made reliable on the hardest tasks.
+- **Unchanged:** ASR, TTS, the wake word, and the fallbacks (UI-TARS and the cloud model).
+- **VRAM:** a 9B at Q4 is about 5.5 GB plus KV cache on the 4060's 8 GB, so it can't sit on the GPU alongside UI-TARS 7B. Load UI-TARS only on demand, or keep the 4B.
+- **CPU floor:** neither model is viable on the CPU floor. The floor stays the long-term target.
+- **Bar:** the hardest corpus scenarios pass in a live run on the 4060, not only in replay.
+- **Rule:** every harness fix stays model-agnostic. Prompts live in one place, and there are no model-specific parsing hacks. Switching back to the fleet below is then a config change plus a benchmark.
+
+**Long-term target: the micromodel fleet.**
 
 | Slot | Pick | Challenger | Switch if… |
 |---|---|---|---|
@@ -361,6 +381,21 @@ Things Grace knows about the user: contacts and relations, preferences, standing
 ---
 
 ## 13. Suggested order of work
+
+**Buildathon first (until 2026-10-31):**
+1. Install the reviewed tapes, and get the corpus replaying green.
+2. Point every LLM slot at the chosen Qwythos model, then run it live on the new untrusted-data prompt markers.
+3. Harden the harness on the hardest scenarios:
+   - agentic multi-step tasks
+   - safety confirmation
+   - "stop" mid-task
+   - `read_pdf`
+   
+   Record a live tape for each.
+4. Fill in `LLAMA_CPP_SHA256` (R4).
+5. Record the demo: 3–4 core flows.
+
+**After the buildathon,** resume the list below.
 
 1. **Harness trust:** commit or split the current working tree (ask the user first), regenerate and review the tapes, add the corpus-replay gate.
 2. **Runtime slimming:** remove PyTorch; sherpa-onnx for ASR, TTS, VAD and wake word; thread budget; priority control.
