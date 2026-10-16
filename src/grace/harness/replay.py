@@ -686,6 +686,10 @@ async def replay(tape: Tape) -> ReplayResult:
         ):
             stack.enter_context(mock.patch(f"grace.main.{name}", replacement))
 
+        from ..agent.memory import PersistentMemoryStore as _RealMemoryStore
+        stack.enter_context(mock.patch("grace.agent.memory.PersistentMemoryStore",
+            lambda *a, **k: _RealMemoryStore(db_path=":memory:")))
+
         from grace.main import GraceApp
 
         app = GraceApp()

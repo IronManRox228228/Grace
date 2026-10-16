@@ -206,3 +206,41 @@ class TestRecorderResolution:
         blocker.write_text("x")
         monkeypatch.setenv("GRACE_RECORD_DIR", str(blocker))
         assert get_recorder() is None
+
+
+class TestTapeRedaction:
+    """R21 (secrets/passwords) and R44 (username/home path) tape redaction tests."""
+
+    def test_recorder_redacts_password_fields(self, recorder):
+        recorder.record_dispatch("type_text", {"role": "password", "target": "password_box", "text": "SuperSecret123!"}, {"status": "ok"})
+        record = _read(recorder, "dispatch")[0]
+        assert record["params"]["text"] == "<redacted>"
+        assert record["params"]["target"] == "password_box"
+
+    def test_recorder_redacts_secrets_and_cards(self, recorder):
+        secret_key = "sk-1234567890abcdef1234567890"
+        card_num = "4111 2222 3333 4444"
+        recorder.record_event({"type": "UserMessage", "content": f"My key is {secret_key} and card is {card_num}"})
+        record = _read(recorder, "events")[0]
+        assert secret_key not in record["event"]["content"]
+        assert card_num not in record["event"]["content"]
+        assert "<redacted>" in record["event"]["content"]
+
+    def test_recorder_redacts_username_and_home_path(self, recorder, monkeypatch):
+        from grace.harness import redact as redact_mod
+
+        username, home = redact_mod.get_user_and_home()
+        if not username:
+            username = "testuser"
+            monkeypatch.setenv("USERNAME", username)
+        if not home:
+            home = "C:\\Users\\" + username
+
+        test_path = os.path.join(home, "Documents", "report.pdf")
+        recorder.record_dispatch("read_pdf", {"path": test_path, "user": username}, {"status": "ok"})
+
+        record = _read(recorder, "dispatch")[0]
+        params = record["params"]
+        assert home not in params["path"]
+        assert "<HOME>" in params["path"]
+        assert params["user"] == "<USER>"

@@ -59,6 +59,30 @@ class TestWakeWordDetector:
         detector.reset()
         assert not detector.detected
 
+    def test_whole_word_matching_rejects_substrings(self):
+        """R13: 'Gracefully' or 'disgrace' must not wake Grace."""
+        detector = WakeWordDetector(model_path="dummy_path")
+        called = []
+        detector.set_callback(lambda: called.append(True))
+
+        detector._check_keyword('{"text": "she danced gracefully across the floor"}')
+        assert called == []
+        assert not detector.detected
+
+        detector._check_keyword('{"text": "that was a total disgrace"}')
+        assert called == []
+        assert not detector.detected
+
+    def test_whole_word_matching_accepts_whole_word(self):
+        """Whole-word occurrences of the wake phrase trigger detection."""
+        detector = WakeWordDetector(model_path="dummy_path")
+        called = []
+        detector.set_callback(lambda: called.append(True))
+
+        detector._check_keyword('{"text": "grace"}')
+        assert called == [True]
+        assert detector.detected
+
     def test_rec_access_is_guarded_by_a_lock(self):
         """R7: `reset()` and the recognizer thread both touch `self._rec` -
         without one shared lock, nothing stops them doing it at the same time.

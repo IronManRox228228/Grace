@@ -54,15 +54,29 @@ class WsEventServer:
     forwarded through the *on_wake* callback.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8765, allowed_origins: str = ""):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8765,
+        allowed_origins: str = "",
+        auth_token: Optional[str] = None,
+    ):
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            logger.warning(f"Binding WebSocket server to loopback 127.0.0.1 instead of '{host}'")
+            host = "127.0.0.1"
         self._host = host
         self._port = port
+        self._auth_token = auth_token
         self._app: Optional[web.Application] = None
         self._runner: Optional[web.AppRunner] = None
         self._site: Optional[web.TCPSite] = None
         self._clients: set[web.WebSocketResponse] = set()
         self._on_wake: Optional[Callable[[], None]] = None
         self._allowed_origins = DEFAULT_ALLOWED_ORIGINS | _parse_extra_origins(allowed_origins)
+
+    @property
+    def auth_token(self) -> str:
+        return self._auth_token
 
     @property
     def is_connected(self) -> bool:
@@ -76,6 +90,20 @@ class WsEventServer:
         if not is_origin_allowed(origin, self._allowed_origins):
             logger.warning(f"Rejected WebSocket handshake from disallowed origin: {origin}")
             raise web.HTTPForbidden(text="Origin not allowed")
+
+        # R8: WebSocket auth token validation
+        if self._auth_token:
+            auth_header = request.headers.get("Authorization", "")
+            bearer_token = auth_header[7:].strip() if auth_header.startswith("Bearer ") else None
+            token = (
+                request.query.get("token")
+                or request.headers.get("X-Grace-Token")
+                or bearer_token
+            )
+            import hmac
+            if not token or not hmac.compare_digest(token, self._auth_token):
+                logger.warning("Rejected WebSocket connection: missing or invalid auth token (R8)")
+                raise web.HTTPUnauthorized(text="Invalid or missing auth token")
 
         ws = web.WebSocketResponse()
         try:

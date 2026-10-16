@@ -1,4 +1,5 @@
 import { GraceEvent } from '../state/types';
+import { getWsAuthToken } from '../shell';
 
 // Default backend WebSocket URL.
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8765';
@@ -34,11 +35,25 @@ export function createWsClient(
     }
   }
 
-  function connect() {
+  async function connect() {
     if (signal.aborted) return;
 
     cleanup();
-    ws = new WebSocket(wsUrl);
+
+    let targetUrl = wsUrl;
+    try {
+      const token = await getWsAuthToken();
+      if (token) {
+        // If wsUrl is relative or lacks protocol, URL handles ws:// and http://
+        const separator = wsUrl.includes('?') ? '&' : '?';
+        targetUrl = `${wsUrl}${separator}token=${encodeURIComponent(token)}`;
+      }
+    } catch {
+      // ignore
+    }
+
+    if (signal.aborted) return;
+    ws = new WebSocket(targetUrl);
 
     ws.onopen = () => {
       console.log('[Grace] WebSocket connected');

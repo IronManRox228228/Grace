@@ -95,12 +95,17 @@ class TestLoadEnv:
 
 
 class TestFindEnvFile:
-    def test_finds_env_by_walking_up(self, tmp_path):
+    def test_finds_env_in_specified_root_only(self, tmp_path):
+        (tmp_path / ".env").write_text("A=1\n", encoding="utf-8")
+        assert find_env_file(str(tmp_path)) == str(tmp_path / ".env")
+
+    def test_does_not_walk_up_parent_directories(self, tmp_path):
         (tmp_path / ".env").write_text("A=1\n", encoding="utf-8")
         nested = tmp_path / "a" / "b"
         nested.mkdir(parents=True)
 
-        assert find_env_file(str(nested)) == str(tmp_path / ".env")
+        # R6: Must NOT walk up to tmp_path / ".env"
+        assert find_env_file(str(nested)) is None
 
     def test_returns_none_when_absent(self, tmp_path):
         nested = tmp_path / "a" / "b"

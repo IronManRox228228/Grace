@@ -55,17 +55,26 @@ def parse_env_file(text: str) -> dict[str, str]:
 
 
 def find_env_file(start: Optional[str] = None) -> Optional[str]:
-    """Locate the project ``.env`` by walking up from this file."""
-    here = start or os.path.dirname(os.path.abspath(__file__))
-    current = here
-    for _ in range(5):
-        candidate = os.path.join(current, ".env")
-        if os.path.isfile(candidate):
-            return candidate
-        parent = os.path.dirname(current)
-        if parent == current:
-            break
-        current = parent
+    """Locate the project ``.env`` only in repo or app root, never by walking up.
+
+    Finding R6: Walking up parent directories allows an attacker in a shared
+    environment to plant a malicious .env in a parent directory.
+    """
+    if start:
+        candidate = os.path.join(start, ".env")
+        return candidate if os.path.isfile(candidate) else None
+
+    # Check repo root (two levels up from src/grace) and cwd only
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(os.path.join(here, "..", ".."))
+    candidate_repo = os.path.join(repo_root, ".env")
+    if os.path.isfile(candidate_repo):
+        return candidate_repo
+
+    candidate_cwd = os.path.join(os.getcwd(), ".env")
+    if os.path.isfile(candidate_cwd):
+        return candidate_cwd
+
     return None
 
 

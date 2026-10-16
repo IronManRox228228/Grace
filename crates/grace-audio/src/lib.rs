@@ -58,6 +58,32 @@ pub trait WakeWordDetector: Send {
     fn resume(&mut self);
 }
 
+/// Whole-word wake phrase matcher (mirrors R13 in src/grace/audio/wake_word.py).
+///
+/// Substrings like "gracefully" or "disgrace" must not match. Only whole-word
+/// occurrences of `keyword` (or "grace" / "hey grace") trigger detection.
+pub fn is_wake_word_match(text: &str, keyword: &str) -> bool {
+    let lower = text.to_lowercase();
+    let kw = keyword.to_lowercase();
+    let target = if kw.is_empty() { "grace" } else { &kw };
+
+    for phrase in [target, "grace", "hey grace"] {
+        let words: Vec<&str> = phrase.split_whitespace().collect();
+        if words.is_empty() {
+            continue;
+        }
+        let text_words: Vec<&str> = lower
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+
+        if text_words.windows(words.len()).any(|window| window == words.as_slice()) {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,4 +95,20 @@ mod tests {
         assert_eq!(src.next_chunk(), Some(vec![3, 4]));
         assert_eq!(src.next_chunk(), None);
     }
+
+    #[test]
+    fn whole_word_match_rejects_substrings() {
+        assert!(!is_wake_word_match("gracefully", "grace"));
+        assert!(!is_wake_word_match("disgrace", "grace"));
+        assert!(!is_wake_word_match("disgraceful situation", "grace"));
+    }
+
+    #[test]
+    fn whole_word_match_accepts_isolated_keyword() {
+        assert!(is_wake_word_match("grace", "grace"));
+        assert!(is_wake_word_match("hey grace", "grace"));
+        assert!(is_wake_word_match("grace, can you hear me?", "grace"));
+        assert!(is_wake_word_match("saving grace", "grace"));
+    }
 }
+

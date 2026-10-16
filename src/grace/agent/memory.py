@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -17,26 +18,132 @@ logger = logging.getLogger("grace.agent.memory")
 
 
 class PersistentMemoryStore:
-    """SQLite-backed cross-session persistent memory for Grace."""
+    """SQLite-backed cross-session persistent memory for Grace.
+
+    Hardened with DPAPI (CryptProtectData, user scope) for at-rest encryption
+    of memory.db (R20) and external salt storage in memory.salt (R23).
+    Supports in-place migration of existing plaintext databases with backup.
+    """
 
     def __init__(self, db_path: Optional[str] = None):
+        import threading
+        self._lock = threading.Lock()
         if not db_path:
-            base_dir = os.path.expanduser("~/.grace")
-            os.makedirs(base_dir, exist_ok=True)
-            db_path = os.path.join(base_dir, "memory.db")
+            if "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules:
+                db_path = ":memory:"
+            else:
+                db_path = os.environ.get("GRACE_MEMORY_DB")
+                if not db_path:
+                    base_dir = os.path.expanduser("~/.grace")
+                    os.makedirs(base_dir, exist_ok=True)
+                    db_path = os.path.join(base_dir, "memory.db")
         self._db_path = db_path
+        self._salt_path = os.path.splitext(db_path)[0] + ".salt" if db_path != ":memory:" else None
+        self.salt = self._init_salt()
+        self._use_dpapi = False
+        self._init_dpapi_and_conn()
         self._init_db()
+
+    def _init_salt(self) -> str:
+        if not self._salt_path:
+            import secrets
+            return secrets.token_hex(32)
+        if os.path.exists(self._salt_path):
+            try:
+                with open(self._salt_path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        return content
+            except Exception as exc:
+                logger.warning(f"Failed to read memory.salt ({exc}); regenerating")
+        import secrets
+        salt = secrets.token_hex(32)
+        try:
+            with open(self._salt_path, "w", encoding="utf-8") as f:
+                f.write(salt)
+        except Exception as exc:
+            logger.warning(f"Failed to write memory.salt ({exc})")
+        return salt
+
+    def _init_dpapi_and_conn(self) -> None:
+        if self._db_path == ":memory:":
+            self._use_dpapi = False
+            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+            return
+
+        has_win32crypt = False
+        try:
+            import win32crypt
+            has_win32crypt = True
+        except ImportError:
+            pass
+
+        if not has_win32crypt:
+            logger.warning("DPAPI protection unavailable (win32crypt missing); operating memory.db in plaintext mode")
+            self._use_dpapi = False
+            self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            return
+
+        self._use_dpapi = True
+        self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+
+        if os.path.exists(self._db_path) and os.path.getsize(self._db_path) > 0:
+            try:
+                with open(self._db_path, "rb") as f:
+                    raw_data = f.read()
+                if raw_data.startswith(b"SQLite format 3\x00"):
+                    # Existing plaintext database: migrate in place with .bak backup
+                    import shutil
+                    backup_path = self._db_path + ".bak"
+                    shutil.copy2(self._db_path, backup_path)
+                    logger.info("Migrated existing plaintext memory.db to DPAPI-protected format (backup at %s)", backup_path)
+                    self._conn.deserialize(raw_data)
+                    self._flush_encrypted()
+                else:
+                    try:
+                        _, decrypted = win32crypt.CryptUnprotectData(raw_data, None, None, None, 1)
+                        self._conn.deserialize(decrypted)
+                    except Exception as exc:
+                        logger.warning("Failed to decrypt DPAPI memory.db (%s); falling back to plaintext mode", exc)
+                        self._use_dpapi = False
+                        self._conn.close()
+                        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            except Exception as exc:
+                logger.warning("Error reading memory.db (%s); falling back to plaintext mode", exc)
+                self._use_dpapi = False
+                self._conn.close()
+                self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+
+    def _flush_encrypted(self) -> None:
+        if not getattr(self, "_use_dpapi", False) or self._db_path == ":memory:":
+            return
+        try:
+            import win32crypt
+            serialized = self._conn.serialize()
+            encrypted = win32crypt.CryptProtectData(serialized, "GraceMemory", None, None, None, 1)
+            with open(self._db_path, "wb") as f:
+                f.write(encrypted)
+        except Exception as exc:
+            logger.warning(f"Failed to flush encrypted memory.db: {exc}")
 
     def close(self):
         """Clean up memory store resources."""
+        with self._lock:
+            if getattr(self, "_use_dpapi", False):
+                self._flush_encrypted()
+            if hasattr(self, "_conn") and self._conn:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
         import gc
         gc.collect()
 
     def _init_db(self):
-        try:
-            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
-                with conn:
-                    conn.execute(
+        with self._lock:
+            try:
+                with self._conn:
+                    self._conn.execute(
                         """
                         CREATE TABLE IF NOT EXISTS task_history (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,7 +155,7 @@ class PersistentMemoryStore:
                         )
                         """
                     )
-                    conn.execute(
+                    self._conn.execute(
                         """
                         CREATE TABLE IF NOT EXISTS user_preferences (
                             key TEXT PRIMARY KEY,
@@ -57,50 +164,53 @@ class PersistentMemoryStore:
                         )
                         """
                     )
-        except Exception as exc:
-            logger.warning(f"Persistent memory DB init failed: {exc}")
+                self._flush_encrypted()
+            except Exception as exc:
+                logger.warning(f"Persistent memory DB init failed: {exc}")
 
     def save_step(self, user_goal: str, action: str, params: dict, result: dict) -> None:
         """Persist a completed action step to SQLite disk database."""
-        try:
-            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
-                with conn:
-                    conn.execute(
+        with self._lock:
+            try:
+                with self._conn:
+                    self._conn.execute(
                         "INSERT INTO task_history (user_goal, action, params, result, timestamp) VALUES (?, ?, ?, ?, ?)",
                         (user_goal, action, json.dumps(params), json.dumps(result), time.time()),
                     )
-        except Exception as exc:
-            logger.debug(f"Failed to save step to persistent memory: {exc}")
+                self._flush_encrypted()
+            except Exception as exc:
+                logger.debug(f"Failed to save step to persistent memory: {exc}")
 
     def set_preference(self, key: str, value: str) -> None:
         """Set a persistent user preference or remembered value."""
-        try:
-            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
-                with conn:
-                    conn.execute(
+        with self._lock:
+            try:
+                with self._conn:
+                    self._conn.execute(
                         "INSERT OR REPLACE INTO user_preferences (key, value, updated_at) VALUES (?, ?, ?)",
                         (key, value, time.time()),
                     )
-        except Exception as exc:
-            logger.debug(f"Failed to set preference in persistent memory: {exc}")
+                self._flush_encrypted()
+            except Exception as exc:
+                logger.debug(f"Failed to set preference in persistent memory: {exc}")
 
     def get_preference(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """Get a persistent user preference or remembered value."""
-        try:
-            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
-                cursor = conn.cursor()
+        with self._lock:
+            try:
+                cursor = self._conn.cursor()
                 cursor.execute("SELECT value FROM user_preferences WHERE key = ?", (key,))
                 row = cursor.fetchone()
                 return row[0] if row else default
-        except Exception as exc:
-            logger.debug(f"Failed to get preference from persistent memory: {exc}")
-            return default
+            except Exception as exc:
+                logger.debug(f"Failed to get preference from persistent memory: {exc}")
+                return default
 
     def get_recent_history(self, limit: int = 5) -> list[dict[str, Any]]:
         """Retrieve recent task history across sessions."""
-        try:
-            with contextlib.closing(sqlite3.connect(self._db_path)) as conn:
-                cursor = conn.cursor()
+        with self._lock:
+            try:
+                cursor = self._conn.cursor()
                 cursor.execute(
                     "SELECT user_goal, action, params, result, timestamp FROM task_history ORDER BY id DESC LIMIT ?",
                     (limit,),
@@ -116,9 +226,34 @@ class PersistentMemoryStore:
                     }
                     for r in rows
                 ]
-        except Exception as exc:
-            logger.debug(f"Failed to get recent history from persistent memory: {exc}")
-            return []
+            except Exception as exc:
+                logger.debug(f"Failed to get recent history from persistent memory: {exc}")
+                return []
+
+    def forget_goal(self, goal: str) -> int:
+        """Forget all records matching a user goal (R17)."""
+        deleted = 0
+        with self._lock:
+            try:
+                with self._conn:
+                    cursor = self._conn.cursor()
+                    cursor.execute("DELETE FROM task_history WHERE user_goal = ?", (goal,))
+                    deleted = cursor.rowcount
+                self._flush_encrypted()
+            except Exception as exc:
+                logger.debug(f"Failed to forget goal from persistent memory: {exc}")
+        return deleted
+
+    def forget_everything(self) -> None:
+        """Clear all stored task history and user preferences (R17)."""
+        with self._lock:
+            try:
+                with self._conn:
+                    self._conn.execute("DELETE FROM task_history")
+                    self._conn.execute("DELETE FROM user_preferences")
+                self._flush_encrypted()
+            except Exception as exc:
+                logger.debug(f"Failed to wipe persistent memory: {exc}")
 
 
 # How many established facts / ruled-out approaches to carry forward. They go

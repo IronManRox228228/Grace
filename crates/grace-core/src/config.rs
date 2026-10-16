@@ -72,6 +72,7 @@ pub struct Config {
     pub gemini_api_key: String,
     pub gemini_model_name: String,
     pub use_cloud_llm: bool,
+    pub allow_cloud_screenshots: bool,
     pub llama_host: String,
     pub llama_port: i64,
     pub llama_context_window: i64,
@@ -101,6 +102,7 @@ pub struct Config {
     pub ws_host: String,
     pub ws_port: i64,
     pub ws_allowed_origins: String,
+    pub ws_auth_token: String,
 }
 
 impl Config {
@@ -132,7 +134,8 @@ impl Config {
             local_planner_model_path: env_string("LLAMA_PLANNER_MODEL_PATH", ""),
             gemini_api_key: env_string("GEMINI_API_KEY", ""),
             gemini_model_name: env_string("GEMINI_MODEL_NAME", "gemini-3.1-flash-lite"),
-            use_cloud_llm: env_bool("USE_CLOUD_LLM", true),
+            use_cloud_llm: env_bool("USE_CLOUD_LLM", false),
+            allow_cloud_screenshots: env_bool("ALLOW_CLOUD_SCREENSHOTS", false),
             llama_host: env_string("LLAMA_HOST", "127.0.0.1"),
             llama_port: env_int("LLAMA_PORT", 8080),
             llama_context_window: env_int("LLAMA_CONTEXT_WINDOW", 8192),
@@ -154,6 +157,7 @@ impl Config {
             ws_host: env_string("WS_HOST", "127.0.0.1"),
             ws_port: env_int("WS_PORT", 8765),
             ws_allowed_origins: env_string("WS_ALLOWED_ORIGINS", ""),
+            ws_auth_token: env_string("GRACE_WS_TOKEN", ""),
         }
     }
 

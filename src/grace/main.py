@@ -164,6 +164,7 @@ class GraceApp:
             api_key=api_key,
             model_name=self.config.gemini_model_name,
             before_request=(lambda: self._model_swap.swap_to("planner")) if self._model_swap else None,
+            allow_cloud_screenshots=self.config.allow_cloud_screenshots,
         )
 
         # Vision LLM client (shares self.gemma unless model hot-swapping is configured)
@@ -180,11 +181,20 @@ class GraceApp:
         self.intent_prompt = get_system_prompt()
         self.intent_parser = IntentParser()
 
-        # WebSocket server (frontend)
+        # WebSocket server (frontend) - R8 per-launch auth token
+        ws_token = self.config.ws_auth_token
+        if not ws_token:
+            import dataclasses
+            import secrets
+            ws_token = secrets.token_urlsafe(32)
+            self.config = dataclasses.replace(self.config, ws_auth_token=ws_token)
+            os.environ["GRACE_WS_TOKEN"] = ws_token
+
         self.ws_server = WsEventServer(
             host=self.config.ws_host,
             port=self.config.ws_port,
             allowed_origins=self.config.ws_allowed_origins,
+            auth_token=ws_token,
         )
 
         # Computer use

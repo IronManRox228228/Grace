@@ -223,6 +223,8 @@ class Recorder:
 
     def _append(self, stream: str, record: dict) -> None:
         try:
+            from .redact import redact_data
+            record = redact_data(record)
             with self._lock:
                 index = self._counters.get(stream, 0)
                 self._counters[stream] = index + 1
@@ -251,6 +253,8 @@ class Recorder:
     @staticmethod
     def _write_json(path: str, payload: dict) -> None:
         try:
+            from .redact import redact_data
+            payload = redact_data(payload)
             with open(path, "w", encoding="utf-8", newline="\n") as fh:
                 json.dump(payload, fh, indent=2, ensure_ascii=False)
         except Exception as exc:

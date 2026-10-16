@@ -58,13 +58,13 @@ cargo test -p grace-win --lib -- --ignored --test-threads=1
 |---|---|---|---|
 | `crates/grace-contract` | ~340 | `contract/grace-events.schema.json` | `GraceEvent` enum, schema-validated round trip. Unchanged since Phase 1. |
 | `crates/grace-core` | ~5,700 | `config.py`, `agent/safety.py`, `agent/loop.py`, `agent/memory.py`, `agent/perception.py`, `agent/planner.py`, `agent/grounder.py`, `intent/parser.py`, `intent/tools.py`, `intent/router.py`, `tools/dispatcher.py`, `response/generator.py`, `response/feedback.py`, `util/timing.py`, `text/sentence_split.py`, `main.py`'s `GraceApp` turn logic, `perception/elements.py`, `perception/element_graph.py` | The whole turn pipeline's decision logic. See below, module by module. |
-| `crates/grace-audio` | ~250 | `vad/detector.py` | Unchanged since Phase 1: `VadDetector` fully ported; capture/pump/wake-word are trait boundaries. |
+| `crates/grace-audio` | ~270 | `vad/detector.py`, `audio/wake_word.py` | `VadDetector`; `detect_wake_word` with whole-word boundary regex (`\b(keyword|grace|hey\s+grace)\b`) preventing substring false wakes like "gracefully" or "disgrace". Capture/pump are trait boundaries. |
 | `crates/grace-models` | ~250 | `llm/gemma_client.py`'s HTTP shape | `HttpLlm`: a REAL (not stubbed) blocking HTTP client against a local llama.cpp server's `/v1/chat/completions`, non-streaming, matching `GemmaClient.chat(..., stream=False)`'s exact request shape including the `image_b64` → multimodal `image_url` reshaping. `ElementScorer` trait for a future GLiNER-style scorer, not implemented. |
-| `crates/grace-win` | ~600 | `automation/app_indexer.py`, `automation/dpi_helper.py`, a slice of `perception/element_graph.py`'s `active_window()` | `plan_launch`/`find_app` (Phase 1). **New this phase**: `dpi::real::get_dpi_scale`/`ensure_dpi_aware` and `win32::real::foreground_window` - real `windows`-crate Win32 calls, manually verified against the real desktop (see below), plus `dpi::scale_coords` (pure, unit-tested). UIA tree walk, the win32 input driver, and computer-use actions remain trait boundaries. |
-| `crates/grace-harness` | ~750 | `harness/tape.py`, `harness/replay.py` | Tape loader + diff machinery (Phase 1). **New this phase**: `turn_replay.rs` drives the real `grace_core` turn engine against real tapes and diffs the resulting event stream - see "Harness parity" below. |
-| `crates/grace-backend` | ~750 | `ws_server.py`'s Origin allowlist | `WsEventServer` (Phase 1). **New this phase**: `turn.rs`'s `run_demo_turn` wires the real turn engine to the real socket - see "Tauri wiring" below. |
-| `src-tauri/` | (small diff) | `main.js:93-141` | `Backend::start` branches on `GRACE_BACKEND`; the Rust path now runs a real turn per wake request instead of emitting one static `Idle`. |
-| `crates/grace-memory` | ~1,700 | `agent/memory.py`'s `PersistentMemoryStore` (replaced, not ported - see PLAN.md §12) | New this update. A facts store and a history store on `rusqlite`/FTS5, behind `grace-core`'s `PersistentStore` trait. See "grace-memory (PLAN.md §12)" below. |
+| `crates/grace-win` | ~600 | `automation/app_indexer.py`, `automation/dpi_helper.py`, a slice of `perception/element_graph.py`'s `active_window()` | `plan_launch`/`find_app` (Phase 1). `dpi::real::get_dpi_scale`/`ensure_dpi_aware` and `win32::real::foreground_window` - real `windows`-crate Win32 calls. UIA tree walk, win32 input driver (`DesktopActuator`), and input-time foreground window re-checks remain trait boundaries. |
+| `crates/grace-harness` | ~750 | `harness/tape.py`, `harness/replay.py` | Tape loader + diff machinery (Phase 1). `turn_replay.rs` drives the real `grace_core` turn engine against real tapes and diffs the resulting event stream. |
+| `crates/grace-backend` | ~800 | `ws_server.py` | `WsEventServer` with 127.0.0.1 binding, Origin allowlist, and per-launch WebSocket authentication token (`?token=...` or `Authorization: Bearer ...`). `turn.rs` demo turn execution. |
+| `src-tauri/` | (small diff) | `main.js:93-141` | `Backend::start` branches on `GRACE_BACKEND`; manages per-launch WebSocket token generation, passes token to backend and injects token into webview via `window.__GRACE_WS_TOKEN__`. |
+| `crates/grace-memory` | ~1,850 | `agent/memory.py`'s `PersistentMemoryStore` (replaced, not ported - see PLAN.md §12) | Facts store and history store on `rusqlite`/FTS5. Externalized salt (`.salt` file with legacy migration), `forget_goal` cache and DB eviction, voice-scoped deletes. Note: DPAPI at-rest encryption remains Python-only. |
 
 ## What's fully ported this phase (module → behaviour, with tests)
 
@@ -433,14 +433,18 @@ and must be cheap":
   exercises this with a 1-byte cap.
 - **Redaction at write time** (`src/redact.rs`): typed text becomes a
   `(length, salted_hash)` pair, never the text itself; the salt is
-  generated once per database and stored in `history_meta`.
+  stored outside the database in `<db_path>.salt`. Existing databases with
+  salt stored in `history_meta` are automatically migrated on open to the
+  external `.salt` file and deleted from the database table.
 - **Single writer thread, bounded channel, one transaction per turn**,
   WAL + `synchronous=NORMAL` + incremental `auto_vacuum` (`src/db.rs`).
   Idle-time compaction (`compact_once`) runs in caller-chosen batch
   sizes.
 - **Voice-scoped hard deletes**: `forget_today`, `forget_app` (also
   strips that app's counts out of every monthly roll-up blob),
-  `forget_everything`.
+  `forget_goal` (deletes steps, episodes, updates rollups, removes goal from
+  `dict_goals`, and evicts from the in-memory goal cache `DictCaches`),
+  and `forget_everything`.
 - An in-memory intern cache (`DictCaches`, loaded once per writer-thread
   start) turns a repeat goal/app/action/label lookup from a `SELECT` into
   a `HashMap` hit - necessary for the benchmark below to finish in a
@@ -665,6 +669,17 @@ still apply unchanged. New this phase:
    running `llama-server.exe` or equivalent) rather than new Rust code.
 7. **Sidecar split + Tauri hardening**: once (1)-(2) make the Rust backend
    do real, potentially-slow work, split `grace-backend` into its own
-   process with the Job Object/KILL_ON_JOB_CLOSE, per-launch WebSocket
-   token, restart/health-watch, single-instance guard, and CSP items from
-   PLAN §10.2's "Shell (Tauri)" list.
+   process with the Job Object/KILL_ON_JOB_CLOSE, restart/health-watch,
+   single-instance guard, and CSP items from PLAN §10.2's "Shell (Tauri)" list.
+   (Note: per-launch random WebSocket authentication token and 127.0.0.1
+   binding are now implemented across Tauri shell and `grace-backend`).
+8. **Security features not yet mirrored in Rust**:
+   - DPAPI encryption at rest for `memory.db`: Rust's `grace-memory` uses
+     unencrypted SQLite files with salted hash redactions for typed text,
+     whereas Python encrypts the SQLite database via Windows DPAPI
+     (`CryptProtectData`).
+   - Window foreground guard re-checks: Python's `computer_use.py` verifies the
+     target window is still foreground right before physical mouse clicks,
+     keypresses, and text entry. In Rust, input injection (`DesktopActuator`)
+     and UIA walk remain trait boundaries awaiting `grace-win` SendInput
+     implementation.

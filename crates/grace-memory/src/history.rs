@@ -170,6 +170,7 @@ enum Job {
     Compact { now_unix: i64, batch_limit: usize, reply: mpsc::Sender<Result<CompactionReport>> },
     ForgetToday { start_unix: i64, end_unix: i64, reply: mpsc::Sender<Result<u64>> },
     ForgetApp { app: String, reply: mpsc::Sender<Result<u64>> },
+    ForgetGoal { goal: String, reply: mpsc::Sender<Result<u64>> },
     ForgetEverything { reply: mpsc::Sender<Result<()>> },
     Shutdown,
 }
@@ -187,7 +188,7 @@ impl HistoryStore {
     pub fn open(path: &Path, config: HistoryConfig) -> Result<Self> {
         let write_conn = db::open(path)?;
         init_schema(&write_conn)?;
-        ensure_salt(&write_conn)?;
+        let salt = ensure_salt(path, &write_conn)?;
         let read_conn = db::open(path)?;
 
         let (sender, receiver) = mpsc::sync_channel(config.channel_capacity.max(1));
@@ -195,7 +196,7 @@ impl HistoryStore {
         let latencies_for_writer = latencies.clone();
         let writer_thread = std::thread::Builder::new()
             .name("grace-memory-writer".to_string())
-            .spawn(move || writer_loop(write_conn, receiver, config, latencies_for_writer))
+            .spawn(move || writer_loop(write_conn, receiver, config, latencies_for_writer, salt))
             .expect("failed to spawn the grace-memory writer thread");
 
         Ok(Self { sender, writer_thread: Some(writer_thread), read_conn: Mutex::new(read_conn), latencies, path: path.to_path_buf() })
@@ -240,6 +241,15 @@ impl HistoryStore {
     pub fn forget_app(&self, app: &str) -> Result<u64> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.sender.send(Job::ForgetApp { app: app.to_string(), reply: reply_tx }).map_err(|_| MemoryError::WriterGone)?;
+        reply_rx.recv().map_err(|_| MemoryError::WriterGone)?
+    }
+
+    /// Voice-scoped hard delete: "forget X" (R17). Deletes all episodes,
+    /// steps, routines, and monthly rollup counts for this goal, purges
+    /// the goal row from dict_goals, and evicts it from the in-memory cache.
+    pub fn forget_goal(&self, goal: &str) -> Result<u64> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.sender.send(Job::ForgetGoal { goal: goal.to_string(), reply: reply_tx }).map_err(|_| MemoryError::WriterGone)?;
         reply_rx.recv().map_err(|_| MemoryError::WriterGone)?
     }
 
@@ -367,13 +377,13 @@ fn load_dict(conn: &Connection, table: &str) -> Result<HashMap<String, i64>> {
     rows.collect::<rusqlite::Result<HashMap<_, _>>>().map_err(Into::into)
 }
 
-fn writer_loop(mut conn: Connection, receiver: Receiver<Job>, config: HistoryConfig, latencies: Arc<Mutex<Vec<Duration>>>) {
+fn writer_loop(mut conn: Connection, receiver: Receiver<Job>, config: HistoryConfig, latencies: Arc<Mutex<Vec<Duration>>>, salt: u64) {
     let mut caches = DictCaches::load(&conn).unwrap_or_default();
     for job in receiver.iter() {
         match job {
             Job::RecordEpisode { input, reply } => {
                 let start = Instant::now();
-                let result = record_episode_tx(&mut conn, &mut caches, input);
+                let result = record_episode_tx(&mut conn, &mut caches, input, salt);
                 latencies.lock().unwrap().push(start.elapsed());
                 let _ = reply.send(result);
             }
@@ -385,9 +395,9 @@ fn writer_loop(mut conn: Connection, receiver: Receiver<Job>, config: HistoryCon
             }
             Job::ForgetApp { app, reply } => {
                 let _ = reply.send(forget_app_tx(&mut conn, &app));
-                // Interned text rows for the forgotten app aren't removed
-                // (dict rows are cheap and may still be referenced by
-                // roll-ups), so the cache doesn't need invalidating here.
+            }
+            Job::ForgetGoal { goal, reply } => {
+                let _ = reply.send(forget_goal_tx(&mut conn, &mut caches, &goal));
             }
             Job::ForgetEverything { reply } => {
                 let result = forget_everything_tx(&mut conn);
@@ -462,15 +472,28 @@ fn init_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn ensure_salt(conn: &Connection) -> Result<u64> {
+fn ensure_salt(path: &Path, conn: &Connection) -> Result<u64> {
+    if path.to_string_lossy() == ":memory:" {
+        return Ok(generate_salt());
+    }
+    let salt_path = path.with_extension("salt");
+    if salt_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&salt_path) {
+            if let Ok(existing) = content.trim().parse::<u64>() {
+                return Ok(existing);
+            }
+        }
+    }
+
+    // Legacy migration (R23): if salt was stored in history_meta, migrate to external file and delete key
     if let Some(existing) = get_salt_opt(conn)? {
+        let _ = std::fs::write(&salt_path, existing.to_string());
+        let _ = conn.execute("DELETE FROM history_meta WHERE key = ?1", params![META_SALT_KEY]);
         return Ok(existing);
     }
+
     let salt = generate_salt();
-    conn.execute(
-        "INSERT INTO history_meta (key, value) VALUES (?1, ?2)",
-        params![META_SALT_KEY, salt.to_string()],
-    )?;
+    let _ = std::fs::write(&salt_path, salt.to_string());
     Ok(salt)
 }
 
@@ -479,10 +502,6 @@ fn get_salt_opt(conn: &Connection) -> Result<Option<u64>> {
         .query_row("SELECT value FROM history_meta WHERE key = ?1", params![META_SALT_KEY], |r| r.get::<_, String>(0))
         .optional()?
         .and_then(|s| s.parse().ok()))
-}
-
-fn get_salt(conn: &Connection) -> Result<u64> {
-    Ok(get_salt_opt(conn)?.unwrap_or(0))
 }
 
 /// Not a CSPRNG (std has none) - just needs to be unpredictable per
@@ -509,11 +528,10 @@ struct StepPayload {
     typed_hash: Option<u64>,
 }
 
-fn record_episode_tx(conn: &mut Connection, caches: &mut DictCaches, input: EpisodeInput) -> Result<i64> {
+fn record_episode_tx(conn: &mut Connection, caches: &mut DictCaches, input: EpisodeInput, salt: u64) -> Result<i64> {
     let tx = conn.transaction()?;
     let goal_id = intern(&tx, &mut caches.goals, "dict_goals", &input.goal)?;
     let app_id = intern(&tx, &mut caches.apps, "dict_apps", &input.app)?;
-    let salt = get_salt(&tx)?;
 
     let mut action_ids = Vec::with_capacity(input.steps.len());
     let mut payload_blobs = Vec::with_capacity(input.steps.len());
@@ -806,6 +824,70 @@ fn forget_app_tx(conn: &mut Connection, app: &str) -> Result<u64> {
     Ok(deleted)
 }
 
+fn forget_goal_tx(conn: &mut Connection, caches: &mut DictCaches, goal: &str) -> Result<u64> {
+    let tx = conn.transaction()?;
+    let goal_id: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM dict_goals WHERE text = ?1",
+            params![goal],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let mut deleted = 0u64;
+    if let Some(goal_id) = goal_id {
+        let ids: Vec<i64> = {
+            let mut stmt = tx.prepare("SELECT id FROM episodes WHERE goal_id = ?1")?;
+            let rows = stmt
+                .query_map(params![goal_id], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            rows
+        };
+        for id in &ids {
+            tx.execute("DELETE FROM steps WHERE episode_id = ?1", params![id])?;
+            tx.execute("DELETE FROM episodes_fts WHERE rowid = ?1", params![id])?;
+        }
+        deleted = ids.len() as u64;
+        tx.execute("DELETE FROM episodes WHERE goal_id = ?1", params![goal_id])?;
+        tx.execute("DELETE FROM routines WHERE goal_id = ?1", params![goal_id])?;
+
+        // Clear out of monthly rollups
+        let months: Vec<String> = {
+            let mut stmt = tx.prepare("SELECT year_month FROM rollups")?;
+            let rows = stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            rows
+        };
+        for month in months {
+            let blob: Vec<u8> = tx.query_row(
+                "SELECT data FROM rollups WHERE year_month = ?1",
+                params![month],
+                |r| r.get(0),
+            )?;
+            let mut rows = decode_rollup_blob(&blob)?;
+            let before = rows.len();
+            rows.retain(|r| r.goal_id != goal_id);
+            if rows.len() != before {
+                if rows.is_empty() {
+                    tx.execute("DELETE FROM rollups WHERE year_month = ?1", params![month])?;
+                } else {
+                    let new_blob = encode_rollup_blob(&rows)?;
+                    tx.execute(
+                        "UPDATE rollups SET data = ?2 WHERE year_month = ?1",
+                        params![month, new_blob],
+                    )?;
+                }
+            }
+        }
+
+        // Delete from dict_goals and purge from cache (R17)
+        tx.execute("DELETE FROM dict_goals WHERE id = ?1", params![goal_id])?;
+        caches.goals.remove(goal);
+    }
+    tx.commit()?;
+    Ok(deleted)
+}
+
 fn forget_everything_tx(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
@@ -1060,5 +1142,61 @@ mod tests {
         let results = store.search_episodes("letter", 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].app, "Word");
+    }
+
+    #[test]
+    fn forget_goal_removes_from_dict_and_cache_and_episodes() {
+        let (_dir, store) = store();
+        store.record_episode(sample_episode("write a letter", "Word", 1_700_000_000, Outcome::Success)).unwrap();
+        store.record_episode(sample_episode("browse the web", "Chrome", 1_700_000_100, Outcome::Success)).unwrap();
+
+        let deleted = store.forget_goal("write a letter").unwrap();
+        assert_eq!(deleted, 1);
+
+        let remaining = store.query_episodes(None, 0, i64::MAX, 10).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].goal, "browse the web");
+
+        // Verify dict_goals row for forgotten goal is completely removed
+        let conn = store.read_conn.lock().unwrap();
+        let exists: Option<i64> = conn
+            .query_row("SELECT id FROM dict_goals WHERE text = 'write a letter'", [], |r| r.get(0))
+            .optional()
+            .unwrap();
+        assert!(exists.is_none(), "forgotten goal must be deleted from dict_goals table");
+    }
+
+    #[test]
+    fn external_salt_migrated_from_legacy_meta_and_persisted_in_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("history.db");
+        let salt_path = dir.path().join("history.salt");
+
+        // 1. Manually create legacy DB with salt in history_meta
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            init_schema(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO history_meta (key, value) VALUES (?1, ?2)",
+                params![META_SALT_KEY, "1234567890"],
+            )
+            .unwrap();
+        }
+        assert!(!salt_path.exists());
+
+        // 2. Open HistoryStore -> should migrate salt to external file and purge from DB
+        {
+            let store = HistoryStore::open(&db_path, HistoryConfig::default()).unwrap();
+            assert!(salt_path.exists(), "salt file should be created");
+            let file_content = std::fs::read_to_string(&salt_path).unwrap();
+            assert_eq!(file_content.trim(), "1234567890");
+
+            let conn = store.read_conn.lock().unwrap();
+            let meta_val: Option<String> = conn
+                .query_row("SELECT value FROM history_meta WHERE key = ?1", params![META_SALT_KEY], |r| r.get(0))
+                .optional()
+                .unwrap();
+            assert!(meta_val.is_none(), "salt must be purged from history_meta");
+        }
     }
 }

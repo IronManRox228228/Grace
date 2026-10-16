@@ -48,7 +48,9 @@ class Config:
     # llama-server & Gemini Cloud LLM
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     gemini_model_name: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL_NAME", "gemini-3.1-flash-lite"))
-    use_cloud_llm: bool = field(default_factory=lambda: os.getenv("USE_CLOUD_LLM", "true").lower() in ("true", "1", "yes"))
+    use_cloud_llm: bool = field(default_factory=lambda: os.getenv("USE_CLOUD_LLM", "false").lower() in ("true", "1", "yes"))
+    allow_cloud_screenshots: bool = field(default_factory=lambda: os.getenv("ALLOW_CLOUD_SCREENSHOTS", "false").lower() in ("true", "1", "yes"))
+    ws_auth_token: str = field(default_factory=lambda: os.getenv("GRACE_WS_TOKEN", ""))
 
     llama_server_exe: str = field(default_factory=lambda: os.getenv(
         "LLAMA_SERVER_EXE",

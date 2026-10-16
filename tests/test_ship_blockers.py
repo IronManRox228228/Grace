@@ -324,3 +324,81 @@ class TestWebSocketOriginAllowlist:
                     assert not ws.closed
 
         asyncio.run(run())
+
+
+class TestWebSocketAuthToken:
+    """R8: WebSocket connections must require a per-launch auth token and bind to 127.0.0.1."""
+
+    def test_bind_host_is_restricted_to_loopback(self):
+        from grace.ws_server import WsEventServer
+
+        server = WsEventServer(host="0.0.0.0", port=8765)
+        assert server._host == "127.0.0.1"
+
+    def test_missing_token_is_rejected_with_401(self):
+        from aiohttp import WSServerHandshakeError, web
+        from aiohttp.test_utils import TestClient, TestServer
+        from grace.ws_server import WsEventServer
+
+        server = WsEventServer(auth_token="secret-token-123")
+        app = web.Application()
+        app.router.add_get("/", server._handler)
+
+        async def run():
+            async with TestClient(TestServer(app)) as client:
+                with pytest.raises(WSServerHandshakeError):
+                    await client.ws_connect("/", headers={"Origin": "http://localhost:5173"})
+
+        asyncio.run(run())
+
+    def test_invalid_token_is_rejected_with_401(self):
+        from aiohttp import WSServerHandshakeError, web
+        from aiohttp.test_utils import TestClient, TestServer
+        from grace.ws_server import WsEventServer
+
+        server = WsEventServer(auth_token="secret-token-123")
+        app = web.Application()
+        app.router.add_get("/", server._handler)
+
+        async def run():
+            async with TestClient(TestServer(app)) as client:
+                with pytest.raises(WSServerHandshakeError):
+                    await client.ws_connect("/?token=wrong-token", headers={"Origin": "http://localhost:5173"})
+
+        asyncio.run(run())
+
+    def test_valid_token_in_query_param_succeeds(self):
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+        from grace.ws_server import WsEventServer
+
+        server = WsEventServer(auth_token="secret-token-123")
+        app = web.Application()
+        app.router.add_get("/", server._handler)
+
+        async def run():
+            async with TestClient(TestServer(app)) as client:
+                async with client.ws_connect("/?token=secret-token-123", headers={"Origin": "http://localhost:5173"}) as ws:
+                    assert not ws.closed
+
+        asyncio.run(run())
+
+    def test_valid_token_in_bearer_header_succeeds(self):
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+        from grace.ws_server import WsEventServer
+
+        server = WsEventServer(auth_token="secret-token-123")
+        app = web.Application()
+        app.router.add_get("/", server._handler)
+
+        async def run():
+            async with TestClient(TestServer(app)) as client:
+                async with client.ws_connect(
+                    "/",
+                    headers={"Origin": "http://localhost:5173", "Authorization": "Bearer secret-token-123"}
+                ) as ws:
+                    assert not ws.closed
+
+        asyncio.run(run())
+

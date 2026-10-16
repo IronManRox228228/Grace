@@ -86,15 +86,21 @@ class GemmaClient:
         api_key: Optional[str] = None,
         model_name: str = "gemini-3.1-flash-lite",
         before_request=None,
+        allow_cloud_screenshots: bool = False,
     ):
         self._base_url = base_url
         self._api_key = api_key
         self._model_name = model_name or "gemini-3.1-flash-lite"
+        self._allow_cloud_screenshots = bool(allow_cloud_screenshots)
         self._http = None
         # Called before every local request. Used to hot-swap the model
         # resident on the GPU when the planner and grounder share one card -
         # see grace.llm.model_swap. None (the default) means no swap is needed.
         self._before_request = before_request
+
+    def set_cloud_screenshot_consent(self, consent: bool) -> None:
+        """Set explicit per-session consent for sending screenshots to cloud models (R19)."""
+        self._allow_cloud_screenshots = bool(consent)
 
     async def _prepare(self) -> None:
         if self._before_request is None:
@@ -173,6 +179,12 @@ class GemmaClient:
             }
 
         if self._api_key:
+            has_image = any(msg.get("image_b64") for msg in messages)
+            if has_image and not self._allow_cloud_screenshots:
+                logger.error("R19: Cloud fallback attempted to send a screenshot without explicit per-session consent")
+                raise PermissionError(
+                    "Cloud fallback is not permitted to send screenshots without explicit per-session consent (R19)"
+                )
             gemini = self._stream_gemini_response(messages, temperature=temperature,
                                                   max_tokens=max_tokens, model=effective_model)
             if recorder is None:

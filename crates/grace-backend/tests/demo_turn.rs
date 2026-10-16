@@ -71,3 +71,23 @@ async fn a_wake_message_over_the_real_socket_runs_a_real_turn() {
         ]
     );
 }
+
+#[tokio::test]
+async fn websocket_rejects_missing_or_invalid_auth_token_and_accepts_valid_token() {
+    let server = WsEventServer::new_with_token("127.0.0.1", 0, "", Some("demo-secret-token".to_string()));
+    let addr = server.serve().await.unwrap();
+
+    // 1. Missing token must fail to connect
+    let url_no_token = format!("ws://{addr}/");
+    assert!(tokio_tungstenite::connect_async(url_no_token).await.is_err());
+
+    // 2. Wrong token must fail to connect
+    let url_wrong_token = format!("ws://{addr}/?token=wrong-token");
+    assert!(tokio_tungstenite::connect_async(url_wrong_token).await.is_err());
+
+    // 3. Valid token in query param must succeed
+    let url_valid_token = format!("ws://{addr}/?token=demo-secret-token");
+    let (ws, _) = tokio_tungstenite::connect_async(url_valid_token).await.unwrap();
+    drop(ws);
+}
+

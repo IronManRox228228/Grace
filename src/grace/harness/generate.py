@@ -542,6 +542,9 @@ async def _drive(
         ):
             stack.enter_context(mock.patch(target, replacement))
 
+        from ..agent.memory import PersistentMemoryStore as _RealMemoryStore
+        stack.enter_context(mock.patch("grace.agent.memory.PersistentMemoryStore", lambda *a, **k: _RealMemoryStore(db_path=":memory:")))
+
         for name in SIDE_EFFECTING_HANDLERS:
             stack.enter_context(mock.patch.object(
                 Dispatcher, name,

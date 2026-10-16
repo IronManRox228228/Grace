@@ -176,7 +176,10 @@ class WakeWordDetector:
         except Exception:
             return
 
-        matched = (self._keyword in text) or ("grace" in text) or ("hey grace" in text)
+        # R13: Whole-word match on wake phrase. "Gracefully" or "disgrace" must not wake Grace.
+        keyword = self._keyword or "grace"
+        pattern = rf"\b({re.escape(keyword)}|grace|hey\s+grace)\b"
+        matched = bool(re.search(pattern, text, re.IGNORECASE))
         if matched:
             self._trigger_detection("vosk_" + text, 0.85)
 

@@ -181,41 +181,57 @@ def _foreground_title() -> str:
         return ""
 
 
-def _wrong_window(params: dict[str, Any], action: str) -> Optional[dict[str, Any]]:
-    """Refuse an action aimed at a window that is not in front.
+def _wrong_window(
+    params: dict[str, Any],
+    action: str,
+    initial_title: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Refuse an action aimed at a window that is not in front (R11/R12/R22).
 
     Modelled on the `wrong_focus` guard `_type_text` already had, which is the
     one precondition in the file that ever worked: it names both sides, and
     because `ok is False` the loop turns it into an explicit correction on the
     very next planner call at no extra cost.
 
-    Only fires when the plan actually named a window. A missing or unmatched
-    name means "wherever we are", which is how most steps are written and must
-    keep working.
+    Re-checks that the target window is still the foreground window right before
+    typing or clicking. Aborts the action if focus changed.
     """
     wanted = _normalize_window(params.get("window")).get("title") or ""
     wanted = str(wanted).strip()
-    if not wanted:
-        return None
-
     actual = _foreground_title()
-    if not actual:
-        return None
 
-    a, b = wanted.lower(), actual.lower()
-    if a in b or b in a:
-        return None
+    if wanted:
+        if not actual:
+            return None
+        a, b = wanted.lower(), actual.lower()
+        if a in b or b in a:
+            return None
+        return {
+            "ok": False,
+            "sent": False,
+            "verified": False,
+            "status": "wrong_window",
+            "action": action,
+            "error": (f"You aimed at '{wanted}' but '{actual}' is in front. "
+                      f"Activate the window you meant first."),
+            "evidence": f"foreground window is '{actual}'",
+        }
 
-    return {
-        "ok": False,
-        "sent": False,
-        "verified": False,
-        "status": "wrong_window",
-        "action": action,
-        "error": (f"You aimed at '{wanted}' but '{actual}' is in front. "
-                  f"Activate the window you meant first."),
-        "evidence": f"foreground window is '{actual}'",
-    }
+    if initial_title and actual:
+        a, b = initial_title.lower(), actual.lower()
+        if not (a in b or b in a):
+            return {
+                "ok": False,
+                "sent": False,
+                "verified": False,
+                "status": "wrong_window",
+                "action": action,
+                "error": (f"Target window changed from '{initial_title}' to '{actual}' before {action}. "
+                          f"Action aborted to prevent misdirected input."),
+                "evidence": f"foreground window changed to '{actual}'",
+            }
+
+    return None
 
 
 def _normalize_window(window_param: Any) -> dict[str, Any]:
@@ -375,7 +391,8 @@ class ComputerUse:
         if bounds and isinstance(bounds, (list, tuple)) and len(bounds) >= 4:
             window_bounds = (int(bounds[0]), int(bounds[1]), int(bounds[2]), int(bounds[3]))
 
-        refused = _wrong_window(params, "click")
+        initial_fg = _foreground_title()
+        refused = _wrong_window(params, "click", initial_title=initial_fg)
         if refused is not None:
             return refused
 
@@ -392,7 +409,7 @@ class ComputerUse:
         if graph_target is not None:
             return self._click_at(graph_target.center[0], graph_target.center[1],
                                   click_count, f"graph:{graph_target.role}", graph_target.name,
-                                  probe=True, before=before)
+                                  probe=True, before=before, params=params, initial_fg=initial_fg)
 
         # Fall back to the legacy cascade for coordinate-only or unmatched targets.
         resolver = CoordinateResolver()
@@ -421,7 +438,7 @@ class ComputerUse:
 
         return self._click_at(resolved.x, resolved.y, click_count, resolved.method,
                               getattr(resolved.element, "name", None),
-                              probe=True, before=before)
+                              probe=True, before=before, params=params, initial_fg=initial_fg)
 
     @staticmethod
     def _target_from_params(params: dict[str, Any]) -> tuple[Optional[int], Optional[str]]:
@@ -490,13 +507,21 @@ class ComputerUse:
 
     def _click_at(self, x: int, y: int, click_count: int, method: str,
                   name: Optional[str] = None, probe: bool = False,
-                  before: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                  before: Optional[dict[str, Any]] = None,
+                  params: Optional[dict[str, Any]] = None,
+                  initial_fg: Optional[str] = None) -> dict[str, Any]:
         """Send the actual click, then invalidate the graph the UI just changed.
 
         ``probe`` is off for internal callers - `_set_value` clicks only to put
         focus somewhere and then checks the value it wrote, so a change probe
         there would pay for a settle and answer the wrong question.
         """
+        # R11/R12/R22: re-check window focus immediately prior to physical mouse dispatch
+        refused = _wrong_window(params or {}, "click", initial_title=initial_fg)
+        if refused is not None:
+            logger.warning(f"_click_at aborted right before click: {refused['error']}")
+            return refused
+
         import pyautogui
 
         logger.info(f"_click executing via method '{method}' at ({x}, {y})")
@@ -542,7 +567,8 @@ class ComputerUse:
         import pyautogui
         text = str(params.get("text", ""))
 
-        refused = _wrong_window(params, "type_text")
+        initial_fg = _foreground_title()
+        refused = _wrong_window(params, "type_text", initial_title=initial_fg)
         if refused is not None:
             return refused
 
@@ -583,6 +609,12 @@ class ComputerUse:
                 logger.debug(f"_type_text: no focused element found; typing '{target_name}' blind")
         except Exception as e:
             logger.debug(f"Focus check skipped: {e}")
+
+        # R11/R12: re-check window focus right before physical typing dispatch
+        refused = _wrong_window(params, "type_text", initial_title=initial_fg)
+        if refused is not None:
+            logger.warning(f"_type_text aborted right before typing: {refused['error']}")
+            return refused
 
         typed_chars = 0
         typing_cut_off = False
@@ -678,11 +710,18 @@ class ComputerUse:
         import pyautogui
         raw_key = str(params.get("key", ""))
 
-        refused = _wrong_window(params, "press_key")
+        initial_fg = _foreground_title()
+        refused = _wrong_window(params, "press_key", initial_title=initial_fg)
         if refused is not None:
             return refused
 
         before = _screen_state()
+
+        # R11/R12 re-check right before key dispatch
+        refused = _wrong_window(params, "press_key", initial_title=initial_fg)
+        if refused is not None:
+            logger.warning(f"_press_key aborted right before key dispatch: {refused['error']}")
+            return refused
 
         # Map CUA / X11 keysyms to PyAutoGUI key names
         key_map = {

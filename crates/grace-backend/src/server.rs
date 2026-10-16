@@ -31,6 +31,7 @@ pub struct WsEventServer {
     host: String,
     port: u16,
     allowed_origins: BTreeSet<String>,
+    auth_token: Option<String>,
     events_tx: broadcast::Sender<GraceEvent>,
     on_wake: Mutex<Option<WakeCallback>>,
     client_count: Arc<std::sync::atomic::AtomicUsize>,
@@ -38,13 +39,28 @@ pub struct WsEventServer {
 
 impl WsEventServer {
     pub fn new(host: impl Into<String>, port: u16, allowed_origins_csv: &str) -> Arc<Self> {
+        let auth_token = std::env::var("GRACE_WS_TOKEN").ok().filter(|s| !s.is_empty());
+        Self::new_with_token(host, port, allowed_origins_csv, auth_token)
+    }
+
+    pub fn new_with_token(
+        host: impl Into<String>,
+        port: u16,
+        allowed_origins_csv: &str,
+        auth_token: Option<String>,
+    ) -> Arc<Self> {
+        let mut host_str: String = host.into();
+        if host_str != "127.0.0.1" && host_str != "localhost" && host_str != "::1" {
+            host_str = "127.0.0.1".to_string();
+        }
         let extra = parse_extra_origins(allowed_origins_csv);
         let allowed_origins: BTreeSet<String> = default_allowed_origins().union(&extra).cloned().collect();
         let (events_tx, _rx) = broadcast::channel(256);
         Arc::new(Self {
-            host: host.into(),
+            host: host_str,
             port,
             allowed_origins,
+            auth_token,
             events_tx,
             on_wake: Mutex::new(None),
             client_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -53,6 +69,10 @@ impl WsEventServer {
 
     pub fn allowed_origins(&self) -> &BTreeSet<String> {
         &self.allowed_origins
+    }
+
+    pub fn auth_token(&self) -> Option<&str> {
+        self.auth_token.as_deref()
     }
 
     pub async fn set_on_wake(&self, callback: WakeCallback) {
@@ -94,21 +114,56 @@ impl WsEventServer {
 
     async fn handle_connection(self: Arc<Self>, stream: TcpStream) -> anyhow::Result<()> {
         let allowed = self.allowed_origins.clone();
+        let expected_token = self.auth_token.clone();
         let callback = move |req: &Request, response: Response| {
             let origin = req
                 .headers()
                 .get("Origin")
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
-            if is_origin_allowed(origin.as_deref(), &allowed) {
-                Ok(response)
-            } else {
+            if !is_origin_allowed(origin.as_deref(), &allowed) {
                 let resp: ErrorResponse = http::Response::builder()
                     .status(StatusCode::FORBIDDEN)
                     .body(Some("Origin not allowed".to_string()))
                     .expect("a fixed status + body always builds a valid Response");
-                Err(resp)
+                return Err(resp);
             }
+
+            if let Some(ref expected) = expected_token {
+                let query_token = req.uri().query().and_then(|q| {
+                    q.split('&').find_map(|pair| {
+                        let mut parts = pair.splitn(2, '=');
+                        if parts.next() == Some("token") {
+                            parts.next()
+                        } else {
+                            None
+                        }
+                    })
+                });
+
+                let header_token = req
+                    .headers()
+                    .get("X-Grace-Token")
+                    .and_then(|v| v.to_str().ok())
+                    .or_else(|| {
+                        req.headers()
+                            .get("Authorization")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|s| s.strip_prefix("Bearer "))
+                            .map(|s| s.trim())
+                    });
+
+                let provided = query_token.or(header_token);
+                if provided != Some(expected.as_str()) {
+                    let resp: ErrorResponse = http::Response::builder()
+                        .status(StatusCode::UNAUTHORIZED)
+                        .body(Some("Unauthorized: Invalid or missing token".to_string()))
+                        .expect("a fixed status + body always builds a valid Response");
+                    return Err(resp);
+                }
+            }
+
+            Ok(response)
         };
 
         let ws_stream = match tokio_tungstenite::accept_hdr_async(stream, callback).await {

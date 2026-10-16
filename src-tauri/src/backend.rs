@@ -82,14 +82,27 @@ pub struct Backend {
     rust_runtime: Option<tokio::runtime::Runtime>,
 }
 
+/// Generate or read per-launch random WebSocket auth token (R8).
+pub fn generate_auth_token() -> String {
+    if let Ok(tok) = std::env::var("GRACE_WS_TOKEN") {
+        if !tok.is_empty() {
+            return tok;
+        }
+    }
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let pid = std::process::id();
+    format!("{:032x}{:08x}", now.as_nanos(), pid)
+}
+
 impl Backend {
     /// Starts the backend named by `GRACE_BACKEND` (`python`, the default, or
-    /// `rust`) from the repo root.
-    pub fn start(root: &Path) -> Self {
+    /// `rust`) from the repo root with the per-launch auth token.
+    pub fn start(root: &Path, auth_token: &str) -> Self {
         if wants_rust_backend() {
-            return Self::start_rust();
+            return Self::start_rust(auth_token);
         }
-        Self::start_python(root)
+        Self::start_python(root, auth_token)
     }
 
     /// Starts `venv/Scripts/python.exe src/grace/main.py` from the repo root.
@@ -97,7 +110,7 @@ impl Backend {
     /// A missing interpreter is a warning rather than an error, exactly as in
     /// Electron: the overlay is still useful against a backend someone started
     /// by hand, which is how the record/replay harness is driven.
-    fn start_python(root: &Path) -> Self {
+    fn start_python(root: &Path, auth_token: &str) -> Self {
         let python = root.join("venv").join("Scripts").join("python.exe");
         let entry = root.join("src").join("grace").join("main.py");
 
@@ -117,6 +130,7 @@ impl Backend {
         command
             .arg(&entry)
             .current_dir(root)
+            .env("GRACE_WS_TOKEN", auth_token)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -148,7 +162,7 @@ impl Backend {
     /// Starts `grace_backend`'s `WsEventServer` in-process on a dedicated
     /// multi-thread Tokio runtime. Experimental: see this module's doc
     /// comment for exactly what does (and does not) work on this path yet.
-    fn start_rust() -> Self {
+    fn start_rust(auth_token: &str) -> Self {
         println!("[Grace] Starting in-process Rust backend (GRACE_BACKEND=rust)...");
         let runtime = match tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -171,9 +185,10 @@ impl Backend {
             .and_then(|p| p.parse().ok())
             .unwrap_or(8765);
         let allowed_origins = std::env::var("WS_ALLOWED_ORIGINS").unwrap_or_default();
+        let token = auth_token.to_string();
 
         runtime.spawn(async move {
-            let server = WsEventServer::new(host, port, &allowed_origins);
+            let server = WsEventServer::new_with_token(host, port, &allowed_origins, Some(token));
 
             // Every wake request (the global hotkey, or the renderer's idle
             // pill) runs one real activation turn through

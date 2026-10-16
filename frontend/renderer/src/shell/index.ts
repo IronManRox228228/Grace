@@ -71,3 +71,22 @@ export function reportHoverRegion(region: DOMRect | null): void {
     console.error('[Grace] could not report the hover region', err);
   });
 }
+
+/**
+ * Returns the WebSocket auth token provided by the Tauri shell (R8).
+ */
+export async function getWsAuthToken(): Promise<string | null> {
+  if (inShell) {
+    try {
+      return await invoke<string>('get_ws_auth_token');
+    } catch (err: unknown) {
+      console.warn('[Grace] could not retrieve WS auth token from Tauri shell', err);
+    }
+  }
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('token');
+  }
+  return null;
+}
+

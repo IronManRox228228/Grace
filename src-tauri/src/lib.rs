@@ -41,15 +41,24 @@ fn set_hover_region(state: State<'_, Arc<HoverRegion>>, region: Option<Region>) 
     state.set(region);
 }
 
+/// Returns the per-launch WebSocket auth token to the renderer (R8).
+#[tauri::command]
+fn get_ws_auth_token(state: State<'_, String>) -> String {
+    state.inner().clone()
+}
+
 /// Builds and runs the overlay. Blocks until the app exits.
 pub fn run() {
+    let auth_token = backend::generate_auth_token();
     // Started before the window so the backend's model loading overlaps with
     // the webview's, as it did under Electron.
-    let backend = backend::Backend::start(&backend::project_root());
+    let backend = backend::Backend::start(&backend::project_root(), &auth_token);
 
+    let managed_token = auth_token.clone();
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![set_hover_region])
-        .setup(|app| {
+        .invoke_handler(tauri::generate_handler![set_hover_region, get_ws_auth_token])
+        .setup(move |app| {
+            app.manage(managed_token);
             let window = app
                 .get_webview_window(WINDOW_LABEL)
                 .ok_or_else(|| format!("no window labelled {WINDOW_LABEL}"))?;
