@@ -17,7 +17,7 @@ Agreed on 2026-09-26. This file is the handoff between sessions: read it before 
 ## 1. Principles
 
 1. **Built for the NPU era, but must work on the CPU floor.** An Intel laptop with no dGPU and no NPU, 8 GB of single-channel RAM, a nearly full 128 GB SATA SSD, and 20 Chrome tabs open. If Grace works there, it works everywhere.
-2. **No required dependency on cloud LLMs or UI-TARS 7B.** They may stay as optional extras only.
+2. **No required dependency on cloud LLMs.** They may stay as optional extras only. UI-TARS 7B was dropped on 2026-10-16 as an obsolete computer-use model.
 3. **The final fallback is the user, not a bigger model.** When unsure, Grace draws numbered marks and asks ("4 or 7?"). That is free, accessible and never wrong about intent.
 4. **Never cut data collection to save training time.** Collect the best data possible, spread over short sessions so fatigue doesn't ruin it.
 5. **Training must never be something the user plans around.** It runs opportunistically, never "leave it on overnight".
@@ -48,18 +48,20 @@ Grace detects the hardware at startup and picks where each model runs. Same mode
 ## 3. Model stack
 
 **Interim: one model for every slot (decided 2026-10-16, for the buildathon).**
-- **Model:** Qwythos 4B or Qwythos 9B v2. The user picks and downloads it. It is served by the existing llama-server.
+- **Model:** a single vision-capable model with decent computer-use ability, such as Qwythos 4B or Qwythos 9B v2. The user picks and downloads it. It is served by the existing llama-server (with its vision projector).
 - **It covers every LLM slot:**
   - tool calling
   - planning
   - element selection (picking an element id from the summarised list)
+  - visual grounding when an app exposes no usable tree (the job UI-TARS used to do)
   - yes/no on confirmation answers
   - routing
   
   That means one prompt format, one server and one set of tapes.
 - **Why:** tuning and benchmarking five small models doesn't fit in 15 days. One model keeps iteration fast while the harness is made reliable on the hardest tasks.
-- **Unchanged:** ASR, TTS, the wake word, and the fallbacks (UI-TARS and the cloud model).
-- **VRAM:** a 9B at Q4 is about 5.5 GB plus KV cache on the 4060's 8 GB, so it can't sit on the GPU alongside UI-TARS 7B. Load UI-TARS only on demand, or keep the 4B.
+- **Unchanged:** ASR, TTS, the wake word, and the cloud model as an optional fallback.
+- **UI-TARS is scrapped (2026-10-16).** It is an obsolete computer-use model. Its grounder path and action parser are removed once the interim model's vision grounding is wired, so there is never a window with no visual fallback.
+- **VRAM:** with UI-TARS gone, only one model sits on the 4060's 8 GB. A 9B at Q4 is about 5.5 GB plus the vision projector and KV cache, so it fits but with little headroom.
 - **CPU floor:** neither model is viable on the CPU floor. The floor stays the long-term target.
 - **Bar:** the hardest corpus scenarios pass in a live run on the 4060, not only in replay.
 - **Rule:** every harness fix stays model-agnostic. Prompts live in one place, and there are no model-specific parsing hacks. Switching back to the fleet below is then a config change plus a benchmark.
