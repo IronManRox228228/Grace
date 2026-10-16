@@ -96,11 +96,35 @@ static WEBSITE_ALIASES: LazyLock<BTreeMap<&'static str, &'static str>> = LazyLoc
     ])
 });
 
+pub fn is_known_tool(tool: &str) -> bool {
+    tool.starts_with("cua_")
+        || matches!(
+            tool,
+            "converse"
+                | "open_app"
+                | "close_app"
+                | "search_files"
+                | "open_file"
+                | "read_pdf"
+                | "summarize_pdf"
+                | "adjust_volume"
+                | "lock_computer"
+                | "open_calculator"
+                | "delete_file"
+                | "undo"
+                | "describe_screen"
+                | "set_speech_rate"
+        )
+}
+
 /// The refusal to return from `Dispatcher::execute`, or `None` to go ahead.
 /// Split out so a replay harness can apply the same decision without a
 /// second copy of it.
 pub fn confirmation_required(intent: &Intent, confirmed: bool) -> Option<Value> {
     if confirmed {
+        return None;
+    }
+    if !is_known_tool(&intent.tool) {
         return None;
     }
     let eval = evaluate(&intent.tool, &intent.params);
@@ -336,6 +360,13 @@ impl<'a> Dispatcher<'a> {
         if name.is_empty() {
             return json!({"status": "error", "error": "Missing 'name' parameter"});
         }
+        if name.contains('*') || name.contains('?') {
+            return json!({
+                "status": "error",
+                "error": format!("Refusing to close '{name}': wildcards are not allowed in process names."),
+                "text": "I can't close apps using wildcards."
+            });
+        }
         match self.actions.close_app(name) {
             Ok(()) => json!({"status": "ok", "text": format!("I've closed {name}.")}),
             Err(e) => json!({"status": "error", "error": e, "text": format!("I couldn't find {name} to close it.")}),
@@ -409,6 +440,13 @@ impl<'a> Dispatcher<'a> {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         if name.is_empty() {
             return json!({"status": "error", "error": "Missing 'name' parameter"});
+        }
+        if std::path::Path::new(name).is_dir() {
+            return json!({
+                "status": "error",
+                "error": format!("Refusing to delete directory '{name}': delete_file only deletes files."),
+                "text": format!("'{name}' is a directory. I only delete individual files.")
+            });
         }
         match self.actions.delete_file(name) {
             Ok(basename) => json!({

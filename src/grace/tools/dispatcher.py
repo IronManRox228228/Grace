@@ -205,6 +205,13 @@ class Dispatcher:
             recorder.record_dispatch(intent.tool, intent.params, result)
         return result
 
+    KNOWN_TOOLS = {
+        "converse", "open_app", "close_app", "search_files", "open_file",
+        "read_pdf", "summarize_pdf", "adjust_volume", "lock_computer",
+        "open_calculator", "delete_file", "undo", "describe_screen",
+        "set_speech_rate",
+    }
+
     @staticmethod
     def confirmation_required(intent: Intent, confirmed: bool = False) -> Optional[dict[str, Any]]:
         """The refusal to return, or None to go ahead.
@@ -217,6 +224,8 @@ class Dispatcher:
         going red.
         """
         if confirmed:
+            return None
+        if not (intent.tool.startswith("cua_") or intent.tool in Dispatcher.KNOWN_TOOLS):
             return None
         is_safe, prompt = SafetyGuard.evaluate(intent.tool, intent.params)
         if is_safe:
@@ -399,6 +408,13 @@ class Dispatcher:
         if not name:
             return {"status": "error", "error": "Missing 'name' parameter"}
 
+        if any(c in name for c in ("*", "?")):
+            return {
+                "status": "error",
+                "error": f"Refusing to close '{name}': wildcards are not allowed in process names.",
+                "text": "I can't close apps using wildcards.",
+            }
+
         try:
             # taskkill blocks for up to 10s; keep it off the event loop.
             result = await asyncio.to_thread(
@@ -571,19 +587,42 @@ class Dispatcher:
         if not path:
             return {"status": "error", "error": "Missing 'path' parameter"}
 
+        if not os.path.isfile(path):
+            return {"status": "error", "error": f"File not found: {path}", "text": "I couldn't find that PDF."}
+
+        # R14: Cap maximum PDF file size to 50MB
+        max_pdf_bytes = 50 * 1024 * 1024
+        try:
+            if os.path.getsize(path) > max_pdf_bytes:
+                return {
+                    "status": "error",
+                    "error": f"PDF file size ({os.path.getsize(path)} bytes) exceeds the 50MB limit.",
+                    "text": "That PDF is too large for me to process.",
+                }
+        except OSError as e:
+            return {"status": "error", "error": str(e), "text": f"Error accessing PDF: {e}"}
+
         def _do_read():
             from pypdf import PdfReader
             from grace.rag import LocalRagIndex
 
             reader = PdfReader(path)
+            if getattr(reader, "is_encrypted", False):
+                return None, "PDF is password-protected or encrypted", "That PDF is password-protected, so I can't read it."
+
             text = ""
-            for page in reader.pages:
+            max_pages = 50
+            max_chars = 50000
+            for page in reader.pages[:max_pages]:
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n\n"
+                if len(text) >= max_chars:
+                    text = text[:max_chars]
+                    break
 
             if not text.strip():
-                return None, "No extractable text in PDF"
+                return None, "No extractable text in PDF", "The PDF doesn't contain extractable text."
 
             index = LocalRagIndex()
             doc_id = os.path.basename(path)
@@ -596,20 +635,21 @@ class Dispatcher:
                 chunks = index.get_summary_chunks(top_k=3)
                 rag_text = "\n\n".join(f"[Excerpt {i+1}]: {c}" for i, c in enumerate(chunks))
 
-            return rag_text or text.strip()[:2000], None
+            return rag_text or text.strip()[:2000], None, None
 
         try:
-            rag_text, err = await asyncio.to_thread(_do_read)
+            rag_text, err, user_msg = await asyncio.to_thread(_do_read)
             if err:
-                return {"status": "error", "error": err, "text": "The PDF doesn't contain extractable text."}
+                return {"status": "error", "error": err, "text": user_msg or err}
 
+            from grace.agent.planner import wrap_untrusted
             return {
                 "status": "ok",
-                "text": rag_text,
+                "text": wrap_untrusted(rag_text),
                 "action": "read_pdf",
             }
         except FileNotFoundError:
-            return {"status": "error", "error": f"File not found: {path}", "text": f"I couldn't find that PDF."}
+            return {"status": "error", "error": f"File not found: {path}", "text": "I couldn't find that PDF."}
         except Exception as e:
             return {"status": "error", "error": str(e), "text": f"Error reading PDF: {e}"}
 
@@ -618,19 +658,42 @@ class Dispatcher:
         if not path:
             return {"status": "error", "error": "Missing 'path' parameter"}
 
+        if not os.path.isfile(path):
+            return {"status": "error", "error": f"File not found: {path}", "text": "I couldn't find that PDF."}
+
+        # R14: Cap maximum PDF file size to 50MB
+        max_pdf_bytes = 50 * 1024 * 1024
+        try:
+            if os.path.getsize(path) > max_pdf_bytes:
+                return {
+                    "status": "error",
+                    "error": f"PDF file size ({os.path.getsize(path)} bytes) exceeds the 50MB limit.",
+                    "text": "That PDF is too large for me to process.",
+                }
+        except OSError as e:
+            return {"status": "error", "error": str(e), "text": f"Error accessing PDF: {e}"}
+
         def _do_summarize():
             from pypdf import PdfReader
             from grace.rag import LocalRagIndex
 
             reader = PdfReader(path)
+            if getattr(reader, "is_encrypted", False):
+                return None, "PDF is password-protected or encrypted", "That PDF is password-protected, so I can't read it."
+
             text = ""
-            for page in reader.pages:
+            max_pages = 50
+            max_chars = 50000
+            for page in reader.pages[:max_pages]:
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n\n"
+                if len(text) >= max_chars:
+                    text = text[:max_chars]
+                    break
 
             if not text.strip():
-                return None, "No extractable text in PDF"
+                return None, "No extractable text in PDF", "The PDF doesn't contain extractable text."
 
             index = LocalRagIndex()
             doc_id = os.path.basename(path)
@@ -638,22 +701,45 @@ class Dispatcher:
 
             chunks = index.get_summary_chunks(top_k=4)
             summary_context = "\n\n".join(f"[Section {i+1}]: {c}" for i, c in enumerate(chunks))
-            return summary_context, None
+            return summary_context, None, None
 
         try:
-            summary_context, err = await asyncio.to_thread(_do_summarize)
+            summary_context, err, user_msg = await asyncio.to_thread(_do_summarize)
             if err:
-                return {"status": "error", "error": err, "text": "The PDF doesn't contain extractable text."}
+                return {"status": "error", "error": err, "text": user_msg or err}
 
+            from grace.agent.planner import wrap_untrusted
+
+            speakable = self._clean_summary_for_speech(summary_context)
             return {
                 "status": "ok",
-                "text": summary_context,
+                "text": wrap_untrusted(summary_context),
+                "speakable_summary": speakable,
                 "action": "summarize_pdf",
             }
         except FileNotFoundError:
-            return {"status": "error", "error": f"File not found: {path}", "text": f"I couldn't find that PDF."}
+            return {"status": "error", "error": f"File not found: {path}", "text": "I couldn't find that PDF."}
         except Exception as e:
             return {"status": "error", "error": str(e), "text": f"Error summarizing PDF: {e}"}
+
+    @staticmethod
+    def _clean_summary_for_speech(summary_context: str) -> str:
+        """Clean markdown and format into a 2-4 sentence speakable summary."""
+        import re
+        from grace.text.sentence_split import split_sentences
+
+        cleaned = re.sub(r"\[(Section|Excerpt|Page)\s*\d+\]:?", "", summary_context)
+        cleaned = re.sub(r"#{1,6}\s*", "", cleaned)
+        cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+        cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
+        cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+        cleaned = re.sub(r"^\s*[-*•]\s*", "", cleaned, flags=re.MULTILINE)
+        cleaned = " ".join(cleaned.split())
+
+        sentences = split_sentences(cleaned)
+        if sentences:
+            return " ".join(s.strip() for s in sentences[:4])
+        return "The document does not contain readable summary text."
 
     async def _adjust_volume(self, params: dict) -> dict:
         amount = params.get("amount", 0)
@@ -718,12 +804,14 @@ class Dispatcher:
 
         def _do_delete():
             user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
-            paths_to_try = [
-                name,
+            paths_to_try = []
+            if os.path.isabs(name):
+                paths_to_try.append(name)
+            paths_to_try.extend([
                 os.path.join(user_profile, "Documents", name),
                 os.path.join(user_profile, "Desktop", name),
                 os.path.join(user_profile, "Downloads", name),
-            ]
+            ])
 
             target_path = None
             for path in paths_to_try:
@@ -733,6 +821,13 @@ class Dispatcher:
 
             if not target_path:
                 return {"status": "error", "error": f"File not found: {name}", "text": f"I couldn't find '{name}' to delete."}
+
+            if os.path.isdir(target_path):
+                return {
+                    "status": "error",
+                    "error": f"Refusing to delete directory '{target_path}': delete_file only deletes files.",
+                    "text": f"'{name}' is a directory. I only delete individual files.",
+                }
 
             try:
                 from send2trash import send2trash

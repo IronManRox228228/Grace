@@ -115,6 +115,19 @@ class GemmaClient:
             await self._http.close()
             self._http = None
 
+    def abort(self):
+        """Immediately abort ongoing HTTP requests and close the connection."""
+        if self._http and not self._http.closed:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._http.close())
+                else:
+                    asyncio.run(self._http.close())
+            except Exception as e:
+                logger.debug(f"GemmaClient abort error: {e}")
+            self._http = None
+
     async def health_check(self) -> bool:
         """Check if LLM backend (Gemini Cloud API or local llama-server) is reachable."""
         if self._api_key:

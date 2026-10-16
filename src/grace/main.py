@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import warnings
 from typing import Optional
 
@@ -226,13 +227,14 @@ class GraceApp:
             tts_player=self.tts_player,
             ws_server=self.ws_server,
         )
-        # Use a dedicated conversational prompt — NOT the intent-extraction prompt
         self.response_gen.set_system_prompt(
             "You are Grace, a warm, concise voice assistant helping a user with motor "
             "dysfunction control their Windows PC. Answer naturally in short spoken sentences. "
             "Do NOT output JSON. Do NOT use markdown, lists, or special formatting. "
             "Keep replies under 3 sentences unless the user asks for detail."
         )
+        self.agent_loop.set_cancel_hook(self.response_gen.stop_speaking)
+        self._confirmation_prompt_finished_at: float = 0.0
 
     # An activation that hears nothing still holds the pill open this long,
     # counted from the wake word, so it never flashes open and shut.
@@ -522,6 +524,10 @@ class GraceApp:
     # "grace yes" still count as plain answers.
     _CONFIRMATION_LEADING_FILLER = ("grace", "um", "uh", "umm", "uhh")
     _CONFIRMATION_TRAILING_FILLER = ("please",)
+    _GREETING_WORDS = {
+        "hello", "hi", "hey", "howdy", "greetings", "morning", "good morning",
+        "good afternoon", "good evening",
+    }
 
     @classmethod
     def _confirmation_answer(cls, transcript: str) -> Optional[bool]:
@@ -541,7 +547,14 @@ class GraceApp:
         if not text:
             return None
 
+        # Red-team R16: Greeting words must not count as "yes" or confirmation
+        if text in cls._GREETING_WORDS:
+            return None
+
         words = text.split()
+        if words and words[0] in cls._GREETING_WORDS:
+            return None
+
         while words and words[0] in cls._CONFIRMATION_LEADING_FILLER:
             words.pop(0)
         while words and words[-1] in cls._CONFIRMATION_TRAILING_FILLER:
@@ -588,11 +601,21 @@ class GraceApp:
         the user's "yes" was then treated as a brand-new request - so a
         confirmed action simply never ran.
         """
+        # A "yes" heard before the question has finished being spoken does not count
+        now = time.monotonic()
+        if getattr(self, "_confirmation_prompt_finished_at", 0.0) and now < self._confirmation_prompt_finished_at:
+            log.info("Ignoring confirmation answer received before question finished speaking.")
+            return True
+
         answer = self._confirmation_answer(transcript)
         if answer is None:
-            log.info("Pending confirmation was not answered; treating as a new request.")
-            self.agent_loop.cancel_pending()
-            return False
+            # Mumbled or unclear answer: re-ask the question
+            prompt = self.agent_loop.pending_prompt or "Are you sure you want me to proceed?"
+            reask_text = f"I didn't quite catch that. {prompt}"
+            log.info(f"Unclear or mumbled confirmation answer ({transcript!r}); re-asking: {reask_text}")
+            await self.response_gen.generate_and_speak_with_text(reask_text)
+            self._confirmation_prompt_finished_at = time.monotonic()
+            return True
 
         log.info(f"Resuming parked action with approval={answer}")
         result = await self.agent_loop.resume_pending(approved=answer)
@@ -602,6 +625,7 @@ class GraceApp:
             # "Done." here would tell the user their real action already
             # happened and drop the new pending step on the floor unasked.
             response_text = self._agent_response_text(result)
+            self._confirmation_prompt_finished_at = time.monotonic()
         else:
             response_text = result.get("final_response") or (
                 "Done." if answer else "Alright, I won't do that."
@@ -624,6 +648,7 @@ class GraceApp:
         log.warning(f"Fast-path '{intent.tool}' parked for confirmation: {prompt}")
         self.agent_loop.park_intent(intent, prompt)
         await self.response_gen.generate_and_speak_with_text(prompt)
+        self._confirmation_prompt_finished_at = time.monotonic()
         return True
 
     def _start_background_warmup(self) -> None:

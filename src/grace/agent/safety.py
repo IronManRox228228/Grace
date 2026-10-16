@@ -7,19 +7,55 @@ and requiring explicit voice confirmation before execution.
 
 import logging
 import os
+import re
 from typing import Any, Optional
 
 logger = logging.getLogger("grace.agent.safety")
 
 
 class SafetyGuard:
-    """Evaluates proposed agent actions and checks if user voice confirmation is required."""
+    """Evaluates proposed agent actions and checks if user voice confirmation is required.
+
+    Uses an explicit allowlist of read-only and harmless actions. Everything else
+    requires explicit user confirmation.
+    """
 
     # Actions that ALWAYS require user confirmation before execution
     CONFIRMATION_REQUIRED_TOOLS = {
         "delete_file",
         "close_app",
         "lock_computer",
+    }
+
+    # Explicit allowlist of read-only or harmless actions that run without confirmation.
+    SAFE_READ_ONLY_TOOLS = {
+        "converse",
+        "search_files",
+        "read_pdf",
+        "summarize_pdf",
+        "adjust_volume",
+        "open_calculator",
+        "undo",
+        "describe_screen",
+        "set_speech_rate",
+        "cua_list_windows",
+        "cua_get_window",
+        "cua_screenshot",
+        "cua_get_cursor_position",
+        "cua_scroll",
+        "cua_hover",
+        "cua_move_cursor",
+        "cua_drag",
+        "cua_set_value",
+        "cua_activate",
+        "cua_launch",
+        "cua_secondary_action",
+    }
+
+    # Target words that always require confirmation (delete, send, submit, pay/purchase, taskkill, overwrite)
+    DESTRUCTIVE_KEYWORDS = {
+        "delete", "remove", "send", "submit", "pay", "purchase", "buy",
+        "order", "checkout", "format", "erase", "kill", "taskkill", "overwrite",
     }
 
     # Extensions that can run code or a script just by being "opened" - an
@@ -39,27 +75,56 @@ class SafetyGuard:
         Returns:
             (is_safe: bool, confirmation_prompt: Optional[str])
         """
+        # 1. Explicit always-confirm tools
         if action in cls.CONFIRMATION_REQUIRED_TOOLS:
             prompt = cls._build_confirmation_prompt(action, params)
             logger.warning(f"Safety guard intercepted action '{action}': {prompt}")
             return False, prompt
 
+        # 2. open_file with dangerous extension
         if action == "open_file":
             name = params.get("name") or params.get("path") or ""
             if cls.has_dangerous_open_extension(name):
                 prompt = f"{name} can run code just by being opened. Should I open it anyway?"
                 logger.warning(f"Safety guard intercepted action '{action}': {prompt}")
                 return False, prompt
+            return True, None
 
-        # Parameter checks for generic tools. Normalised because the model
-        # writes "Alt+F4" and "Control_L+w" at least as often as "alt+f4",
-        # and the old exact-string comparison let those straight through.
+        # 3. open_app is harmless app launch
+        if action == "open_app":
+            return True, None
+
+        # 4. cua_press_key: safe unless a dangerous hotkey
         if action == "cua_press_key":
             key = cls._normalise_key(params.get("key"))
             if key in cls.CONFIRMATION_REQUIRED_KEYS:
                 return False, "Closing windows can cause loss of unsaved work. Should I proceed?"
+            return True, None
 
-        return True, None
+        # 5. cua_click: safe ONLY if target does NOT have sensitive/destructive keywords
+        if action == "cua_click":
+            target = (params.get("target_name") or params.get("describe") or "").lower()
+            for kw in cls.DESTRUCTIVE_KEYWORDS:
+                if re.search(r"\b" + re.escape(kw) + r"\b", target):
+                    prompt = cls._build_confirmation_prompt("cua_click", params, keyword=kw)
+                    logger.warning(f"Safety guard intercepted click on destructive target '{target}': {prompt}")
+                    return False, prompt
+            return True, None
+
+        # 6. cua_type_text: safe unless overwriting a file
+        if action == "cua_type_text":
+            if params.get("replace_file") or params.get("overwrite"):
+                return False, "This action may overwrite an existing file. Should I proceed?"
+            return True, None
+
+        # 7. Explicit read-only harmless tools on the allowlist
+        if action in cls.SAFE_READ_ONLY_TOOLS:
+            return True, None
+
+        # 8. Everything else (unallowed / unknown / destructive) requires confirmation
+        prompt = cls._build_confirmation_prompt(action, params)
+        logger.warning(f"Safety guard intercepted unallowed action '{action}': {prompt}")
+        return False, prompt
 
     @classmethod
     def has_dangerous_open_extension(cls, name_or_path: str) -> bool:
@@ -111,7 +176,7 @@ class SafetyGuard:
         return "+".join(modifiers + [parts[-1]])
 
     @classmethod
-    def _build_confirmation_prompt(cls, action: str, params: dict[str, Any]) -> str:
+    def _build_confirmation_prompt(cls, action: str, params: dict[str, Any], keyword: str = "") -> str:
         """Construct human-understandable confirmation question for voice output."""
         if action == "delete_file":
             filename = params.get("name") or params.get("path") or "this file"
@@ -121,4 +186,19 @@ class SafetyGuard:
             return f"Should I close {app_name}? Any unsaved changes may be lost."
         elif action == "lock_computer":
             return "Should I lock your computer now?"
+        elif action == "cua_click":
+            target = params.get("target_name") or params.get("describe") or "this element"
+            if keyword in ("pay", "purchase", "buy", "order", "checkout"):
+                return f"Clicking '{target}' will proceed with a purchase or payment. Should I proceed?"
+            if keyword in ("send", "submit"):
+                return f"Should I submit or send by clicking '{target}'?"
+            if keyword in ("delete", "remove", "erase", "format", "kill"):
+                return f"Are you sure you want me to delete or remove by clicking '{target}'?"
+            return f"Should I click '{target}'?"
+        elif "delete" in action or "remove" in action:
+            return f"Are you sure you want to execute {action} to delete items?"
+        elif "send" in action or "submit" in action:
+            return f"Should I proceed with submitting or sending?"
+        elif "pay" in action or "purchase" in action:
+            return "This will proceed with a purchase or payment. Should I proceed?"
         return f"Confirm executing action '{action}'?"

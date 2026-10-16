@@ -394,7 +394,7 @@ class TestEscalationLadder:
     always "give up". Repetition is the trigger for trying *differently*.
     """
 
-    CLICK = '{"action": "cua_click", "params": {"element_id": 3, "target_name": "Send"}, "expect": "the message sends"}'
+    CLICK = '{"action": "cua_click", "params": {"element_id": 3, "target_name": "Open"}, "expect": "the message opens"}'
 
     def test_the_rungs_are_in_order(self):
         from grace.agent.loop import _rung
@@ -407,7 +407,7 @@ class TestEscalationLadder:
         loop, _, _ = make_loop([self.CLICK, DONE])
         loop._ground = AsyncMock()
         freeze_screen(loop)
-        asyncio.run(loop.run(user_goal="send the message"))
+        asyncio.run(loop.run(user_goal="open the message"))
         assert loop._ground.await_count == 0
 
     def test_a_repeat_is_regrounded(self):
@@ -416,7 +416,7 @@ class TestEscalationLadder:
         loop, _, _ = make_loop([self.CLICK] * 6)
         loop._ground = AsyncMock()
         freeze_screen(loop)
-        asyncio.run(loop.run(user_goal="send the message"))
+        asyncio.run(loop.run(user_goal="open the message"))
         assert loop._ground.await_count >= 1
         assert loop._ground.await_args.kwargs.get("force") is True
 
@@ -451,7 +451,7 @@ class TestEscalationLadder:
     def test_the_third_attempt_asks_a_stronger_model(self):
         loop, _, _ = make_loop([self.CLICK] * 8)
         freeze_screen(loop)
-        asyncio.run(loop.run(user_goal="send the message"))
+        asyncio.run(loop.run(user_goal="open the message"))
 
         models = [
             c.kwargs.get("model")
@@ -466,7 +466,7 @@ class TestEscalationLadder:
         # Escalation must not become a way of never giving up.
         loop, _, _ = make_loop([self.CLICK] * 20)
         freeze_screen(loop)
-        res = asyncio.run(loop.run(user_goal="send the message"))
+        res = asyncio.run(loop.run(user_goal="open the message"))
         assert res["status"] == "no_progress"
 
     def test_a_rate_limited_escalation_does_not_escape_run(self):
@@ -479,7 +479,7 @@ class TestEscalationLadder:
         loop, _, _ = make_loop([self.CLICK] * 8)
         freeze_screen(loop)
         loop._replan_stronger = AsyncMock(side_effect=RateLimitError("429 quota"))
-        res = asyncio.run(loop.run(user_goal="send the message"))
+        res = asyncio.run(loop.run(user_goal="open the message"))
         # Escalation is optional; being refused it must not end the goal when
         # the originally planned step can still be tried.
         assert res["status"] != "rate_limited"
@@ -492,7 +492,7 @@ class TestEscalationLadder:
         loop._replan_stronger = AsyncMock(
             side_effect=PlannerBudgetExceeded("planner call budget exhausted")
         )
-        res = asyncio.run(loop.run(user_goal="send the message"))
+        res = asyncio.run(loop.run(user_goal="open the message"))
         assert res["status"] == "planner_budget_exceeded"
         assert res["final_response"]
 

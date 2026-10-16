@@ -75,9 +75,39 @@ pub struct Evaluation {
     pub confirmation_prompt: Option<String>,
 }
 
+/// Explicit allowlist of read-only or harmless actions that run without confirmation.
+pub const SAFE_READ_ONLY_TOOLS: [&str; 21] = [
+    "converse",
+    "search_files",
+    "read_pdf",
+    "summarize_pdf",
+    "adjust_volume",
+    "open_calculator",
+    "undo",
+    "describe_screen",
+    "set_speech_rate",
+    "cua_list_windows",
+    "cua_get_window",
+    "cua_screenshot",
+    "cua_get_cursor_position",
+    "cua_scroll",
+    "cua_hover",
+    "cua_move_cursor",
+    "cua_drag",
+    "cua_set_value",
+    "cua_activate",
+    "cua_launch",
+    "cua_secondary_action",
+];
+
+/// Target keywords that require confirmation.
+pub const DESTRUCTIVE_KEYWORDS: [&str; 14] = [
+    "delete", "remove", "send", "submit", "pay", "purchase", "buy",
+    "order", "checkout", "format", "erase", "kill", "taskkill", "overwrite",
+];
+
 /// Evaluates proposed agent actions and checks if user voice confirmation is
-/// required. `params` is the tool's argument object, as parsed JSON (mirrors
-/// the Python `dict[str, Any]`).
+/// required. Uses an explicit allowlist of read-only or harmless actions.
 pub fn evaluate(action: &str, params: &Value) -> Evaluation {
     if CONFIRMATION_REQUIRED_TOOLS.contains(&action) {
         let prompt = build_confirmation_prompt(action, params);
@@ -85,6 +115,24 @@ pub fn evaluate(action: &str, params: &Value) -> Evaluation {
             is_safe: false,
             confirmation_prompt: Some(prompt),
         };
+    }
+
+    if action == "open_file" {
+        let name = param_str(params, "name").or_else(|| param_str(params, "path")).unwrap_or("");
+        if let Some(ext) = std::path::Path::new(name).extension().and_then(|e| e.to_str()) {
+            let ext_lower = format!(".{}", ext.to_lowercase());
+            if [".exe", ".bat", ".cmd", ".com", ".ps1", ".vbs", ".js", ".jse", ".wsf", ".msi", ".lnk", ".scr", ".pif", ".hta", ".reg", ".cpl"].contains(&ext_lower.as_str()) {
+                return Evaluation {
+                    is_safe: false,
+                    confirmation_prompt: Some(format!("{name} can run code just by being opened. Should I open it anyway?")),
+                };
+            }
+        }
+        return Evaluation { is_safe: true, confirmation_prompt: None };
+    }
+
+    if action == "open_app" {
+        return Evaluation { is_safe: true, confirmation_prompt: None };
     }
 
     if action == "cua_press_key" {
@@ -97,11 +145,42 @@ pub fn evaluate(action: &str, params: &Value) -> Evaluation {
                 ),
             };
         }
+        return Evaluation { is_safe: true, confirmation_prompt: None };
+    }
+
+    if action == "cua_click" {
+        let target = param_str(params, "target_name").or_else(|| param_str(params, "describe")).unwrap_or("").to_lowercase();
+        for kw in DESTRUCTIVE_KEYWORDS {
+            let re = format!(r"\b{}\b", kw);
+            if regex::Regex::new(&re).map(|r| r.is_match(&target)).unwrap_or(false) {
+                return Evaluation {
+                    is_safe: false,
+                    confirmation_prompt: Some(format!("Should I click '{}'? This will {} this.", target, kw)),
+                };
+            }
+        }
+        return Evaluation { is_safe: true, confirmation_prompt: None };
+    }
+
+    if action == "cua_type_text" {
+        if params.get("replace_file").and_then(Value::as_bool).unwrap_or(false)
+            || params.get("overwrite").and_then(Value::as_bool).unwrap_or(false)
+        {
+            return Evaluation {
+                is_safe: false,
+                confirmation_prompt: Some("This action may overwrite an existing file. Should I proceed?".into()),
+            };
+        }
+        return Evaluation { is_safe: true, confirmation_prompt: None };
+    }
+
+    if SAFE_READ_ONLY_TOOLS.contains(&action) {
+        return Evaluation { is_safe: true, confirmation_prompt: None };
     }
 
     Evaluation {
-        is_safe: true,
-        confirmation_prompt: None,
+        is_safe: false,
+        confirmation_prompt: Some(build_confirmation_prompt(action, params)),
     }
 }
 

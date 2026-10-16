@@ -27,6 +27,11 @@ const NEGATION_WORDS: &[&str] = &["not", "no", "dont", "never"];
 const LEADING_FILLER: &[&str] = &["grace", "um", "uh", "umm", "uhh"];
 const TRAILING_FILLER: &[&str] = &["please"];
 
+const GREETING_WORDS: &[&str] = &[
+    "hello", "hi", "hey", "greetings", "good morning", "good afternoon",
+    "good evening", "howdy", "sup", "yo",
+];
+
 /// Strip everything that isn't a word character or whitespace, matching
 /// Python's `re.sub(r"[^\w\s]", "", text)` (both operate on already-ASCII
 /// voice transcripts in practice, so byte-wise ASCII punctuation stripping
@@ -61,6 +66,11 @@ pub fn confirmation_answer(transcript: &str) -> Option<bool> {
         }
     }
     if words.is_empty() {
+        return None;
+    }
+
+    // R16: Greeting words must not count as yes or as confirmation
+    if GREETING_WORDS.contains(&words[0]) {
         return None;
     }
 
