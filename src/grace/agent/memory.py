@@ -318,3 +318,36 @@ class AgentMemory:
             else:
                 lines.append(f"- **{key}**: {type(val).__name__} ({str(val)[:200]})")
         return "\n".join(lines)
+
+    def format_established_ruled_out_markdown(self) -> str:
+        """Format only established facts and ruled-out approaches (plus data) for model context.
+
+        Never sends the whole 3-step history so the model only ever makes small,
+        single-screen decisions based on the current goal step and known bounds.
+        """
+        lines = []
+        established = self.scratchpad.get("established", [])
+        if established:
+            lines.append("Established facts:")
+            for item in established:
+                lines.append(f"- {item}")
+        ruled_out = self.scratchpad.get("ruled_out", [])
+        if ruled_out:
+            lines.append("Ruled out approaches:")
+            for item in ruled_out:
+                lines.append(f"- {item}")
+        other_keys = {k: v for k, v in self.scratchpad.items() if k not in ("established", "ruled_out")}
+        if other_keys:
+            lines.append("Scratchpad data:")
+            for key, val in other_keys.items():
+                if isinstance(val, str):
+                    val_snippet = val[:300] + ("..." if len(val) > 300 else "")
+                    lines.append(f"- **{key}**: {val_snippet}")
+                elif isinstance(val, list):
+                    val_str = ", ".join(str(v) for v in val[:10])
+                    lines.append(f"- **{key}**: [{val_str}]")
+                else:
+                    lines.append(f"- **{key}**: {type(val).__name__} ({str(val)[:200]})")
+        if not lines:
+            return "No previous facts or ruled out approaches."
+        return "\n".join(lines)

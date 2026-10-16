@@ -182,11 +182,32 @@ class AgentLoop:
             "stronger_planner_model", DEFAULT_STRONGER_PLANNER_MODEL
         )
         self._pending: Optional[dict[str, Any]] = None
-        # Set by `request_cancel()`, checked between steps and again just
-        # before a step is dispatched (R5). This is the only way a goal already
-        # running can be stopped - the loop's own budgets all end it on their
-        # own terms, none of them on the user's.
         self._cancel_requested = False
+        self._cancel_hook = None
+        AgentLoop._cancel_flag = False
+        AgentLoop._typing_cut_off = False
+        try:
+            from grace.automation.computer_use import ComputerUse
+            ComputerUse.set_cancel_checker(
+                AgentLoop.is_cancel_requested,
+                AgentLoop.set_typing_cut_off,
+            )
+        except Exception:
+            pass
+
+    _cancel_flag: bool = False
+    _typing_cut_off: bool = False
+
+    @classmethod
+    def is_cancel_requested(cls) -> bool:
+        return cls._cancel_flag
+
+    @classmethod
+    def set_typing_cut_off(cls, val: bool = True) -> None:
+        cls._typing_cut_off = val
+
+    def set_cancel_hook(self, hook) -> None:
+        self._cancel_hook = hook
 
     # -- safety resumption -------------------------------------------------
 
@@ -210,16 +231,32 @@ class AgentLoop:
         self._pending = None
 
     def request_cancel(self) -> None:
-        """Ask a running goal to stop at the next checkpoint.
+        """Ask a running goal to stop immediately (<500ms).
 
-        Meant to be called from outside the loop - the caller wires this to a
-        spoken "stop"/"cancel" heard while a goal is in flight (R5), since
-        nothing else can reach a running goal at all. It only sets a flag:
-        the loop itself decides when it is safe to act on it, between steps
-        and again immediately before dispatching one, so a step already
-        announced to the user is never abandoned mid-way.
+        Aborts any ongoing HTTP model calls, stops TTS speech if active,
+        and halts typing/actions before the next dispatch.
         """
         self._cancel_requested = True
+        AgentLoop._cancel_flag = True
+        if getattr(self, "_cancel_hook", None):
+            try:
+                self._cancel_hook()
+            except Exception as e:
+                logger.debug(f"Cancel hook error: {e}")
+        if hasattr(self._gemma, "abort"):
+            res = self._gemma.abort()
+            if asyncio.iscoroutine(res):
+                try:
+                    asyncio.get_running_loop().create_task(res)
+                except RuntimeError:
+                    pass
+        if hasattr(self._vision_llm, "abort") and self._vision_llm is not self._gemma:
+            res = self._vision_llm.abort()
+            if asyncio.iscoroutine(res):
+                try:
+                    asyncio.get_running_loop().create_task(res)
+                except RuntimeError:
+                    pass
 
     def _expire_pending(self) -> None:
         """Drop a parked confirmation once it has waited too long to still apply.
@@ -299,6 +336,8 @@ class AgentLoop:
         self._planner.reset()
         self._pending = None
         self._cancel_requested = False
+        AgentLoop._cancel_flag = False
+        AgentLoop._typing_cut_off = False
         logger.info(
             f"AgentLoop started for goal: '{user_goal}' "
             f"({'unlimited' if not limit or limit <= 0 else f'max {limit}'} steps, "
@@ -316,9 +355,10 @@ class AgentLoop:
         consecutive_failures = 0
         last_observation: Optional[str] = None
         attempts: dict[str, int] = {}
+        step_failures: dict[str, int] = {}
 
         while not memory.is_completed and not memory.is_exceeded:
-            if self._cancel_requested:
+            if self._cancel_requested or AgentLoop.is_cancel_requested():
                 logger.info("AgentLoop: cancelled by voice stop request.")
                 return self._cancel_result(memory)
 
@@ -352,8 +392,8 @@ class AgentLoop:
                     step = await self._planner.plan(
                         goal=memory.user_goal,
                         elements_prompt=view.markdown,
-                        history=memory.format_history_markdown(),
-                        scratchpad=memory.format_scratchpad_markdown(),
+                        history="",
+                        scratchpad=memory.format_established_ruled_out_markdown(),
                         expectation_note=expectation_note,
                         window_title=_window_title(snapshot),
                         image_b64=view.image_b64,
@@ -477,9 +517,55 @@ class AgentLoop:
                 "step": step_no,
             })
 
+            # App switching via harness action
+            target_window = (
+                step.params.get("window_title")
+                or step.params.get("window")
+                or (step.params.get("name") if step.action == "open_app" else None)
+            )
+            if target_window and isinstance(target_window, str):
+                cur_title = _window_title(snapshot)
+                if cur_title and target_window.lower() not in cur_title.lower() and step.action != "open_app":
+                    logger.info(f"AgentLoop: harness switching app focus to '{target_window}'")
+                    await self._dispatcher.execute(Intent(tool="cua_activate", params={"window_title": target_window}))
+
             # Executed before the completion check so a final step that also
             # performs an action is never skipped.
             exec_result = await self._dispatch(step, memory)
+
+            # Verification of action effect
+            inner = exec_result.get("result") if isinstance(exec_result.get("result"), dict) else {}
+            if exec_result.get("typing_cut_off") or inner.get("typing_cut_off") or AgentLoop._typing_cut_off:
+                AgentLoop._typing_cut_off = True
+                logger.info("AgentLoop: typing cut off by cancellation; stopping immediately.")
+                return self._cancel_result(memory)
+
+            action_failed = (
+                exec_result.get("status") == "error"
+                or inner.get("verified") is False
+                or inner.get("ok") is False
+            )
+            if action_failed:
+                sig = _step_signature(step)
+                step_failures[sig] = step_failures.get(sig, 0) + 1
+                reason = _failure_reason(exec_result) or inner.get("evidence") or "action had no observable effect"
+                memory.rule_out(f"{step.action} with {_short_params(step.params)}", reason)
+                if step_failures[sig] >= 2:
+                    action_name = step.action.replace("cua_", "")
+                    question = f"I'm having trouble with {action_name}. Would you like me to try a different approach, or do something else?"
+                    memory.final_response = question
+                    memory.add_step(step.thought, step.action, step.params, exec_result, step.user_update)
+                    return {
+                        "status": "needs_user_input",
+                        "final_response": question,
+                        "question": question,
+                        "steps": [s.to_dict() for s in memory.steps_taken],
+                    }
+
+            if self._cancel_requested or AgentLoop._cancel_flag or inner.get("typing_cut_off"):
+                logger.info("AgentLoop: cancelled by voice stop request.")
+                memory.add_step(step.thought, step.action, step.params, exec_result, step.user_update)
+                return self._cancel_result(memory)
 
             if step.is_completed or step.action == "converse":
                 verified, hint = self._verify_goal_completion(
@@ -544,8 +630,8 @@ class AgentLoop:
             return await self._planner.plan(
                 goal=memory.user_goal,
                 elements_prompt=view.markdown,
-                history=memory.format_history_markdown(),
-                scratchpad=memory.format_scratchpad_markdown(),
+                history="",
+                scratchpad=memory.format_established_ruled_out_markdown(),
                 expectation_note=expectation_note,
                 window_title=_window_title(snapshot),
                 image_b64=view.image_b64,
@@ -786,18 +872,14 @@ class AgentLoop:
         }
 
     def _cancel_result(self, memory: AgentMemory) -> dict[str, Any]:
-        """Stop because the user said so, not because a budget ran out.
-
-        Same envelope `_timeout_result` returns: a spoken acknowledgement plus
-        whatever steps already happened, so main.py's ordinary end-of-turn
-        handling - speak the response, then ConversationFinished/Idle - needs
-        no special case for a voice-cancelled goal.
-        """
-        last = memory.steps_taken[-1] if memory.steps_taken else None
-        where = f" The last thing I did was `{last.action}`." if last is not None else ""
+        """Stop because the user said so, not because a budget ran out."""
+        if AgentLoop._typing_cut_off:
+            response = "Stopped. Typing was interrupted."
+        else:
+            response = memory.final_response or "Stopped."
         return {
             "status": "cancelled",
-            "final_response": memory.final_response or f"Okay, I've stopped.{where}",
+            "final_response": response,
             "steps": [s.to_dict() for s in memory.steps_taken],
         }
 

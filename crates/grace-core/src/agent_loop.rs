@@ -288,8 +288,8 @@ impl AgentLoop {
             let plan_args = PlanArgs {
                 goal: memory.user_goal.clone(),
                 elements_prompt: view.markdown.clone(),
-                history: memory.format_history_markdown(),
-                scratchpad: memory.format_scratchpad_markdown(),
+                history: String::new(),
+                scratchpad: memory.format_established_ruled_out_markdown(),
                 expectation_note: expectation_note.clone(),
                 window_title: snapshot.window_title.clone(),
                 image_b64: view.image_b64.clone(),
@@ -461,8 +461,8 @@ impl AgentLoop {
         let args = PlanArgs {
             goal: memory.user_goal.clone(),
             elements_prompt: view.markdown.clone(),
-            history: memory.format_history_markdown(),
-            scratchpad: memory.format_scratchpad_markdown(),
+            history: String::new(),
+            scratchpad: memory.format_established_ruled_out_markdown(),
             expectation_note: expectation_note.to_string(),
             window_title: snapshot.window_title.clone(),
             image_b64: view.image_b64.clone(),
@@ -657,8 +657,7 @@ fn timeout_result(memory: &AgentMemory) -> Value {
 }
 
 fn cancel_result(memory: &AgentMemory) -> Value {
-    let where_clause = memory.steps_taken.last().map(|s| format!(" The last thing I did was `{}`.", s.action)).unwrap_or_default();
-    let response = memory.final_response.clone().unwrap_or_else(|| format!("Okay, I've stopped.{where_clause}"));
+    let response = memory.final_response.clone().unwrap_or_else(|| "Stopped.".to_string());
     json!({"status": "cancelled", "final_response": response, "steps": steps_json(memory)})
 }
 

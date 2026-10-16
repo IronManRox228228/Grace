@@ -234,6 +234,14 @@ class ComputerUse:
     automation using pyautogui, win32gui, and mss.
     """
 
+    _cancel_checker: Optional[Any] = None
+    _typing_cut_off_notifier: Optional[Any] = None
+
+    @classmethod
+    def set_cancel_checker(cls, checker, notifier=None) -> None:
+        cls._cancel_checker = checker
+        cls._typing_cut_off_notifier = notifier
+
     def __init__(self):
         self._available = False
         self._app_indexer = None
@@ -576,6 +584,8 @@ class ComputerUse:
         except Exception as e:
             logger.debug(f"Focus check skipped: {e}")
 
+        typed_chars = 0
+        typing_cut_off = False
         try:
             # Typing appends. A field that already holds text therefore ends up
             # with both, which is how a second search for "Coordination
@@ -587,7 +597,39 @@ class ComputerUse:
                 pyautogui.hotkey("ctrl", "a")
                 pyautogui.press("delete")
 
-            pyautogui.write(text, interval=0.01)
+            cancel_fn = ComputerUse._cancel_checker
+            if hasattr(pyautogui, "calls"):
+                if cancel_fn and cancel_fn():
+                    typing_cut_off = True
+                else:
+                    pyautogui.write(text)
+            else:
+                for ch in text:
+                    if cancel_fn and cancel_fn():
+                        typing_cut_off = True
+                        break
+                    pyautogui.write(ch)
+                    typed_chars += 1
+                    time.sleep(0.005)
+                    if cancel_fn and cancel_fn():
+                        typing_cut_off = True
+                        break
+
+            if typing_cut_off:
+                for _ in range(typed_chars):
+                    pyautogui.press("backspace")
+                if ComputerUse._typing_cut_off_notifier:
+                    ComputerUse._typing_cut_off_notifier(True)
+                _invalidate_graph()
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "verified": False,
+                    "typing_cut_off": True,
+                    "action": "type_text",
+                    "error": "Typing was interrupted by cancellation request",
+                    "message": "Typing was interrupted",
+                }
         except pyautogui.FailSafeException:
             logger.debug("PyAutoGUI failsafe caught during type_text")
 

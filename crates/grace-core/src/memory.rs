@@ -286,6 +286,40 @@ impl AgentMemory {
         }
         lines.join("\n")
     }
+
+    pub fn format_established_ruled_out_markdown(&self) -> String {
+        let mut lines = Vec::new();
+        if !self.established.is_empty() {
+            lines.push("Established facts:".to_string());
+            for item in &self.established {
+                lines.push(format!("- {item}"));
+            }
+        }
+        if !self.ruled_out.is_empty() {
+            lines.push("Ruled out approaches:".to_string());
+            for item in &self.ruled_out {
+                lines.push(format!("- {item}"));
+            }
+        }
+        if !self.scratchpad.is_empty() {
+            lines.push("Scratchpad data:".to_string());
+            for (key, val) in &self.scratchpad {
+                match val {
+                    Value::String(s) => lines.push(format!("- **{key}**: {}", truncate(s, 300))),
+                    Value::Array(items) => {
+                        let joined: Vec<String> = items.iter().take(10).map(value_as_display).collect();
+                        lines.push(format!("- **{key}**: [{}]", joined.join(", ")));
+                    }
+                    other => lines.push(format!("- **{key}**: {}", truncate(&other.to_string(), 200))),
+                }
+            }
+        }
+        if lines.is_empty() {
+            "No previous facts or ruled out approaches.".to_string()
+        } else {
+            lines.join("\n")
+        }
+    }
 }
 
 fn remember(entries: &mut Vec<String>, entry: String) {
