@@ -685,7 +685,7 @@ class TestSafetyResumption:
 
 
 class TestGrounding:
-    """UI-TARS must be a last resort, not the default path."""
+    """Visual grounding must be a last resort, not the default path."""
 
     def test_resolvable_target_never_calls_the_grounder(self):
         grounder = AsyncMock()

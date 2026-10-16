@@ -109,7 +109,7 @@ class PlannedStep:
     def needs_grounding(self) -> bool:
         """True when the planner named a target it could not pin to an element.
 
-        This is the only condition under which UI-TARS is invoked.
+        This is the only condition under which the visual grounder is invoked.
         """
         if self.action not in ("cua_click", "cua_secondary_action", "cua_set_value"):
             return False
@@ -136,8 +136,7 @@ def get_planner_system_prompt() -> str:
 
     The old single prompt told the model "Do NOT output JSON" while the user
     message demanded "ONLY valid JSON inside fences". Each prompt in the split
-    is now internally consistent: planner speaks JSON, grounder speaks
-    UI-TARS's native Thought/Action.
+    is now internally consistent: planner speaks JSON, grounder handles coordinates.
     """
     return f"""You are the planner for Grace, a voice assistant that operates Windows 11 for a user who cannot use a keyboard or mouse.
 

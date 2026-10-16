@@ -1,35 +1,30 @@
 """The grounder: turns a described target into screen coordinates.
 
-UI-TARS is a GUI grounding model. Given a screenshot and a description of one
-control, it is very good at saying where that control is. It was previously
-also being asked to decompose goals and pick from Grace's 26-tool schema, which
-is not what it was trained for and is where the confusion came from.
-
-Here it does one job and gets its native prompt and action space to do it in.
-It is called only when the element graph could not resolve the planner's
-target, so on a well-behaved accessibility tree it is never called at all.
+Works with any vision model. Given a screenshot and a description of one
+control, the model identifies where that control is. It is called only when
+the element graph could not resolve the planner's target, so on a well-behaved
+accessibility tree it is never called at all.
 """
 
 import asyncio
 import base64
+import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from grace.agent.ui_tars_parser import UITarsParser
-
 logger = logging.getLogger("grace.agent.grounder")
 
-# The canonical UI-TARS grounding instruction. Deliberately not Grace's tool
-# schema: the model was trained against this action space.
-GROUNDER_SYSTEM_PROMPT = """You are a GUI grounding model. You are shown a screenshot and asked to locate a single element.
+# Canonical vision grounding instruction for any vision model.
+GROUNDER_SYSTEM_PROMPT = """You are a GUI visual grounding assistant. You are shown a screenshot and asked to locate a single element.
+Locate the requested element and return its center coordinates.
+Respond in this format:
+Thought: <brief description of where the element is>
+Action: click(point=(x, y))
 
-Respond in exactly this format and nothing else:
-
-Thought: <one short sentence identifying the element>
-Action: click(start_box='(x,y)')
-
-x and y are pixel coordinates in the image you were given, measured from its top-left corner, where x is between 0 and {width} and y is between 0 and {height}. Do not normalise them to any other range. Point at the centre of the element. If the element is not visible in the screenshot, respond with Action: wait()."""
+If the element is not visible or cannot be found, respond with:
+Action: wait()"""
 
 
 @dataclass
@@ -39,17 +34,88 @@ class GroundedPoint:
     x: int
     y: int
     thought: str = ""
-    source: str = "ui_tars"
+    source: str = "vision"
+
+
+def parse_grounder_response(response_text: Optional[str]) -> Optional[tuple[float, float, str]]:
+    """Parse raw text from a vision grounder into (x, y, thought).
+
+    Robustly handles:
+    - Thought: ... Action: click(point=(x, y))
+    - Action: click((x, y)) or click(x, y)
+    - Action: click(start_box='(x, y)') or box tokens
+    - JSON: {"point": [x, y]} or {"x": x, "y": y}
+    - Action: wait() or not visible -> None
+    - Malformed output -> None
+    """
+    if not response_text or not isinstance(response_text, str):
+        return None
+
+    clean_text = response_text.strip()
+    if not clean_text:
+        return None
+
+    # Separate thought if present
+    thought = ""
+    if "Thought:" in clean_text:
+        parts = clean_text.split("Action:", 1) if "Action:" in clean_text else clean_text.split("\n", 1)
+        thought = parts[0].replace("Thought:", "").strip()
+
+    # Explicit wait or element not found
+    if re.search(r"\bwait\s*\(\s*\)", clean_text, re.IGNORECASE):
+        return None
+
+    # 1. Try parsing JSON if present
+    json_candidates = re.findall(r"\{[^{}]*\}", clean_text)
+    for candidate in json_candidates:
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, dict):
+                candidate_thought = data.get("thought", thought)
+                pt = data.get("point") or data.get("coordinates") or data.get("click")
+                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                    return float(pt[0]), float(pt[1]), str(candidate_thought)
+                if "x" in data and "y" in data:
+                    return float(data["x"]), float(data["y"]), str(candidate_thought)
+        except Exception:
+            pass
+
+    _COORD = r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)"
+
+    # 2. Action click / point pattern
+    m = re.search(
+        rf"(?:click|move|point)\s*\(\s*(?:(?:point|start_box|target|location|coord|coordinates)\s*=\s*)?['\"]?(?:<\|box_start\|>)?\s*\(?\s*{_COORD}\s*\)?\s*(?:<\|box_end\|>)?['\"]?\s*\)",
+        clean_text,
+        re.IGNORECASE,
+    )
+    if m:
+        return float(m.group(1)), float(m.group(2)), thought
+
+    # 3. Box tokens: <|box_start|>(x, y)<|box_end|>
+    m = re.search(rf"<\|box_start\|>\s*\(?\s*{_COORD}\s*\)?\s*<\|box_end\|>", clean_text)
+    if m:
+        return float(m.group(1)), float(m.group(2)), thought
+
+    # 4. Explicit point/coords: point: (x, y) or point = [x, y]
+    m = re.search(rf"(?:point|coord|coordinate|coordinates|location)\s*[:=]\s*[\(\[]\s*{_COORD}\s*[\)\]]", clean_text, re.IGNORECASE)
+    if m:
+        return float(m.group(1)), float(m.group(2)), thought
+
+    # 5. Bare coordinate pair in Action line: Action: (x, y) or Action: [x, y]
+    m = re.search(rf"Action:\s*(?:click\s*)?[\(\[]\s*{_COORD}\s*[\)\]]", clean_text, re.IGNORECASE)
+    if m:
+        return float(m.group(1)), float(m.group(2)), thought
+
+    return None
 
 
 class Grounder:
-    """Locates a described control in a screenshot via UI-TARS."""
+    """Locates a described control in a screenshot via vision LLM."""
 
-    def __init__(self, vision_llm, on_demand_start=None):
+    def __init__(self, vision_llm, on_demand_start=None, coordinate_format: str = "0-1000"):
         self._llm = vision_llm
-        # Called before the first grounding request so llama-server can be
-        # started lazily instead of blocking startup for up to 120 seconds.
         self._on_demand_start = on_demand_start
+        self._coordinate_format = coordinate_format
         self._started = False
         self._start_lock = asyncio.Lock()
         self.calls_made = 0
@@ -77,13 +143,7 @@ class Grounder:
         image_size: tuple[int, int],
         screen_size: tuple[int, int],
     ) -> Optional[GroundedPoint]:
-        """Find `description` in the screenshot and return screen coordinates.
-
-        image_size is the size of the PNG actually sent; screen_size is the real
-        desktop. The model answers in image space, so the result must be scaled
-        back - Grace previously sent a downscaled image and then clicked the
-        returned coordinates as if they were screen pixels.
-        """
+        """Find `description` in the screenshot and return screen coordinates."""
         if not png_bytes or not description:
             return None
         if not await self._ensure_backend():
@@ -91,20 +151,11 @@ class Grounder:
 
         self.calls_made += 1
         prompt = f"Locate this element: {description}"
-        # The image's real dimensions go into the prompt, so "pixels in the
-        # image you were given" is a checkable instruction rather than a hope -
-        # see scale_to_screen for what it costs when the space is ambiguous.
-        system_prompt = GROUNDER_SYSTEM_PROMPT.format(
-            width=image_size[0], height=image_size[1]
-        )
         try:
             raw = await self._llm.generate_text(
                 prompt=prompt,
-                system_prompt=system_prompt,
+                system_prompt=GROUNDER_SYSTEM_PROMPT,
                 temperature=0.0,
-                # UI-TARS emits a Thought before its Action; 128 tokens clipped
-                # the Action off any reasoning longer than a sentence, and a
-                # truncated response parses as "unrecognized" and burns a turn.
                 max_tokens=2048,
                 image_b64=base64.b64encode(png_bytes).decode("utf-8"),
             )
@@ -116,53 +167,66 @@ class Grounder:
             logger.warning(f"Grounder returned nothing for '{description}'")
             return None
 
-        parsed = UITarsParser.parse_response(raw)
+        parsed = parse_grounder_response(raw)
         if not parsed:
             logger.warning(f"Grounder output was not parseable: {raw[:150]}")
             return None
 
-        params = parsed.get("params") or {}
-        x, y = params.get("x"), params.get("y")
-        if x is None or y is None:
-            logger.info(f"Grounder could not see '{description}' (action={parsed.get('action')})")
+        x, y, thought = parsed
+        scaled = scale_to_screen(x, y, image_size, screen_size, self._coordinate_format)
+        if scaled is None:
+            logger.warning(f"Grounder coordinates ({x}, {y}) out of bounds for format '{self._coordinate_format}'")
             return None
 
-        sx, sy = scale_to_screen(int(x), int(y), image_size, screen_size)
-        logger.info(f"Grounder located '{description}' at image ({x},{y}) -> screen ({sx},{sy})")
-        return GroundedPoint(x=sx, y=sy, thought=parsed.get("thought", ""))
+        sx, sy = scaled
+        logger.info(f"Grounder located '{description}' at ({x},{y}) [{self._coordinate_format}] -> screen ({sx},{sy})")
+        return GroundedPoint(x=sx, y=sy, thought=thought)
 
 
 def scale_to_screen(
-    x: int,
-    y: int,
+    x: float,
+    y: float,
     image_size: tuple[int, int],
     screen_size: tuple[int, int],
-) -> tuple[int, int]:
-    """Map a coordinate in the sent image back to the physical screen.
+    coordinate_format: str = "0-1000",
+) -> Optional[tuple[int, int]]:
+    """Map a coordinate from the model back to the physical screen.
 
-    The contract is image pixels, stated in the grounding prompt along with the
-    image's dimensions. That statement is what makes this function decidable:
-    UI-TARS also emits normalised 0-1000 coordinates under some prompt formats,
-    and a normalised (400, 300) is *indistinguishable* from a pixel (400, 300)
-    at 1280x720. Guessing by which is larger, as this used to, silently mangles
-    every prediction that happens to land inside the image bounds - which at
-    1280 wide is most of the screen.
-
-    The overflow branch is kept only as a net for a model that ignores the
-    instruction outright, and says so in the log rather than passing quietly.
+    Supported coordinate_format values:
+    - '0-1000' (or 'norm_1000'): normalized integers in [0, 1000]
+    - '0-1' (or 'norm_1'): normalized floats in [0.0, 1.0]
+    - 'pixels': image pixels in [0, width] x [0, height]
     """
     img_w, img_h = image_size
     scr_w, scr_h = screen_size
     if not img_w or not img_h or not scr_w or not scr_h:
-        return x, y
+        return int(round(x)), int(round(y))
+
+    fmt = (coordinate_format or "0-1000").strip().lower()
+
+    if fmt in ("0-1000", "norm_1000", "1000"):
+        if x < 0 or x > 1000 or y < 0 or y > 1000:
+            return None
+        return int(round(x * scr_w / 1000.0)), int(round(y * scr_h / 1000.0))
+
+    if fmt in ("0-1", "norm_1", "normalized", "percent"):
+        if x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0:
+            return None
+        return int(round(x * scr_w)), int(round(y * scr_h))
+
+    # Pixels format
+    if x < 0 or y < 0:
+        return None
 
     if x > img_w or y > img_h:
-        logger.warning(
-            f"Grounder returned ({x},{y}) outside the {img_w}x{img_h} image it was "
-            f"given; treating as 0-1000 normalised. The prompt asks for pixels, so "
-            f"this is the model ignoring it."
-        )
-        return int(round(x * scr_w / 1000.0)), int(round(y * scr_h / 1000.0))
+        # Overflow net: if model emitted 0-1000 coordinates despite pixel prompt
+        if 0 <= x <= 1000 and 0 <= y <= 1000:
+            logger.warning(
+                f"Grounder returned ({x},{y}) outside the {img_w}x{img_h} image it was "
+                f"given; treating as 0-1000 normalised."
+            )
+            return int(round(x * scr_w / 1000.0)), int(round(y * scr_h / 1000.0))
+        return None
 
     return int(round(x * scr_w / img_w)), int(round(y * scr_h / img_h))
 

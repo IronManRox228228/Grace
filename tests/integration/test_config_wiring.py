@@ -12,8 +12,7 @@ the ones that decide which model gets called at all:
 
 * `use_cloud_llm` gating whether the API key is passed - false means every
   request goes to a local llama-server that may not be running;
-* `use_ui_tars_local` deciding whether `ui_tars_client` is a second client or
-  just an alias for `gemma` - an alias means grounding requests go to Gemini;
+* single local model mode where `vision_llm` aliases `gemma`;
 * `model_swap_enabled`, which rewires both clients' `before_request` hooks and
   suppresses the on-demand llama-server start.
 
@@ -89,22 +88,13 @@ class TestLlmWiring:
                              gemini_model_name="gemini-test-model")
         assert app.gemma._model_name == "gemini-test-model"
 
-    def test_ui_tars_local_builds_a_second_client(self, app_factory):
-        app, _ = app_factory(use_ui_tars_local=True, use_cloud_llm=True,
-                             gemini_api_key="k")
-        assert app.ui_tars_client is not app.gemma
-        assert app.ui_tars_client._api_key is None, (
-            "the grounder must reach llama-server, not Gemini"
-        )
-
-    def test_ui_tars_disabled_aliases_the_planner_client(self, app_factory):
-        app, _ = app_factory(use_ui_tars_local=False)
-        assert app.ui_tars_client is app.gemma
+    def test_single_model_aliases_planner_client(self, app_factory):
+        app, _ = app_factory(use_cloud_llm=False)
+        assert app.vision_llm is app.gemma
 
 
 class TestModelSwapWiring:
     def test_swap_is_off_when_the_planner_is_in_the_cloud(self, app_factory):
-        # Only UI-TARS wants the GPU, so there is nothing to contend over.
         app, _ = app_factory(use_cloud_llm=True, local_planner_model_path="C:/planner.gguf")
         assert app._model_swap is None
 
@@ -112,12 +102,27 @@ class TestModelSwapWiring:
         app, _ = app_factory(use_cloud_llm=False, local_planner_model_path="C:/planner.gguf")
         assert app._model_swap is not None
         assert app.gemma._before_request is not None
-        assert app.ui_tars_client._before_request is not None
+        assert app.vision_llm._before_request is not None
 
     def test_swap_suppresses_the_on_demand_backend_start(self, app_factory):
-        # Two things would otherwise fight over the same llama-server process.
         app, _ = app_factory(use_cloud_llm=False, local_planner_model_path="C:/planner.gguf")
         assert app.agent_loop._grounder._on_demand_start is None
+
+
+class TestLlamaServerArgs:
+    def test_mmproj_included_when_configured(self):
+        from grace.main import build_llama_server_args
+        cfg = dataclasses.replace(Config(), llama_mmproj_path="C:/path/to/projector.gguf")
+        args = build_llama_server_args(cfg)
+        assert "--mmproj" in args
+        idx = args.index("--mmproj")
+        assert args[idx + 1] == "C:/path/to/projector.gguf"
+
+    def test_mmproj_omitted_when_empty(self):
+        from grace.main import build_llama_server_args
+        cfg = dataclasses.replace(Config(), llama_mmproj_path="")
+        args = build_llama_server_args(cfg)
+        assert "--mmproj" not in args
 
 
 class TestAgentLoopReadsTheConfig:

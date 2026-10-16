@@ -57,7 +57,7 @@ cargo test -p grace-win --lib -- --ignored --test-threads=1
 | Crate | Lines | Ported from | What's in it |
 |---|---|---|---|
 | `crates/grace-contract` | ~340 | `contract/grace-events.schema.json` | `GraceEvent` enum, schema-validated round trip. Unchanged since Phase 1. |
-| `crates/grace-core` | ~5,700 | `config.py`, `agent/safety.py`, `agent/loop.py`, `agent/memory.py`, `agent/perception.py`, `agent/planner.py`, `agent/grounder.py`, `agent/ui_tars_parser.py`, `intent/parser.py`, `intent/tools.py`, `intent/router.py`, `tools/dispatcher.py`, `response/generator.py`, `response/feedback.py`, `util/timing.py`, `text/sentence_split.py`, `main.py`'s `GraceApp` turn logic, `perception/elements.py`, `perception/element_graph.py` | The whole turn pipeline's decision logic. See below, module by module. |
+| `crates/grace-core` | ~5,700 | `config.py`, `agent/safety.py`, `agent/loop.py`, `agent/memory.py`, `agent/perception.py`, `agent/planner.py`, `agent/grounder.py`, `intent/parser.py`, `intent/tools.py`, `intent/router.py`, `tools/dispatcher.py`, `response/generator.py`, `response/feedback.py`, `util/timing.py`, `text/sentence_split.py`, `main.py`'s `GraceApp` turn logic, `perception/elements.py`, `perception/element_graph.py` | The whole turn pipeline's decision logic. See below, module by module. |
 | `crates/grace-audio` | ~250 | `vad/detector.py` | Unchanged since Phase 1: `VadDetector` fully ported; capture/pump/wake-word are trait boundaries. |
 | `crates/grace-models` | ~250 | `llm/gemma_client.py`'s HTTP shape | `HttpLlm`: a REAL (not stubbed) blocking HTTP client against a local llama.cpp server's `/v1/chat/completions`, non-streaming, matching `GemmaClient.chat(..., stream=False)`'s exact request shape including the `image_b64` → multimodal `image_url` reshaping. `ElementScorer` trait for a future GLiNER-style scorer, not implemented. |
 | `crates/grace-win` | ~600 | `automation/app_indexer.py`, `automation/dpi_helper.py`, a slice of `perception/element_graph.py`'s `active_window()` | `plan_launch`/`find_app` (Phase 1). **New this phase**: `dpi::real::get_dpi_scale`/`ensure_dpi_aware` and `win32::real::foreground_window` - real `windows`-crate Win32 calls, manually verified against the real desktop (see below), plus `dpi::scale_coords` (pure, unit-tested). UIA tree walk, the win32 input driver, and computer-use actions remain trait boundaries. |
@@ -77,21 +77,17 @@ cargo test -p grace-win --lib -- --ignored --test-threads=1
   `clean_json_fence` (markdown-fence stripping), `VALID_TOOLS` derived from
   the tool schema rather than hand-duplicated (matching the Python module's
   own stated reason for existing).
-- **`grace-core::ui_tars_parser`** (`agent/ui_tars_parser.py`): every one of
-  UI-TARS's Thought/Action patterns - box-token and named clicks (with the
-  click-kind preserved: single/double/right/hover), scroll, drag, hotkey
-  (including the `"ctrl a"` → `"ctrl+a"` space-to-plus join), type, wait,
-  and `finished()`/`stop()` completion. 12 tests.
+- **`grace-core::grounder`** (`agent/grounder.py`): Model-agnostic visual
+  grounder replacing UI-TARS. Supports configurable coordinate formats
+  (`0-1000`, `0-1`, `pixels`), robust coordinate extraction (`click(point=...)`,
+  JSON objects/arrays, box tokens, tuples), bounds validation, screen DPI scaling,
+  `describe_target` phrase building, and `Grounder::locate` round-trip.
 - **`grace-core::planner`** (`agent/planner.py`): `PlannedStep`,
   `needs_grounding`'s exact three-way gate (has `element_id`? has both `x`
   and `y`? else does it name a `target_name`/`describe`?), the full system
   prompt, `build_prompt`'s section ordering, the per-goal call budget
   (0/negative = unlimited, matching `math.inf`), and `parse_planned_step`'s
   fence-then-brace-scan fallback for a model that wraps JSON in prose.
-- **`grace-core::grounder`** (`agent/grounder.py`): `scale_to_screen`
-  (including the "coordinates exceed the image, treat as 0-1000 normalised"
-  overflow branch), `describe_target`'s chrome/page/role/name phrase
-  building, and `Grounder::locate`'s UI-TARS-native prompt/parse round trip.
 - **`grace-core::perception`** (`perception/elements.py` +
   `perception/element_graph.py`): `ElementNode` (every field:
   frame/placeholder/container/focused/focusable/automation_id/source),

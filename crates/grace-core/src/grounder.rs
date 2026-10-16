@@ -1,25 +1,40 @@
 //! Ported from `src/grace/agent/grounder.py`: turns a described target into
-//! screen coordinates via a vision-capable `LargeLanguageModel`, using
-//! UI-TARS's native Thought/Action action space rather than Grace's tool
-//! schema.
+//! screen coordinates via a vision-capable `LargeLanguageModel`.
 
 use crate::models::{LargeLanguageModel, LlmRequest};
-use crate::ui_tars_parser::UiTarsParser;
+use regex::Regex;
 use serde_json::Value;
+use std::sync::LazyLock;
 
-/// The canonical UI-TARS grounding instruction. Deliberately not Grace's
-/// tool schema: the model was trained against this action space.
-fn grounder_system_prompt(width: u32, height: u32) -> String {
-    format!(
-        r#"You are a GUI grounding model. You are shown a screenshot and asked to locate a single element.
+/// Canonical vision grounding instruction for any vision model.
+pub fn grounder_system_prompt() -> &'static str {
+    "You are a GUI visual grounding assistant. You are shown a screenshot and asked to locate a single element.\n\
+Locate the requested element and return its center coordinates.\n\
+Respond in this format:\n\
+Thought: <brief description of where the element is>\n\
+Action: click(point=(x, y))\n\n\
+If the element is not visible or cannot be found, respond with:\n\
+Action: wait()"
+}
 
-Respond in exactly this format and nothing else:
+/// Coordinate formats supported by the vision grounder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CoordinateFormat {
+    #[default]
+    Norm1000,
+    Norm1,
+    Pixels,
+}
 
-Thought: <one short sentence identifying the element>
-Action: click(start_box='(x,y)')
-
-x and y are pixel coordinates in the image you were given, measured from its top-left corner, where x is between 0 and {width} and y is between 0 and {height}. Do not normalise them to any other range. Point at the centre of the element. If the element is not visible in the screenshot, respond with Action: wait()."#
-    )
+impl CoordinateFormat {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "0-1000" | "norm_1000" | "1000" => Self::Norm1000,
+            "0-1" | "norm_1" | "normalized" | "percent" => Self::Norm1,
+            "pixels" | "pixel" | "image_pixels" => Self::Pixels,
+            _ => Self::Norm1000,
+        }
+    }
 }
 
 /// A located target, in screen coordinates.
@@ -30,21 +45,117 @@ pub struct GroundedPoint {
     pub thought: String,
 }
 
+static WAIT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bwait\s*\(\s*\)").unwrap());
+static CLICK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)(?:click|move|point)\s*\(\s*(?:(?:point|start_box|target|location|coord|coordinates)\s*=\s*)?['\x22]?(?:<\|box_start\|>)?\s*\(?\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)?\s*(?:<\|box_end\|>)?['\x22]?\s*\)",
+    )
+    .unwrap()
+});
+static BOX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)<\|box_start\|>\s*\(?\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)?\s*<\|box_end\|>").unwrap()
+});
+static COORD_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:point|coord|coordinate|coordinates|location)\s*[:=]\s*[\(\[]\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*[\)\]]").unwrap()
+});
+static ACTION_BARE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)Action:\s*(?:click\s*)?[\(\[]\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*[\)\]]").unwrap()
+});
+
+/// Parse raw text from a vision grounder into `(x, y, thought)`.
+pub fn parse_grounder_response(response_text: &str) -> Option<(f64, f64, String)> {
+    if response_text.is_empty() {
+        return None;
+    }
+    let clean = response_text.trim();
+    if clean.is_empty() {
+        return None;
+    }
+
+    let mut thought = String::new();
+    if clean.contains("Thought:") {
+        if let Some(idx) = clean.find("Action:") {
+            thought = clean[..idx].replace("Thought:", "").trim().to_string();
+        } else if let Some(idx) = clean.find('\n') {
+            thought = clean[..idx].replace("Thought:", "").trim().to_string();
+        } else {
+            thought = clean.replace("Thought:", "").trim().to_string();
+        }
+    }
+
+    if WAIT_RE.is_match(clean) {
+        return None;
+    }
+
+    // Try parsing JSON if braces present
+    if let (Some(open), Some(close)) = (clean.find('{'), clean.rfind('}')) {
+        if open < close {
+            if let Ok(val) = serde_json::from_str::<Value>(&clean[open..=close]) {
+                if let Some(obj) = val.as_object() {
+                    let cand_thought = obj.get("thought").and_then(Value::as_str).unwrap_or(&thought).to_string();
+                    if let Some(pt) = obj.get("point").or_else(|| obj.get("coordinates")).or_else(|| obj.get("click")).and_then(Value::as_array) {
+                        if pt.len() >= 2 {
+                            if let (Some(x), Some(y)) = (pt[0].as_f64(), pt[1].as_f64()) {
+                                return Some((x, y, cand_thought));
+                            }
+                        }
+                    }
+                    if let (Some(x), Some(y)) = (obj.get("x").and_then(Value::as_f64), obj.get("y").and_then(Value::as_f64)) {
+                        return Some((x, y, cand_thought));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(caps) = CLICK_RE.captures(clean) {
+        if let (Some(x), Some(y)) = (caps.get(1)?.as_str().parse().ok(), caps.get(2)?.as_str().parse().ok()) {
+            return Some((x, y, thought));
+        }
+    }
+
+    if let Some(caps) = BOX_RE.captures(clean) {
+        if let (Some(x), Some(y)) = (caps.get(1)?.as_str().parse().ok(), caps.get(2)?.as_str().parse().ok()) {
+            return Some((x, y, thought));
+        }
+    }
+
+    if let Some(caps) = COORD_PREFIX_RE.captures(clean) {
+        if let (Some(x), Some(y)) = (caps.get(1)?.as_str().parse().ok(), caps.get(2)?.as_str().parse().ok()) {
+            return Some((x, y, thought));
+        }
+    }
+
+    if let Some(caps) = ACTION_BARE_RE.captures(clean) {
+        if let (Some(x), Some(y)) = (caps.get(1)?.as_str().parse().ok(), caps.get(2)?.as_str().parse().ok()) {
+            return Some((x, y, thought));
+        }
+    }
+
+    None
+}
+
 pub struct Grounder<'a> {
     llm: &'a mut dyn LargeLanguageModel,
+    pub coordinate_format: CoordinateFormat,
     pub calls_made: u32,
 }
 
 impl<'a> Grounder<'a> {
     pub fn new(llm: &'a mut dyn LargeLanguageModel) -> Self {
-        Self { llm, calls_made: 0 }
+        Self {
+            llm,
+            coordinate_format: CoordinateFormat::Norm1000,
+            calls_made: 0,
+        }
+    }
+
+    pub fn with_coordinate_format(mut self, format: CoordinateFormat) -> Self {
+        self.coordinate_format = format;
+        self
     }
 
     /// Find `description` in the screenshot and return screen coordinates.
-    ///
-    /// `image_size` is the size of the PNG actually sent; `screen_size` is
-    /// the real desktop. The model answers in image space, so the result
-    /// must be scaled back.
     pub fn locate(
         &mut self,
         description: &str,
@@ -59,7 +170,7 @@ impl<'a> Grounder<'a> {
         self.calls_made += 1;
         let request = LlmRequest {
             prompt: format!("Locate this element: {description}"),
-            system_prompt: Some(grounder_system_prompt(image_size.0, image_size.1)),
+            system_prompt: Some(grounder_system_prompt().to_string()),
             image_b64: Some(base64_encode(png_bytes)),
             model: None,
             temperature: 0.0,
@@ -67,43 +178,54 @@ impl<'a> Grounder<'a> {
         };
 
         let raw = self.llm.generate_text(&request).ok()??;
-        let parsed = UiTarsParser::parse_response(&raw)?;
+        let (x, y, thought) = parse_grounder_response(&raw)?;
+        let (sx, sy) = scale_to_screen(x, y, image_size, screen_size, self.coordinate_format)?;
 
-        let x = parsed["params"].get("x").and_then(Value::as_i64)?;
-        let y = parsed["params"].get("y").and_then(Value::as_i64)?;
-
-        let (sx, sy) = scale_to_screen(x, y, image_size, screen_size);
-        Some(GroundedPoint {
-            x: sx,
-            y: sy,
-            thought: parsed.get("thought").and_then(Value::as_str).unwrap_or("").to_string(),
-        })
+        Some(GroundedPoint { x: sx, y: sy, thought })
     }
 }
 
-/// Map a coordinate in the sent image back to the physical screen.
-///
-/// The overflow branch is kept only as a net for a model that ignores the
-/// instruction outright and emits normalised 0-1000 coordinates instead of
-/// pixels.
-pub fn scale_to_screen(x: i64, y: i64, image_size: (u32, u32), screen_size: (u32, u32)) -> (i64, i64) {
-    let (img_w, img_h) = (image_size.0 as i64, image_size.1 as i64);
-    let (scr_w, scr_h) = (screen_size.0 as i64, screen_size.1 as i64);
-    if img_w == 0 || img_h == 0 || scr_w == 0 || scr_h == 0 {
-        return (x, y);
+/// Map a coordinate from the model back to the physical screen.
+pub fn scale_to_screen(
+    x: f64,
+    y: f64,
+    image_size: (u32, u32),
+    screen_size: (u32, u32),
+    format: CoordinateFormat,
+) -> Option<(i64, i64)> {
+    let (img_w, img_h) = (image_size.0 as f64, image_size.1 as f64);
+    let (scr_w, scr_h) = (screen_size.0 as f64, screen_size.1 as f64);
+    if img_w == 0.0 || img_h == 0.0 || scr_w == 0.0 || scr_h == 0.0 {
+        return Some((x.round() as i64, y.round() as i64));
     }
 
-    if x > img_w || y > img_h {
-        return (
-            (x as f64 * scr_w as f64 / 1000.0).round() as i64,
-            (y as f64 * scr_h as f64 / 1000.0).round() as i64,
-        );
+    match format {
+        CoordinateFormat::Norm1000 => {
+            if x < 0.0 || x > 1000.0 || y < 0.0 || y > 1000.0 {
+                return None;
+            }
+            Some(((x * scr_w / 1000.0).round() as i64, (y * scr_h / 1000.0).round() as i64))
+        }
+        CoordinateFormat::Norm1 => {
+            if x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0 {
+                return None;
+            }
+            Some(((x * scr_w).round() as i64, (y * scr_h).round() as i64))
+        }
+        CoordinateFormat::Pixels => {
+            if x < 0.0 || y < 0.0 {
+                return None;
+            }
+            if x > img_w || y > img_h {
+                // Overflow net: if model emitted 0-1000 coordinates
+                if (0.0..=1000.0).contains(&x) && (0.0..=1000.0).contains(&y) {
+                    return Some(((x * scr_w / 1000.0).round() as i64, (y * scr_h / 1000.0).round() as i64));
+                }
+                return None;
+            }
+            Some(((x * scr_w / img_w).round() as i64, (y * scr_h / img_h).round() as i64))
+        }
     }
-
-    (
-        (x as f64 * scr_w as f64 / img_w as f64).round() as i64,
-        (y as f64 * scr_h as f64 / img_h as f64).round() as i64,
-    )
 }
 
 /// Build a natural-language description from the planner's params.
@@ -142,8 +264,7 @@ pub fn describe_target(params: &Value) -> String {
     }
 }
 
-/// Minimal base64 encoder (standard alphabet, no external dependency for
-/// something this small and hot-path-irrelevant - grounding is a rare call).
+/// Minimal base64 encoder.
 fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
@@ -167,21 +288,64 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn scale_to_screen_maps_pixel_coordinates_proportionally() {
-        assert_eq!(scale_to_screen(640, 360, (1280, 720), (1920, 1080)), (960, 540));
+    fn parse_grounder_response_action_click_point() {
+        let (x, y, thought) = parse_grounder_response("Thought: found button\nAction: click(point=(469, 472))").unwrap();
+        assert_eq!(x, 469.0);
+        assert_eq!(y, 472.0);
+        assert_eq!(thought, "found button");
     }
 
     #[test]
-    fn scale_to_screen_zero_size_is_a_no_op() {
-        assert_eq!(scale_to_screen(10, 20, (0, 0), (1920, 1080)), (10, 20));
+    fn parse_grounder_response_click_tuple() {
+        let (x, y, _) = parse_grounder_response("Action: click((100, 200))").unwrap();
+        assert_eq!(x, 100.0);
+        assert_eq!(y, 200.0);
     }
 
     #[test]
-    fn scale_to_screen_out_of_bounds_is_treated_as_normalised() {
-        // (1500, 800) exceeds a 1280x720 image, so it's read as 0-1000 space.
-        let (x, y) = scale_to_screen(1500, 800, (1280, 720), (1920, 1080));
-        assert_eq!(x, (1500.0_f64 * 1920.0 / 1000.0).round() as i64);
-        assert_eq!(y, (800.0_f64 * 1080.0 / 1000.0).round() as i64);
+    fn parse_grounder_response_json() {
+        let (x, y, thought) = parse_grounder_response(r#"{"thought": "located", "point": [500, 500]}"#).unwrap();
+        assert_eq!(x, 500.0);
+        assert_eq!(y, 500.0);
+        assert_eq!(thought, "located");
+    }
+
+    #[test]
+    fn parse_grounder_response_wait_returns_none() {
+        assert!(parse_grounder_response("Action: wait()").is_none());
+        assert!(parse_grounder_response("Thought: not found\nAction: wait()").is_none());
+    }
+
+    #[test]
+    fn parse_grounder_response_malformed_returns_none() {
+        assert!(parse_grounder_response("I cannot locate that element.").is_none());
+        assert!(parse_grounder_response("").is_none());
+    }
+
+    #[test]
+    fn scale_to_screen_norm_1000() {
+        let res = scale_to_screen(500.0, 500.0, (1280, 720), (1920, 1080), CoordinateFormat::Norm1000).unwrap();
+        assert_eq!(res, (960, 540));
+    }
+
+    #[test]
+    fn scale_to_screen_norm_1() {
+        let res = scale_to_screen(0.5, 0.5, (1280, 720), (1920, 1080), CoordinateFormat::Norm1).unwrap();
+        assert_eq!(res, (960, 540));
+    }
+
+    #[test]
+    fn scale_to_screen_pixels() {
+        let res = scale_to_screen(640.0, 360.0, (1280, 720), (1920, 1080), CoordinateFormat::Pixels).unwrap();
+        assert_eq!(res, (960, 540));
+    }
+
+    #[test]
+    fn scale_to_screen_out_of_bounds_returns_none() {
+        assert!(scale_to_screen(-5.0, 500.0, (1280, 720), (1920, 1080), CoordinateFormat::Norm1000).is_none());
+        assert!(scale_to_screen(1050.0, 500.0, (1280, 720), (1920, 1080), CoordinateFormat::Norm1000).is_none());
+        assert!(scale_to_screen(1.2, 0.5, (1280, 720), (1920, 1080), CoordinateFormat::Norm1).is_none());
+        assert!(scale_to_screen(2500.0, 500.0, (1280, 720), (1920, 1080), CoordinateFormat::Pixels).is_none());
     }
 
     #[test]
@@ -214,7 +378,7 @@ mod tests {
     #[test]
     fn locate_parses_and_scales_a_coordinate_response() {
         let mut llm = ScriptedLlm::new(vec![ScriptedLlm::text(
-            "Thought: found it\nAction: click(start_box='(100,100)')",
+            "Thought: found it\nAction: click(point=(500,500))",
         )]);
         let mut grounder = Grounder::new(&mut llm);
         let point = grounder

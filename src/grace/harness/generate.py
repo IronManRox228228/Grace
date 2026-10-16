@@ -483,9 +483,6 @@ def _config_for(scenario: Scenario):
         Config(),
         use_cloud_llm=True,
         gemini_api_key="scripted",
-        # False, so ui_tars_client is the same scripted client. A separate
-        # local client would try to reach llama-server.
-        use_ui_tars_local=False,
         # Deliberately not a multiple of ScriptedPump.CHUNK_DELAY_S - see the
         # note there. Production's own value is larger; what a generated tape
         # grades is the routing above the VAD, not the VAD's tuning.

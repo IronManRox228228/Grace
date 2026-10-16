@@ -21,7 +21,6 @@ from grace.agent.memory import AgentMemory
 from grace.agent.perception import PerceptionEngine, observe_for_planner
 from grace.agent.planner import Planner, PlannedStep, PlannerBudgetExceeded, parse_planned_step
 from grace.agent.safety import SafetyGuard
-from grace.agent.ui_tars_parser import UITarsParser
 from grace.intent.parser import Intent
 from grace.llm.gemma_client import GemmaClient, RateLimitError
 from grace.tools.dispatcher import Dispatcher
@@ -103,8 +102,8 @@ DEFAULT_MAX_REPEATED_ACTIONS = 3
 #
 #   normal    - as planned. Nearly every goal lives here and never leaves.
 #   reground  - the element the plan named is not working. Stop trusting the
-#               tree and ask the visual grounder (UI-TARS) where the thing
-#               actually is, in pixels. This path has never once fired in
+#               tree and ask the visual grounder where the thing
+#               actually is. This path has never once fired in
 #               production: `needs_grounding` requires a *named* target with no
 #               coordinates, and until Stage 3 a blind planner invented
 #               coordinates instead, which disqualified it.
@@ -161,7 +160,12 @@ class AgentLoop:
         self._perception = perception or PerceptionEngine()
         self._ws_server = ws_server
         self._planner = planner or Planner(gemma, max_calls=_config_int("planner_max_calls_per_goal", 0))
-        self._grounder = grounder or Grounder(self._vision_llm, on_demand_start=start_grounding_backend)
+        coord_format = _config_str("grounder_coordinate_format", "0-1000")
+        self._grounder = grounder or Grounder(
+            self._vision_llm,
+            on_demand_start=start_grounding_backend,
+            coordinate_format=coord_format,
+        )
         # `is None`, not `or`: 0 is a meaningful value here (unlimited).
         self._max_iterations = (
             max_iterations if max_iterations is not None
@@ -892,11 +896,11 @@ class AgentLoop:
     # -- retained for compatibility ---------------------------------------
 
     def _parse_llm_step(self, text: str) -> Optional[dict[str, Any]]:
-        """Parse either planner JSON or native UI-TARS Thought/Action text."""
+        """Parse planner JSON into step data dict."""
         step = parse_planned_step(text)
         if step is not None:
             return step.to_dict()
-        return UITarsParser.parse_response(text)
+        return None
 
 
 def _window_title(snapshot) -> str:

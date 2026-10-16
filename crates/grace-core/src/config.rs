@@ -67,7 +67,7 @@ pub struct Config {
     pub kokoro_speed: f64,
 
     // --- LLM ---
-    pub use_ui_tars_local: bool,
+    pub grounder_coordinate_format: String,
     pub local_planner_model_path: String,
     pub gemini_api_key: String,
     pub gemini_model_name: String,
@@ -128,7 +128,7 @@ impl Config {
             kokoro_warmup: env_bool("KOKORO_WARMUP", true),
             kokoro_cache_size: env_int("KOKORO_CACHE_SIZE", 32),
             kokoro_speed: env_float("KOKORO_SPEED", 1.0),
-            use_ui_tars_local: env_bool("USE_UI_TARS_LOCAL", true),
+            grounder_coordinate_format: env_string("GROUNDER_COORDINATE_FORMAT", "0-1000"),
             local_planner_model_path: env_string("LLAMA_PLANNER_MODEL_PATH", ""),
             gemini_api_key: env_string("GEMINI_API_KEY", ""),
             gemini_model_name: env_string("GEMINI_MODEL_NAME", "gemini-3.1-flash-lite"),

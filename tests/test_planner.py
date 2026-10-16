@@ -3,7 +3,7 @@
 The split exists because one model call was doing goal decomposition, tool
 selection, and pixel grounding at once - and the visible symptom was Grace
 typing a YouTube search into the browser's address bar. The planner now works
-from the element graph's `frame` field and only hands off to UI-TARS when a
+from the element graph's `frame` field and only hands off to the visual grounder when a
 target genuinely cannot be named.
 """
 
@@ -99,7 +99,7 @@ class TestParsePlannedStep:
 
 
 class TestNeedsGrounding:
-    """UI-TARS should be invoked only when nothing else can resolve the target."""
+    """The grounder should be invoked only when nothing else can resolve the target."""
 
     def test_element_id_needs_no_grounding(self):
         step = PlannedStep(action="cua_click", params={"element_id": 4, "target_name": "Search"})
@@ -351,17 +351,20 @@ class TestUntrustedContentWrapping:
 
 
 class TestGrounderScaling:
-    """UI-TARS answers in the space of the image it was sent, not the screen."""
+    """The grounder answers in model coordinates, scaled to the screen."""
 
-    def test_downscaled_image_scales_up(self):
-        assert scale_to_screen(640, 360, (1280, 720), (1920, 1080)) == (960, 540)
+    def test_norm_1000_scaling(self):
+        assert scale_to_screen(500, 500, (1280, 720), (1920, 1080), coordinate_format="0-1000") == (960, 540)
+
+    def test_downscaled_image_scales_up_pixels(self):
+        assert scale_to_screen(640, 360, (1280, 720), (1920, 1080), coordinate_format="pixels") == (960, 540)
 
     def test_same_size_is_identity(self):
-        assert scale_to_screen(100, 200, (1920, 1080), (1920, 1080)) == (100, 200)
+        assert scale_to_screen(100, 200, (1920, 1080), (1920, 1080), coordinate_format="pixels") == (100, 200)
 
     def test_normalised_thousand_space_is_detected(self):
-        # A coordinate larger than the image it was given cannot be a pixel.
-        assert scale_to_screen(500, 500, (400, 300), (1920, 1080)) == (960, 540)
+        # A coordinate larger than the image it was given cannot be a pixel; treated as 0-1000.
+        assert scale_to_screen(500, 500, (400, 300), (1920, 1080), coordinate_format="pixels") == (960, 540)
 
     def test_zero_sizes_are_passed_through(self):
         assert scale_to_screen(10, 20, (0, 0), (1920, 1080)) == (10, 20)
@@ -391,7 +394,7 @@ class TestGrounderBackend:
             starts.append(1)
             return True
 
-        llm = FakeLLM(["Thought: found it\nAction: click(start_box='(100,200)')"] * 2)
+        llm = FakeLLM(["Thought: found it\nAction: click(point=(100,200))"] * 2)
         grounder = Grounder(llm, on_demand_start=start)
 
         async def drive():
@@ -402,14 +405,14 @@ class TestGrounderBackend:
         assert len(starts) == 1
 
     def test_no_call_without_a_screenshot(self):
-        llm = FakeLLM(["Thought: x\nAction: click(start_box='(1,2)')"])
+        llm = FakeLLM(["Thought: x\nAction: click(point=(1,2))"])
         grounder = Grounder(llm)
         assert asyncio.run(grounder.locate("a button", b"", (100, 100), (100, 100))) is None
         assert llm.calls == []
 
     def test_locates_and_scales(self):
-        llm = FakeLLM(["Thought: the play button\nAction: click(start_box='<|box_start|>(320,180)<|box_end|>')"])
-        point = asyncio.run(Grounder(llm).locate("play button", b"png", (640, 360), (1920, 1080)))
+        llm = FakeLLM(["Thought: the play button\nAction: click(point=(500,500))"])
+        point = asyncio.run(Grounder(llm, coordinate_format="0-1000").locate("play button", b"png", (640, 360), (1920, 1080)))
         assert (point.x, point.y) == (960, 540)
 
     def test_wait_response_yields_no_point(self):
@@ -424,11 +427,11 @@ class TestGrounderBackend:
         llm = FakeLLM([RuntimeError("backend down")])
         assert asyncio.run(Grounder(llm).locate("x", b"png", (100, 100), (100, 100))) is None
 
-    def test_grounder_prompt_is_ui_tars_native_not_graces_tool_schema(self):
-        llm = FakeLLM(["Thought: x\nAction: click(start_box='(1,2)')"])
+    def test_grounder_prompt_is_not_graces_tool_schema(self):
+        llm = FakeLLM(["Thought: x\nAction: click(point=(1,2))"])
         asyncio.run(Grounder(llm).locate("a button", b"png", (10, 10), (10, 10)))
         system = llm.calls[0]["system_prompt"]
-        assert "start_box" in system
+        assert "click" in system
         assert "cua_click" not in system
 
 

@@ -94,7 +94,6 @@ def scripted_backend(monkeypatch, tmp_path):
         Config(),
         use_cloud_llm=True,
         gemini_api_key="test-key",
-        use_ui_tars_local=False,
         whisper_silence_duration_ms=275,
         followup_timeout_seconds=0,
     )

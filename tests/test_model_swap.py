@@ -1,9 +1,8 @@
 """Tests for the local model hot-swap manager.
 
-This exists for the fully-local setup where the planner and UI-TARS can't
-both fit on one GPU at once: exactly one of them is ever resident, and
-swapping means stopping the current llama-server process and starting the
-other model in its place.
+This exists for setups where two local models can't both fit on one GPU at once:
+exactly one of them is ever resident, and swapping means stopping the current
+llama-server process and starting the other model in its place.
 """
 
 import asyncio
@@ -22,7 +21,7 @@ def make_manager():
     specs = {
         "planner": LocalModelSpec(name="planner", model_path="planner.gguf", ngl=999),
         "grounder": LocalModelSpec(
-            name="grounder", model_path="ui-tars.gguf", mmproj_path="mmproj.gguf", ngl=999
+            name="grounder", model_path="grounder.gguf", mmproj_path="mmproj.gguf", ngl=999
         ),
     }
     return ModelSwapManager(

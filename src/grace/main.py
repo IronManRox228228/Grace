@@ -59,6 +59,25 @@ logging.basicConfig(
 )
 log = logging.getLogger("grace")
 
+def build_llama_server_args(cfg: Config) -> list[str]:
+    """Build the command-line arguments to launch llama-server."""
+    args = [
+        cfg.llama_server_exe,
+        "-m", cfg.llama_model_path,
+        "-ngl", str(cfg.llama_ngl),
+        "-c", str(cfg.llama_context_window),
+        "--no-mmap",
+        "--mlock",
+        "--cache-type-k", cfg.llama_cache_type_k,
+        "--cache-type-v", cfg.llama_cache_type_v,
+        "--port", str(cfg.llama_port),
+        "--host", cfg.llama_host,
+    ]
+    if cfg.llama_mmproj_path:
+        args.extend(["--mmproj", cfg.llama_mmproj_path])
+    return args
+
+
 from grace.agent.loop import AgentLoop
 from grace.intent.router import CapabilityRouter, TaskComplexity
 
@@ -108,9 +127,8 @@ class GraceApp:
             compute_type="float16",
         )
 
-        # Model hot-swap: only needed when the planner is ALSO local, since
-        # then it and UI-TARS both want the one GPU. When the planner stays on
-        # Gemini, only UI-TARS ever needs the GPU and nothing has to swap.
+        # Model hot-swap: only needed when a distinct local planner model is configured.
+        # When running with a single local model (Holo3.1-4B), one model handles every slot.
         self._model_swap: Optional[ModelSwapManager] = None
         if self.config.model_swap_enabled:
             self._model_swap = ModelSwapManager(
@@ -138,7 +156,7 @@ class GraceApp:
                 },
             )
 
-        # LLM (Cloud Gemini 3.6 Flash or local llama-server)
+        # LLM (Cloud Gemini Flash or local llama-server)
         api_key = self.config.gemini_api_key if self.config.use_cloud_llm else None
         self.gemma = GemmaClient(
             base_url=self.config.llama_server_url,
@@ -147,12 +165,15 @@ class GraceApp:
             before_request=(lambda: self._model_swap.swap_to("planner")) if self._model_swap else None,
         )
 
-        # Dedicated UI-TARS Vision LLM client for AgentLoop CUA steps (local llama-server)
-        self.ui_tars_client = GemmaClient(
-            base_url=self.config.llama_server_url,
-            api_key=None,  # Forces local llama-server for UI-TARS GUI vision
-            before_request=(lambda: self._model_swap.swap_to("grounder")) if self._model_swap else None,
-        ) if self.config.use_ui_tars_local else self.gemma
+        # Vision LLM client (shares self.gemma unless model hot-swapping is configured)
+        if self._model_swap:
+            self.vision_llm = GemmaClient(
+                base_url=self.config.llama_server_url,
+                api_key=None,
+                before_request=(lambda: self._model_swap.swap_to("grounder")),
+            )
+        else:
+            self.vision_llm = self.gemma
 
         # Intent
         self.intent_prompt = get_system_prompt()
@@ -174,19 +195,13 @@ class GraceApp:
             ws_server=self.ws_server,
         )
 
-        # Agentic loop. The planner (cloud, structural) decides what to do; the
-        # grounder (UI-TARS, pixels) is only consulted when the element graph
-        # cannot resolve a target, which is why llama-server starts on demand.
+        # Agentic loop. One model handles every slot; the visual grounder
+        # is only consulted when the element graph cannot resolve a target.
         self.agent_loop = AgentLoop(
             gemma=self.gemma,
             dispatcher=self.dispatcher,
             ws_server=self.ws_server,
-            vision_llm=self.ui_tars_client,
-            # When model_swap is active, the grounder's GemmaClient already
-            # swaps the GPU to UI-TARS on every request via before_request, so
-            # the old "start llama-server on first grounding call" path would
-            # just fight the swap manager over the same process.
-            start_grounding_backend=None if self._model_swap else self._ensure_grounding_backend,
+            vision_llm=self.vision_llm,
         )
 
         # TTS
@@ -290,29 +305,19 @@ class GraceApp:
         await self.response_gen.generate_and_speak_with_text(self._last_spoken_text)
 
     def _start_llama_server(self) -> None:
-        """Start llama-server as a subprocess with UI-TARS 1.5-7B on GPU."""
+        """Start llama-server as a subprocess on GPU."""
         cfg = self.config
         if not os.path.exists(cfg.llama_server_exe):
             raise FileNotFoundError(
                 f"llama-server executable not found at: {cfg.llama_server_exe}"
             )
-        args = [
-            cfg.llama_server_exe,
-            "-m", cfg.llama_model_path,
-            "-ngl", str(cfg.llama_ngl),
-            "-c", str(cfg.llama_context_window),
-            "--no-mmap",
-            "--mlock",
-            "--cache-type-k", cfg.llama_cache_type_k,
-            "--cache-type-v", cfg.llama_cache_type_v,
-            "--port", str(cfg.llama_port),
-            "--host", cfg.llama_host,
-        ]
+        args = build_llama_server_args(cfg)
         if cfg.llama_mmproj_path and os.path.exists(cfg.llama_mmproj_path):
-            log.info(f"UI-TARS Vision Projector detected: {cfg.llama_mmproj_path}")
-            args.extend(["--mmproj", cfg.llama_mmproj_path])
+            log.info(f"Vision Projector detected: {cfg.llama_mmproj_path}")
+        elif cfg.llama_mmproj_path:
+            log.warning(f"Projector path configured but file not found on disk: {cfg.llama_mmproj_path}")
         else:
-            log.warning("No mmproj file detected! UI-TARS will run without vision features until mmproj is provided.")
+            log.warning("No mmproj file configured! Model will run without vision features.")
 
         server_dir = os.path.dirname(cfg.llama_server_exe)
         log.info(f"Starting llama-server from {server_dir}...")
@@ -343,27 +348,6 @@ class GraceApp:
             except Exception:
                 pass
             self._llama_process = None
-
-    async def _ensure_grounding_backend(self) -> bool:
-        """Start llama-server the first time UI-TARS grounding is actually needed."""
-        if self._llama_process is not None:
-            return True
-        if not self.config.use_ui_tars_local:
-            return True
-
-        log.info("UI-TARS grounding requested; starting llama-server now...")
-        try:
-            self._start_llama_server()
-        except Exception as e:
-            log.error(f"Could not start llama-server for grounding: {e}")
-            return False
-
-        if await self._wait_for_llama_server(timeout=120):
-            return True
-
-        log.warning("llama-server did not become healthy; grounding will use the cloud model.")
-        self.ui_tars_client = self.gemma
-        return False
 
     async def _wait_for_llama_server(self, timeout: int = 120) -> bool:
         """Poll /health until the server responds, then verify model is loaded."""
@@ -449,8 +433,6 @@ class GraceApp:
                 log.error("Failed to start llama-server. Exiting.")
                 await self.shutdown()
                 return
-        elif self.config.use_ui_tars_local:
-            log.info("Cloud LLM mode ACTIVE. UI-TARS grounding will start on first use.")
         else:
             log.info("Cloud LLM mode ACTIVE: Using Google Gemini Flash API.")
 

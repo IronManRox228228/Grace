@@ -5,7 +5,7 @@ the agent's job rather than two contradictory ones: this module used to end
 with "Do NOT output JSON" while `agent/loop.py` appended "Output ONLY valid
 JSON inside ```json fences" to the very same request.
 
-The planner speaks JSON; the grounder speaks UI-TARS's native Thought/Action.
+The planner speaks JSON; the grounder handles visual coordinates.
 Each prompt is now internally consistent, and neither is asked to do the
 other's job.
 """

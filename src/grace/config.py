@@ -17,17 +17,16 @@ class Config:
     # Model paths
     llama_model_path: str = field(default_factory=lambda: os.getenv(
         "LLAMA_MODEL_PATH",
-        os.path.join(os.path.expanduser("~"), "Downloads", "UI-TARS-1.5-7B.Q4_K_M.gguf"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "Holo-3.1-4B.Q4_K_M.gguf"),
     ))
     llama_mmproj_path: str = field(default_factory=lambda: os.getenv(
         "LLAMA_MMPROJ_PATH",
-        os.path.join(os.path.expanduser("~"), "Downloads", "UI-TARS-1.5-7B.mmproj-Q8_0.gguf"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "Holo-3.1-4B.mmproj-q8_0.gguf"),
     ))
-    use_ui_tars_local: bool = field(default_factory=lambda: os.getenv("USE_UI_TARS_LOCAL", "true").lower() in ("true", "1", "yes"))
+    grounder_coordinate_format: str = field(default_factory=lambda: os.getenv("GROUNDER_COORDINATE_FORMAT", "0-1000"))
     # A separate local model for the planner role (JSON/tool-calling), used
-    # only when running fully local. UI-TARS is grounding-tuned and a poor fit
-    # for the planner's structured-output job, so this is deliberately a
-    # different gguf from llama_model_path.
+    # only when running fully local with model swapping. When empty, the single
+    # llama_model_path model handles all roles.
     local_planner_model_path: str = field(default_factory=lambda: os.getenv("LLAMA_PLANNER_MODEL_PATH", ""))
     kokoro_model_path: str = field(default_factory=lambda: os.getenv(
         "KOKORO_MODEL_PATH",
@@ -163,7 +162,7 @@ class Config:
         """True when planner and grounder both need the same local GPU.
 
         Only relevant when the planner is local too (use_cloud_llm=false) and
-        a distinct planner model has been configured. If the planner stays on
-        Gemini, only UI-TARS ever needs the GPU and there is no contention.
+        a distinct planner model has been configured. When using a single
+        local model or cloud model, there is no contention.
         """
         return (not self.use_cloud_llm) and bool(self.local_planner_model_path)

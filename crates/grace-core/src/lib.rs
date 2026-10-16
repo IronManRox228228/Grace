@@ -23,6 +23,5 @@ pub mod safety;
 pub mod sentence_split;
 pub mod timing;
 pub mod tools;
-pub mod ui_tars_parser;
 
 pub use config::Config;
