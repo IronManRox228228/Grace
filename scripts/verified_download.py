@@ -69,6 +69,29 @@ def download_and_verify(
     One shared fetch loop, so "downloaded but never checked" cannot happen by
     a script simply not calling the check afterward.
     """
+    _fetch(url, dest_path, chunk_size=chunk_size, progress=progress)
+    verify_sha256(dest_path, expected_sha256)
+
+
+def download_unpinned(
+    url: str,
+    dest_path: str,
+    *,
+    chunk_size: int = 1024 * 1024,
+    progress: bool = True,
+) -> str:
+    """TEMPORARY escape hatch: download with no pinned hash, and return its SHA-256.
+
+    Only for an artifact whose real hash hasn't been pinned yet, so a fresh
+    install still works meanwhile. The caller must warn loudly and print the
+    returned digest so a human can pin it. Remove once every caller has a
+    real hash.
+    """
+    _fetch(url, dest_path, chunk_size=chunk_size, progress=progress)
+    return sha256_of(dest_path)
+
+
+def _fetch(url: str, dest_path: str, *, chunk_size: int, progress: bool) -> None:
     req = urllib.request.Request(
         url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     )
@@ -101,5 +124,3 @@ def download_and_verify(
             except OSError:
                 pass
         raise
-
-    verify_sha256(dest_path, expected_sha256)

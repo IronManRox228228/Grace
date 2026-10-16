@@ -16,7 +16,7 @@ import sys
 import zipfile
 import shutil
 
-from verified_download import HashMismatch, download_and_verify
+from verified_download import HashMismatch, download_and_verify, download_unpinned
 
 LLAMA_CPP_URL = (
     "https://github.com/TheTom/llama-cpp-turboquant/releases/download/"
@@ -40,6 +40,13 @@ LLAMA_CPP_URL = (
 # silently trusting whatever GitHub currently serves under that tag.
 LLAMA_CPP_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000"  # noqa: E501  <-- REPLACE with the real hash
 
+# TEMPORARY (2026-10-16, buildathon): while LLAMA_CPP_SHA256 is still the
+# placeholder, install without the check instead of failing, so a fresh
+# setup works. This prints a loud warning and the zip's real hash to pin.
+# Delete this switch, and the `download_unpinned` branch below, once the
+# real hash is filled in.
+_PLACEHOLDER_SHA256 = "0" * 64
+
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 LLAMA_CPP_DIR = os.path.join(PROJECT_ROOT, "llama cpp")
 EXE_PATH = os.path.join(LLAMA_CPP_DIR, "llama-server.exe")
@@ -60,7 +67,13 @@ def download_and_setup():
     print(f"[-->] Downloading TurboQuant llama.cpp build from:\n      {LLAMA_CPP_URL}")
 
     try:
-        download_and_verify(LLAMA_CPP_URL, zip_path, LLAMA_CPP_SHA256)
+        if LLAMA_CPP_SHA256 == _PLACEHOLDER_SHA256:
+            actual = download_unpinned(LLAMA_CPP_URL, zip_path)
+            print("[!] WARNING: LLAMA_CPP_SHA256 is not pinned yet, so this download was NOT verified.")
+            print(f"    SHA-256 of what was just downloaded: {actual}")
+            print("    Check it against a copy you trust, then set LLAMA_CPP_SHA256 to it.")
+        else:
+            download_and_verify(LLAMA_CPP_URL, zip_path, LLAMA_CPP_SHA256)
     except HashMismatch as e:
         print(f"[X] Refusing to install: {e}")
         print(

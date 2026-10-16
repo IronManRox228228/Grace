@@ -62,6 +62,8 @@ class TestHashMismatchRefusesToExtract:
         monkeypatch.setattr(setup_llama_cpp, "LLAMA_CPP_DIR", str(fake_dir))
         monkeypatch.setattr(setup_llama_cpp, "EXE_PATH", str(fake_dir / "llama-server.exe"))
 
+        monkeypatch.setattr(setup_llama_cpp, "LLAMA_CPP_SHA256", "ab" * 32)
+
         def _fake_download_and_verify(url, dest_path, expected_sha256, **kwargs):
             raise HashMismatch("the asset does not match the pinned hash")
 
@@ -76,3 +78,30 @@ class TestHashMismatchRefusesToExtract:
         assert setup_llama_cpp.download_and_setup() is False
         assert extract_calls == []
         assert not os.path.isfile(str(fake_dir / "llama-server.exe"))
+
+
+class TestUnpinnedHashTemporarilyInstalls:
+    def test_the_placeholder_downloads_unverified_and_prints_the_hash(self, tmp_path, monkeypatch, capsys):
+        fake_dir = tmp_path / "llama cpp"
+        monkeypatch.setattr(setup_llama_cpp, "PROJECT_ROOT", str(tmp_path))
+        monkeypatch.setattr(setup_llama_cpp, "LLAMA_CPP_DIR", str(fake_dir))
+        monkeypatch.setattr(setup_llama_cpp, "EXE_PATH", str(fake_dir / "llama-server.exe"))
+        monkeypatch.setattr(setup_llama_cpp, "LLAMA_CPP_SHA256", "0" * 64)
+
+        import zipfile as _zf
+
+        def _fake_unpinned(url, dest_path, **kwargs):
+            with _zf.ZipFile(dest_path, "w") as z:
+                z.writestr("llama-server.exe", b"fake exe")
+            return "cd" * 32
+
+        monkeypatch.setattr(setup_llama_cpp, "download_unpinned", _fake_unpinned)
+        monkeypatch.setattr(
+            setup_llama_cpp, "download_and_verify",
+            lambda *a, **k: pytest.fail("a placeholder hash must not take the pinned path"),
+        )
+
+        assert setup_llama_cpp.download_and_setup() is True
+        out = capsys.readouterr().out
+        assert "NOT verified" in out
+        assert "cd" * 32 in out
