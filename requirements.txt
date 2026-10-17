@@ -15,9 +15,11 @@ pypdf>=4.0.0
 pywin32>=306
 scipy>=1.11.0
 sounddevice>=0.4.7
-torch>=2.1.0
-torchaudio>=2.1.0
 vosk>=0.3.45
+# PyTorch is removed from the runtime path (saves ~4.3 GB).
+# For model training or fine-tuning, install: pip install -r requirements-train.txt
+# torch>=2.1.0 (train only)
+# torchaudio>=2.1.0 (train only)
 opencv-python>=4.8.0
 JPype1>=1.5.0
 Pillow>=10.0.0

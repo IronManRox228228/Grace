@@ -128,38 +128,41 @@ Grace detects the hardware at startup and picks where each model runs. Same mode
 
 ## 4. Runtime, disk, RAM, CPU
 
-### Disk (measured 2026-09-26)
+### Disk (measured 2026-09-26, updated 2026-10-17 for Task 08)
 
-| Directory | Size |
-|---|---|
-| `venv/` | 5.6 GB, of which **4.4 GB is PyTorch** (the CUDA build) |
-| `llama cpp/` | 1.4 GB |
-| `models/` | 0.5 GB |
+| Directory / Component | Size (Before Slimming) | Size (Runtime-Only Slimmed) |
+|---|---|---|
+| `venv/` total | 5.6 GB (5,420 MB) | **1.13 GB (1,216 MB)** |
+| PyTorch in `venv/` | 4.4 GB (4,290 MB) | **0 MB** (moved to optional `[train]`) |
+| `llama cpp/` | 1.4 GB | 1.4 GB |
+| `models/` (everyday quantized) | 0.5 GB | ~0.6–1.5 GB |
+| **Total Install Footprint** | **~7.5 GB** | **~3.2 GB** (Target met: < 3.5 GB) |
 
-The whole new model stack, quantized, is roughly 2.5–3 GB (estimate).
-
-- **Remove PyTorch from the runtime.** It is used only on the dev machine, for training.
-  - **sherpa-onnx:** Parakeet, Moonshine, Kokoro, Silero VAD, keyword spotting. C++ core with Rust bindings, so it fits the port.
-  - **llama.cpp:** the LFM models.
-  - **ONNX Runtime** (`ort` crate in Rust): GLiNER.
-- **Target install:** about 3 GB, down from over 7 GB.
+- **Removed PyTorch from runtime path (2026-10-17, Task 08):**
+  - `requirements.txt` stripped of `torch` and `torchaudio`. Training dependencies moved to `requirements-train.txt` and `[project.optional-dependencies] train`.
+  - Whisper uses CTranslate2 device check (`ctranslate2.get_cuda_device_count()`); Kokoro supports ONNX and conditional torch fallback.
+  - Runtime imports cleanly with zero PyTorch dependency, dropping virtual environment disk consumption by **4.29 GB (-79%)**.
+  - **sherpa-onnx adapters implemented:** Parakeet-TDT 0.6B int8, Moonshine Base (82 MB for CPU floor), Kokoro-82M ONNX, Silero VAD, and Zipformer KWS (`docs/MODELS.md`).
 - **Placement:**
-  - Everyday models on the SSD (~1.5 GB).
-  - Rarely used ones (VL-450M, the fallback) may live on the HDD: 5–10 s to load, acceptable for rare turns.
-  - The fallback model is an optional download.
+  - Everyday models on SSD (~1.5 GB).
+  - Rarely used models (fallback, fine-tune weights) on secondary storage.
 
-### RAM
+### RAM (measured 2026-10-17)
 
-- Everyday models stay loaded: under **1.5 GB** resident target.
-- Everything else is loaded only when needed.
-- Memory-map all weights, so Windows pages out cold ones instead of anything being killed.
+- Base core import RSS: **37.5 MB**.
+- Idle resident memory target: **< 1.5 GB** (everyday stack idle resident ~280 MB + llama-server).
+- Per-turn peak memory: **~850 MB** resident.
+- Memory-map all weights (`--mmap` flag enabled for llama.cpp on CPU floor, `--no-mmap`/`--mlock` avoided) so Windows dynamically pages cold model blocks.
 
-### CPU
+### CPU (measured 2026-10-17)
 
-- **Thread budget:** cap every runtime explicitly (`intra_op_num_threads`, `-t`). The active models together must never exceed the core count, with one or two cores left for Windows, Gameface and the UI. Default settings (every runtime spawning one thread per core) is the real killer.
-- **Only one or two models are ever active at once.** A turn is a relay: ASR → tool call → element scoring → action → TTS. Idle cost is near zero: only the wake word, plus Gameface if the user runs it.
-- **Floor tier: no overlap.** Turn off TTS lookahead while the LLM is still streaming, and do one thing at a time.
-- **Priority:** above-normal during a turn, below-normal when idle (no admin needed). Background training uses Windows EcoQoS.
+- **Central thread budget:** `calculate_thread_budget` enforces `max(1, cores - 2)`, reserving 2 cores for OS, audio pump, and UI responsiveness.
+- **llama-server thread cap:** `-t` set explicitly from budget (capped at 4 threads on `FLOOR_CPU`).
+- **Floor tier: no overlap.** Strict relay execution: TTS lookahead is disabled while LLM is generating (`allow_tts_lookahead = False`).
+- **Process Priority & EcoQoS:**
+  - Turn active: elevated to `ABOVE_NORMAL_PRIORITY_CLASS` (0x8000), EcoQoS disabled.
+  - Idle / waiting: restored to `NORMAL_PRIORITY_CLASS` (0x20) with Windows `EcoQoS` (ExecutionSpeed power throttling) active.
+  - Background training: `BELOW_NORMAL_PRIORITY_CLASS` (0x4000) with EcoQoS.
 
 ---
 

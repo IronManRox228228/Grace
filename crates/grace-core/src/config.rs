@@ -107,6 +107,15 @@ pub struct Config {
     pub ws_port: i64,
     pub ws_allowed_origins: String,
     pub ws_auth_token: String,
+
+    // --- Runtime slimming & tiering (PLAN §2, §4) ---
+    pub hardware_tier: String,
+    pub thread_budget: i64,
+    pub process_priority_control: bool,
+    pub stt_engine: String,
+    pub tts_engine: String,
+    pub wake_engine: String,
+    pub vad_engine: String,
 }
 
 impl Config {
@@ -166,6 +175,13 @@ impl Config {
             ws_port: env_int("WS_PORT", 8765),
             ws_allowed_origins: env_string("WS_ALLOWED_ORIGINS", ""),
             ws_auth_token: env_string("GRACE_WS_TOKEN", ""),
+            hardware_tier: env_string("HARDWARE_TIER", ""),
+            thread_budget: env_int("THREAD_BUDGET", 0),
+            process_priority_control: env_bool("PROCESS_PRIORITY_CONTROL", true),
+            stt_engine: env_string("STT_ENGINE", "whisper"),
+            tts_engine: env_string("TTS_ENGINE", "kokoro"),
+            wake_engine: env_string("WAKE_ENGINE", "vosk"),
+            vad_engine: env_string("VAD_ENGINE", "silero"),
         }
     }
 

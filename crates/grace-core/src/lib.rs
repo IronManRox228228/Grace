@@ -17,10 +17,13 @@ pub mod memory;
 pub mod models;
 pub mod perception;
 pub mod planner;
+pub mod priority;
 pub mod response_generator;
 pub mod router;
 pub mod safety;
 pub mod sentence_split;
+pub mod thread_budget;
+pub mod tier;
 pub mod timing;
 pub mod tools;
 

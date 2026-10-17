@@ -1,0 +1,8 @@
+# Grace — Training & Fine-Tuning Dependencies (PLAN §4, §12)
+# Install only on development/training machines: pip install -r requirements-train.txt
+-r requirements.txt
+torch>=2.1.0
+torchaudio>=2.1.0
+transformers>=4.38.0
+peft>=0.9.0
+accelerate>=0.27.0

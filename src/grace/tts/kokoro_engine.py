@@ -125,12 +125,15 @@ def get_shared_voice(voices_path: str, device: str):
         if cached is not None:
             return cached
 
-        import torch
-
-        voice = torch.load(voices_path, weights_only=True, map_location=device)
-        _shared_voices[voices_path] = voice
-        logger.info(f"Loaded Kokoro voice tensor from {voices_path}")
-        return voice
+        try:
+            import torch
+            voice = torch.load(voices_path, weights_only=True, map_location=device)
+            _shared_voices[voices_path] = voice
+            logger.info(f"Loaded Kokoro voice tensor from {voices_path}")
+            return voice
+        except ImportError:
+            logger.warning("PyTorch not installed; cannot load .pt voice tensor.")
+            return None
 
 
 def _reset_shared_state() -> None:
@@ -196,11 +199,16 @@ class KokoroWorker:
             return None
 
         try:
-            import torch
+            has_cuda = False
+            try:
+                import torch
+                has_cuda = torch.cuda.is_available()
+            except ImportError:
+                has_cuda = False
             from kokoro import KPipeline
 
             device = self._device
-            if device == "cuda" and not torch.cuda.is_available():
+            if device == "cuda" and not has_cuda:
                 logger.warning("CUDA not available, falling back to CPU for Kokoro (will fail init)")
                 device = "cpu"
 

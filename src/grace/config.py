@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,43 @@ class Config:
         os.path.join(os.getenv("LOCALAPPDATA", "."), "Grace", "logs", "latency.jsonl")
     ))
 
+    # Runtime Slimming & Hardware Tiering (PLAN §2, §4, Task 08)
+    hardware_tier: Optional[str] = field(default_factory=lambda: os.getenv("HARDWARE_TIER", None))
+    thread_budget: Optional[int] = field(default_factory=lambda: int(os.getenv("THREAD_BUDGET", "0")) if os.getenv("THREAD_BUDGET") else None)
+    process_priority_control: bool = field(default_factory=lambda: os.getenv("PROCESS_PRIORITY_CONTROL", "true").lower() in ("true", "1", "yes"))
+
+    # Engine Selection (whisper / sherpa, kokoro / sherpa, etc.)
+    stt_engine: str = field(default_factory=lambda: os.getenv("STT_ENGINE", "whisper").lower())
+    tts_engine: str = field(default_factory=lambda: os.getenv("TTS_ENGINE", "kokoro").lower())
+    wake_engine: str = field(default_factory=lambda: os.getenv("WAKE_ENGINE", "vosk").lower())
+    vad_engine: str = field(default_factory=lambda: os.getenv("VAD_ENGINE", "silero").lower())
+
+    # Sherpa-ONNX Model Paths
+    sherpa_asr_model_type: str = field(default_factory=lambda: os.getenv("SHERPA_ASR_MODEL_TYPE", "parakeet").lower())
+    sherpa_parakeet_model_path: str = field(default_factory=lambda: os.getenv(
+        "SHERPA_PARAKEET_MODEL_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "..", "models", "sherpa-onnx", "sherpa-onnx-nemo-parakeet-tdt-ctc-0.6b-en-int8"),
+    ))
+    sherpa_moonshine_model_path: str = field(default_factory=lambda: os.getenv(
+        "SHERPA_MOONSHINE_MODEL_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "..", "models", "sherpa-onnx", "sherpa-onnx-moonshine-base-en-int8"),
+    ))
+    sherpa_kokoro_model_path: str = field(default_factory=lambda: os.getenv(
+        "SHERPA_KOKORO_MODEL_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "..", "models", "sherpa-onnx", "kokoro-en-v0_19"),
+    ))
+    sherpa_silero_vad_model_path: str = field(default_factory=lambda: os.getenv(
+        "SHERPA_SILERO_VAD_MODEL_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "..", "models", "sherpa-onnx", "silero_vad.onnx"),
+    ))
+    sherpa_kws_model_path: str = field(default_factory=lambda: os.getenv(
+        "SHERPA_KWS_MODEL_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "..", "models", "sherpa-onnx", "sherpa-onnx-kws-zipformer-en"),
+    ))
+    sherpa_kws_keywords_path: str = field(default_factory=lambda: os.getenv(
+        "SHERPA_KWS_KEYWORDS_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "..", "models", "sherpa-onnx", "sherpa-onnx-kws-zipformer-en", "keywords.txt"),
+    ))
 
     # Audio
     mic_device_index: int = field(default_factory=lambda: int(os.getenv("MIC_DEVICE_INDEX", "-1")))

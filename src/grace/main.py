@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import warnings
-from typing import Optional
+from typing import Any, Optional
 
 # Disable online HuggingFace/Transformers network checks & silence PyTorch warnings
 os.environ["HF_HUB_OFFLINE"] = "1"
@@ -63,20 +63,29 @@ logging.basicConfig(
 )
 log = logging.getLogger("grace")
 
-def build_llama_server_args(cfg: Config) -> list[str]:
+def build_llama_server_args(cfg: Config, thread_budget: Optional[Any] = None) -> list[str]:
     """Build the command-line arguments to launch llama-server."""
     args = [
         cfg.llama_server_exe,
         "-m", cfg.llama_model_path,
         "-ngl", str(cfg.llama_ngl),
         "-c", str(cfg.llama_context_window),
-        "--no-mmap",
-        "--mlock",
         "--cache-type-k", cfg.llama_cache_type_k,
         "--cache-type-v", cfg.llama_cache_type_v,
         "--port", str(cfg.llama_port),
         "--host", cfg.llama_host,
     ]
+    # Memory-map weights (PLAN §4, Task 08): allow OS paging
+    if getattr(cfg, "hardware_tier", None) == "cpu" or getattr(cfg, "use_mmap", True):
+        args.append("--mmap")
+    else:
+        args.extend(["--no-mmap", "--mlock"])
+
+    if thread_budget is not None:
+        args.extend(["-t", str(thread_budget.llama_threads)])
+    elif getattr(cfg, "thread_budget", None):
+        args.extend(["-t", str(cfg.thread_budget)])
+
     if cfg.llama_parallel_slots:
         args.extend(["-np", str(cfg.llama_parallel_slots)])
     if getattr(cfg, "llama_flash_attn", False):
@@ -104,6 +113,22 @@ class GraceApp:
         self._wake_event: Optional[asyncio.Event] = None
         self._last_spoken_text: str = ""
 
+        # Tier Detection & Central Thread Budget (PLAN §2, §4, Task 08)
+        from grace.tier import detect_hardware_tier, HardwareTier
+        from grace.thread_budget import calculate_thread_budget
+        from grace.priority import set_idle_priority
+
+        self.tier_diag = detect_hardware_tier(self.config)
+        self.tier = self.tier_diag.tier
+        self.thread_budget = calculate_thread_budget(self.tier, self.config)
+        log.info(
+            f"Hardware Tier: {self.tier.value} | Budget: {self.thread_budget.active_worker_threads} workers "
+            f"({self.thread_budget.rationale})"
+        )
+
+        if getattr(self.config, "process_priority_control", True):
+            set_idle_priority()
+
         # Audio
         self.capture = AudioCapture(
             sample_rate=self.config.mic_sample_rate,
@@ -116,24 +141,55 @@ class GraceApp:
         # Blocking mic reads happen on the pump's thread, never on the loop.
         self.pump = AudioPump(self.capture)
 
-        self.wake_word = WakeWordDetector(
-            model_path=self.config.vosk_model_path,
-            keyword=self.config.wake_word_keyword,
-            threshold=self.config.wake_word_threshold,
-            sample_rate=self.config.mic_sample_rate,
-        )
+        # Wake Word
+        if getattr(self.config, "wake_engine", "vosk") == "sherpa":
+            from grace.audio.sherpa_engine import SherpaKWS
+            self.wake_word = SherpaKWS(
+                model_path=self.config.sherpa_kws_model_path,
+                keywords_file=self.config.sherpa_kws_keywords_path,
+                num_threads=self.thread_budget.active_worker_threads,
+            )
+        else:
+            self.wake_word = WakeWordDetector(
+                model_path=self.config.vosk_model_path,
+                keyword=self.config.wake_word_keyword,
+                threshold=self.config.wake_word_threshold,
+                sample_rate=self.config.mic_sample_rate,
+            )
 
-        self.vad = VadDetector(
-            threshold=self.config.whisper_vad_threshold,
-            silence_duration_ms=self.config.whisper_silence_duration_ms,
-        )
+        # VAD
+        if getattr(self.config, "vad_engine", "silero") == "sherpa":
+            from grace.audio.sherpa_engine import SherpaVAD
+            self.vad = SherpaVAD(
+                model_path=self.config.sherpa_silero_vad_model_path,
+                threshold=self.config.whisper_vad_threshold,
+            )
+        else:
+            self.vad = VadDetector(
+                threshold=self.config.whisper_vad_threshold,
+                silence_duration_ms=self.config.whisper_silence_duration_ms,
+            )
 
         # Speech-to-text
-        self.whisper = WhisperStreaming(
-            model_path=self.config.whisper_model_path,
-            device="cuda",
-            compute_type="float16",
-        )
+        if getattr(self.config, "stt_engine", "whisper") == "sherpa":
+            from grace.audio.sherpa_engine import SherpaASR
+            model_type = getattr(self.config, "sherpa_asr_model_type", "parakeet")
+            if self.tier == HardwareTier.FLOOR_CPU:
+                model_type = "moonshine"
+                model_path = self.config.sherpa_moonshine_model_path
+            else:
+                model_path = self.config.sherpa_parakeet_model_path
+            self.whisper = SherpaASR(
+                model_path=model_path,
+                model_type=model_type,
+                num_threads=self.thread_budget.active_worker_threads,
+            )
+        else:
+            self.whisper = WhisperStreaming(
+                model_path=self.config.whisper_model_path,
+                device="cuda",
+                compute_type="float16",
+            )
 
         # Model hot-swap: only needed when a distinct local planner model is configured.
         # When running with a single local model (Holo3.1-4B), one model handles every slot.
@@ -224,16 +280,24 @@ class GraceApp:
         )
 
         # TTS
-        self.kokoro = KokoroEngine(
-            model_path=self.config.kokoro_model_path,
-            voices_path=self.config.kokoro_voices_path,
-            num_workers=self.config.kokoro_workers,
-            device=self.config.kokoro_device,
-            dtype=self.config.kokoro_dtype,
-            warmup=self.config.kokoro_warmup,
-            cache_size=self.config.kokoro_cache_size,
-            speed=self.config.kokoro_speed,
-        )
+        if getattr(self.config, "tts_engine", "kokoro") == "sherpa":
+            from grace.audio.sherpa_engine import SherpaTTS
+            self.kokoro = SherpaTTS(
+                model_path=self.config.sherpa_kokoro_model_path,
+                num_threads=self.thread_budget.active_worker_threads,
+                speed=self.config.kokoro_speed,
+            )
+        else:
+            self.kokoro = KokoroEngine(
+                model_path=self.config.kokoro_model_path,
+                voices_path=self.config.kokoro_voices_path,
+                num_workers=self.config.kokoro_workers,
+                device=self.config.kokoro_device,
+                dtype=self.config.kokoro_dtype,
+                warmup=self.config.kokoro_warmup,
+                cache_size=self.config.kokoro_cache_size,
+                speed=self.config.kokoro_speed,
+            )
         self.dispatcher.set_kokoro_engine(self.kokoro)
 
         self.tts_player = TTSPlayer()
@@ -349,7 +413,7 @@ class GraceApp:
             raise FileNotFoundError(
                 f"llama-server executable not found at: {cfg.llama_server_exe}"
             )
-        args = build_llama_server_args(cfg)
+        args = build_llama_server_args(cfg, getattr(self, "thread_budget", None))
         if cfg.llama_mmproj_path and os.path.exists(cfg.llama_mmproj_path):
             log.info(f"Vision Projector detected: {cfg.llama_mmproj_path}")
         elif cfg.llama_mmproj_path:
@@ -750,6 +814,12 @@ class GraceApp:
         raising something nobody expected - shut Grace down entirely. A user
         who navigates by voice has no other way to restart it.
         """
+        if getattr(getattr(self, "config", None), "process_priority_control", True):
+            try:
+                from grace.priority import set_turn_priority
+                set_turn_priority()
+            except Exception as e:
+                log.debug(f"Failed to elevate turn priority: {e}")
         try:
             await self._handle_activation()
         except (asyncio.CancelledError, KeyboardInterrupt):
@@ -761,6 +831,13 @@ class GraceApp:
             self.wake_word.resume()
             await self.ws_server.emit({"type": "ConversationFinished"})
             await self.ws_server.emit({"type": "Idle"})
+        finally:
+            if getattr(getattr(self, "config", None), "process_priority_control", True):
+                try:
+                    from grace.priority import set_idle_priority
+                    set_idle_priority()
+                except Exception as e:
+                    log.debug(f"Failed to restore idle priority: {e}")
 
     async def _check_watchdog_and_speak_recovery(self) -> None:
         """Watchdog: restart dead llama-server if it exited, and speak a short human sentence."""

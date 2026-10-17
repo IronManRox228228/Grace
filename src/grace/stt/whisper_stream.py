@@ -62,14 +62,24 @@ class WhisperStreaming:
         if self._initialized:
             return
         from faster_whisper import WhisperModel
-        import torch
 
         device = self._device
         compute_type = self._compute_type
-        if device == "cuda" and not torch.cuda.is_available():
-            logger.warning("CUDA not available, falling back to CPU for Whisper")
-            device = "cpu"
-            compute_type = "int8"
+        if device == "cuda":
+            cuda_avail = False
+            try:
+                import torch
+                cuda_avail = torch.cuda.is_available()
+            except ImportError:
+                try:
+                    import ctranslate2
+                    cuda_avail = ctranslate2.get_cuda_device_count() > 0
+                except Exception:
+                    cuda_avail = False
+            if not cuda_avail:
+                logger.warning("CUDA not available, falling back to CPU for Whisper")
+                device = "cpu"
+                compute_type = "int8"
 
         kwargs = {"device": device, "compute_type": compute_type, "cpu_threads": 4}
         if self._download_root and not os.path.isdir(self._model_path):
