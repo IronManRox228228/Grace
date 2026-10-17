@@ -15,11 +15,13 @@ from grace.automation.ui_inspector import UIElement
 class TestWin32Driver:
     """Test suite for Win32Driver background message dispatcher."""
 
+    @patch("ctypes.windll.user32.SetCursorPos", return_value=1)
     @patch("ctypes.windll.user32.SendInput", return_value=3)
-    def test_win32_driver_click_at_does_not_raise(self, mock_send_input):
+    def test_win32_driver_click_at_does_not_raise(self, mock_send_input, mock_set_cursor):
         res = Win32Driver.click_at(100, 100)
         assert res is True
         assert mock_send_input.called
+        assert mock_set_cursor.called
 
     def test_perception_to_markdown_includes_hermes_tree_index(self):
         elem = UIElement(index=14, name="Play", control_type="Button", bounds=(700, 245, 780, 285), center=(740, 265))
@@ -47,9 +49,10 @@ class TestWin32Driver:
             return real_import(name, *a, **k)
 
         with patch.object(builtins, "__import__", side_effect=_block):
-            with patch.object(Win32Driver, "send_input_click") as fake_send:
-                assert Win32Driver.click_at(250, 250) is True
-                fake_send.assert_called_once_with(250, 250)
+            with patch("ctypes.windll.user32.SetCursorPos", return_value=1):
+                with patch.object(Win32Driver, "send_input_click") as fake_send:
+                    assert Win32Driver.click_at(250, 250) is True
+                    fake_send.assert_called_once_with(250, 250)
 
     def test_click_at_moves_cursor_before_sendinput(self):
         """Bug #3 fix: SetCursorPos must run before SendInput so hover fires."""

@@ -612,13 +612,16 @@ class TestDispatcherBreak:
         # Should either work with defaults or error
         assert "status" in result
 
-    def test_open_calculator_without_cua(self):
+    def test_open_calculator_without_cua(self, monkeypatch):
+        monkeypatch.setattr("grace.tools.dispatcher.os.startfile", lambda *a, **k: None)
         intent = Intent(tool="open_calculator", params={})
         result = asyncio.run(self.dispatcher.execute(intent))
         # Should try to open and either succeed or fail gracefully
         assert "status" in result
 
-    def test_lock_computer_without_cua(self):
+    def test_lock_computer_without_cua(self, monkeypatch):
+        import ctypes
+        monkeypatch.setattr(ctypes.windll.user32, "LockWorkStation", lambda: 1)
         intent = Intent(tool="lock_computer", params={})
         result = asyncio.run(self.dispatcher.execute(intent))
         # Should try to lock and either succeed or fail gracefully

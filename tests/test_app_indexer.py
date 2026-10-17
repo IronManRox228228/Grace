@@ -127,7 +127,11 @@ class TestAppIndexer:
         target = indexer.find_app("notepad") or indexer.find_app("edge") or indexer.find_app("powershell")
         assert target is not None
 
-    def test_launch_nonexistent(self):
+    def test_launch_nonexistent(self, monkeypatch):
+        monkeypatch.setattr(
+            app_indexer_module.os, "startfile",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("not found")),
+        )
         indexer = AppIndexer()
         res = indexer.launch("nonexistent_fake_app_12345")
         assert res["status"] in ("ok", "error")

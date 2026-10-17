@@ -31,10 +31,18 @@ import subprocess as _subprocess
 BLOCKED_CALLS: list = []
 
 
-def _blocked(name, result):
+def _current_test() -> str:
+    test_id = os.environ.get("PYTEST_CURRENT_TEST", "")
+    if test_id:
+        return test_id.split(" ")[0]
+    return "unknown"
+
+
+def _blocked(name, result=None):
     def stub(*args, **kwargs):
-        BLOCKED_CALLS.append(name)
-        return result
+        test_id = _current_test()
+        BLOCKED_CALLS.append((test_id, name))
+        raise AssertionError(f"real desktop call {name} blocked in tests")
     stub.__name__ = f"blocked_{name}"
     return stub
 
@@ -50,6 +58,7 @@ if sys.platform == "win32":
         "PostMessageW": 1, "PostMessageA": 1,
         "SendMessageW": 0, "SendMessageA": 0,
         "SendMessageTimeoutW": 0, "SendMessageTimeoutA": 0,
+        "LockWorkStation": 1,
     }.items():
         setattr(_user32, _name, _blocked(f"user32.{_name}", _result))
 
@@ -95,7 +104,8 @@ def _is_taskkill(args):
 
 def _guarded_run(args, *a, **kw):
     if _is_taskkill(args):
-        BLOCKED_CALLS.append("taskkill")
+        test_id = _current_test()
+        BLOCKED_CALLS.append((test_id, "taskkill"))
         return _subprocess.CompletedProcess(args, 128, "", "blocked in tests")
     return _real_run(args, *a, **kw)
 
@@ -103,7 +113,8 @@ def _guarded_run(args, *a, **kw):
 class _GuardedPopen(_real_popen):
     def __init__(self, args, *a, **kw):
         if _is_taskkill(args):
-            BLOCKED_CALLS.append("taskkill")
+            test_id = _current_test()
+            BLOCKED_CALLS.append((test_id, "taskkill"))
             raise OSError("taskkill is blocked in tests")
         super().__init__(args, *a, **kw)
 
@@ -114,3 +125,22 @@ _subprocess.Popen = _GuardedPopen
 # os.startfile opens real apps, files and URLs on the user's desktop.
 if hasattr(os, "startfile"):
     os.startfile = _blocked("os.startfile", None)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    temp_dir = os.environ.get("TEMP") or os.environ.get("TMP") or "."
+    out_file = os.path.join(temp_dir, "grace-blocked-calls.txt")
+    seen = set()
+    lines = []
+    for item in BLOCKED_CALLS:
+        if isinstance(item, tuple):
+            test_id, name = item
+            key = f"{test_id} ({name})"
+        else:
+            key = str(item)
+        if key not in seen:
+            seen.add(key)
+            lines.append(f"{key}\n")
+    with open(out_file, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
