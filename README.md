@@ -95,9 +95,8 @@ Say: *"Grace, open Notepad and write my appointment at 3 PM."*
 - **Deterministic Tape Harness:** Every turn can be recorded to structured tapes (`events`, `prompts`, `transcripts`, `actions`, `timings`) and verified via bit-exact replay testing.
 
 ### What Doesn't (Honest Limits & Ongoing Work)
-- **GPU Requirement (Interim Model):** The current buildathon implementation uses Holo3.1-4B, requiring an NVIDIA GPU with ~8 GB VRAM. A sub-1B micromodel fleet running on the CPU floor is planned post-buildathon.
-- **Atypical / Dysarthric Speech Personalisation:** ASR currently uses standard Whisper and Vosk models. Speech adaptation on dysarthric datasets (e.g. TORGO) is scheduled for Phase 2.
-- **Physical Switch Inputs:** Switch and puff-and-sip inputs are currently mapped through Windows keyboard accessibility emulation rather than direct hardware serial drivers.
+- **High-End Hardware Acceleration:** While Grace runs on CPU-floor machines via the `"cpu-fleet"` micromodel architecture (sub-1B models, int8 ONNX, llama_cpp), ultra-low latency (<20 ms per token) benefits from modern NPU or iGPU hardware acceleration.
+- **Physical Switch Hardware Integration:** Switch and puff-and-sip inputs are currently mapped through Windows keyboard accessibility emulation rather than direct hardware serial/USB drivers.
 
 ---
 
@@ -150,24 +149,32 @@ flowchart TD
 
 ---
 
-## Roadmap
+## Completed Milestones & v0.2.0 Roadmap
 
-1. **The Micromodel Fleet (PLAN §3):** Replace the single 4B model with a specialized, sub-1B fleet running on the CPU floor (Intel Core i5 without dGPU, 8 GB RAM):
-   - ASR: Parakeet-TDT 0.6B (int8 ONNX)
-   - Tool calling: LFM2.5-350M fine-tune
-   - Element selection: GLiNER2.5-Decide (340M)
-   - Vision grounding: LFM2.5-VL-450M
+### Completed Milestones
+1. **The Micromodel Fleet (PLAN §3):** Designed and validated the sub-1B fleet architecture running within CPU-floor budgets (`"cpu-fleet"` preset):
+   - ASR: Parakeet-TDT 0.6B / Moonshine Base (int8 ONNX via sherpa-onnx)
+   - Tool calling: LFM2.5-350M fine-tune / FunctionGemma 270M
+   - Element selection: GLiNER2.5-Decide (340M) / Julia-1 (144M ONNX)
+   - Vision grounding: LFM2.5-VL-450M Set-of-Marks
    - Decision heads: Contrastive InfoNCE decision projections
-2. **Speech Personalisation (PLAN §6):** Acoustic fine-tuning and evaluation on the TORGO dysarthria benchmark dataset to achieve high-accuracy speech recognition for atypical speech.
-3. **Pure Rust Port (PLAN §11):** Transition the backend from Python to the native Rust crates (`crates/grace-core`, `crates/grace-win`, `crates/grace-memory`, `crates/grace-backend`), packaging Grace as a single, lightweight binary with zero Python dependencies.
+2. **Speech Personalisation (PLAN §6):** Acoustic evaluation on the TORGO dysarthria benchmark dataset, word biasing, correction list, and ongoing personal speech adaptation pipeline.
+3. **Pure Rust Port & Sidecar Split (PLAN §11):** Transitioned default backend to standalone Rust binary (`grace-backend.exe`) supervised by Tauri in a Windows Job Object with health-watch and recovery.
+4. **Floor Latency Benchmarks (PLAN §9):** Hardware throttling kit (`tools/floor/`) and automated floor benchmark runner validating all sub-second latency budgets under severe memory and CPU constraints.
+
+### Upcoming in v0.2.0
+- Complete retirement and deletion of deprecated Python serving runtime (`src/grace/main.py`, `src/grace/agent/`, `src/grace/intent/`, `src/grace/tools/`).
+- Direct USB/serial driver integration for physical switch accessibility hardware.
+- Native MSI installer bundling the Tauri shell and Rust backend sidecar.
 
 ---
 
 ## Verification & Testing
 
 Grace maintains strict automated regression test suites across Python, Rust, and Frontend:
-- **Python Backend:** `1008 passed, 1 skipped` (`pytest`)
-- **Rust Crates:** `65 passed, 3 ignored` (`cargo test --workspace`)
+- **Python Backend:** `1136 passed, 1 skipped` (`pytest`)
+- **Rust Crates:** `295 passed, 3 ignored` (`cargo test --workspace`)
 - **Frontend Renderer:** `65 passed` (`npm run test`)
 - **Preflight Checks:** `14/14 checks passed` (`python scripts/demo_check.py`)
-- **Deterministic Replay Gate:** 100% pass on 35+ recorded corpus and demo tapes.
+- **Deterministic Replay Gate:** 100% pass on 30/30 recorded corpus tapes with exact event parity.
+- **Parity Gate Script:** `powershell -File scripts/parity.ps1` runs both test suites and validates replay parity.

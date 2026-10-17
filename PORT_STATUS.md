@@ -18,8 +18,9 @@ the whole way through.
 Everything new lives under `crates/`, plus small, targeted edits to
 `src-tauri/` and the root `Cargo.toml`/`Cargo.lock`. Verified at the end of
 this phase too: `git status` shows only those paths changed, and
-`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider` still reports
-**841 passed, 1 skipped**, unchanged from PLAN.md §0's baseline.
+`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider` reports
+**1136 passed, 1 skipped**, and `cargo test --workspace` reports
+**295 passed, 3 ignored, 0 failed** across all 10 packages, with all 30 corpus tapes passing replay.
 
 ## Build / test / run
 

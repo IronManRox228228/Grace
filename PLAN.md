@@ -6,10 +6,10 @@ Agreed on 2026-09-26. This file is the handoff between sessions: read it before 
 
 ## 0. Where things stand
 
-- **Current phase:** Rust backend default switchover and sidecar split (completed 2026-10-18, Task 20). The Rust backend (`grace-backend`) is now the default runtime (`GRACE_BACKEND=rust`). The Tauri shell launches `grace-backend.exe` as an out-of-process sidecar supervised within a Windows Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) with automated health-watch and exponential backoff restart. Python serving is deprecated and scheduled for retirement in v0.2.0; offline training and benchmark scripts remain in Python permanently.
+- **Current phase:** Final consistency audit and migration complete (Task 21 & Task 22). The Rust backend (`grace-backend`) is the default runtime (`GRACE_BACKEND=rust`), running as a supervised sidecar in a Windows Job Object with automated health recovery. Floor-machine hardware simulation kit (`tools/floor/`) and floor latency benchmarks (`docs/benchmarks/floor.md`) validate all PLAN §9 latency budgets. Python serving is deprecated and scheduled for retirement in v0.2.0; offline training, dysarthria adaptation, and benchmarks remain in Python permanently.
 - **Branch:** `migration/phase-0-contract-and-harness`.
-- **Tests:** Python **1136 passed, 1 skipped** (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`). Rust **287 passed, 3 ignored, 0 failed** across all 9 crates (`cargo test --workspace`).
-- **Corpus:** All **30 of 30** tapes in `corpus/` replay cleanly through the Rust backend with 100% exact event parity (`cargo test -p grace-harness turn_replay`). Parity gate script added at `scripts/parity.ps1`.
+- **Tests:** Python **1136 passed, 1 skipped** (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`). Rust **295 passed, 3 ignored, 0 failed** across all 10 crates/packages (`cargo test --workspace`).
+- **Corpus:** All **30 of 30** tapes in `corpus/` replay cleanly through the Rust backend with 100% exact event parity (`cargo test -p grace-harness turn_replay`). Parity gate script verified at `scripts/parity.ps1`.
 
 ---
 
@@ -62,7 +62,7 @@ Grace detects the hardware at startup and picks where each model runs. Same mode
 
 **Historical Interim: one model for every slot (Buildathon phase, 2026-10-16 to 2026-10-17).**
 *(Completed history — now preserved as the `"gpu-single"` preset)*
-- **Model:** A single vision-capable model (Holo3.1-4B / Qwythos 4B) served by llama-server covering all slots during the buildathon sprint.
+- **Model:** A single vision-capable model (Holo3.1-4B) served by llama-server covering all slots during the buildathon sprint.
 - **CPU floor:** Transitioned to the micromodel fleet in Task 13 to enable sub-50ms CPU execution within strict thread budgets.
 
 **The Micromodel Fleet Specification:**
@@ -398,7 +398,7 @@ Things Grace knows about the user: contacts and relations, preferences, standing
 
 **Buildathon first (until 2026-10-31):**
 1. Install the reviewed tapes, and get the corpus replaying green.
-2. Point every LLM slot at the chosen Qwythos model, then run it live on the new untrusted-data prompt markers.
+2. Point every LLM slot at the chosen Holo3.1-4B model, then run it live on the new untrusted-data prompt markers.
 3. Harden the harness on the hardest scenarios:
    - agentic multi-step tasks
    - safety confirmation
@@ -422,6 +422,8 @@ Things Grace knows about the user: contacts and relations, preferences, standing
 9. **Real desktop:** `crates/grace-win`. *(Completed, Task 18)*
 10. **Agentic tape replay, pure-Rust PDF tools, and llama-server supervisor:** `crates/grace-harness`, `grace-core`, `grace-models`. *(Completed, Task 19)*
 11. **Rust default, sidecar split, and release bundle:** `grace-backend`, `src-tauri`. *(Completed, Task 20)*
+12. **Floor-machine simulation kit and latency benchmarks:** `tools/floor/`, `docs/benchmarks/floor.md`. *(Completed, Task 21)*
+13. **Final consistency audit (docs, config, dead code, secrets scan):** *(Completed, Task 22)*
 
 
 ---
