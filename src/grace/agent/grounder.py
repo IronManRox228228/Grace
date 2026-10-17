@@ -195,6 +195,7 @@ def scale_to_screen(
     Supported coordinate_format values:
     - '0-1000' (or 'norm_1000'): normalized integers in [0, 1000]
     - '0-1' (or 'norm_1'): normalized floats in [0.0, 1.0]
+    - 'percent' (or '0-100'): percentages in [0.0, 100.0]
     - 'pixels': image pixels in [0, width] x [0, height]
     """
     img_w, img_h = image_size
@@ -209,10 +210,16 @@ def scale_to_screen(
             return None
         return int(round(x * scr_w / 1000.0)), int(round(y * scr_h / 1000.0))
 
-    if fmt in ("0-1", "norm_1", "normalized", "percent"):
+    if fmt in ("0-1", "norm_1", "normalized"):
         if x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0:
             return None
         return int(round(x * scr_w)), int(round(y * scr_h))
+
+    if fmt in ("percent", "percentage", "0-100", "100"):
+        if x < 0.0 or x > 100.0 or y < 0.0 or y > 100.0:
+            return None
+        return int(round(x * scr_w / 100.0)), int(round(y * scr_h / 100.0))
+
 
     # Pixels format
     if x < 0 or y < 0:

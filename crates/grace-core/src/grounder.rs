@@ -23,6 +23,7 @@ pub enum CoordinateFormat {
     #[default]
     Norm1000,
     Norm1,
+    Percent,
     Pixels,
 }
 
@@ -30,12 +31,14 @@ impl CoordinateFormat {
     pub fn parse(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "0-1000" | "norm_1000" | "1000" => Self::Norm1000,
-            "0-1" | "norm_1" | "normalized" | "percent" => Self::Norm1,
+            "0-1" | "norm_1" | "normalized" => Self::Norm1,
+            "percent" | "percentage" | "0-100" | "100" => Self::Percent,
             "pixels" | "pixel" | "image_pixels" => Self::Pixels,
             _ => Self::Norm1000,
         }
     }
 }
+
 
 /// A located target, in screen coordinates.
 #[derive(Debug, Clone, PartialEq)]
@@ -212,7 +215,14 @@ pub fn scale_to_screen(
             }
             Some(((x * scr_w).round() as i64, (y * scr_h).round() as i64))
         }
+        CoordinateFormat::Percent => {
+            if x < 0.0 || x > 100.0 || y < 0.0 || y > 100.0 {
+                return None;
+            }
+            Some(((x * scr_w / 100.0).round() as i64, (y * scr_h / 100.0).round() as i64))
+        }
         CoordinateFormat::Pixels => {
+
             if x < 0.0 || y < 0.0 {
                 return None;
             }
@@ -335,6 +345,12 @@ mod tests {
     }
 
     #[test]
+    fn scale_to_screen_percent() {
+        let res = scale_to_screen(50.0, 50.0, (1280, 720), (1920, 1080), CoordinateFormat::Percent).unwrap();
+        assert_eq!(res, (960, 540));
+    }
+
+    #[test]
     fn scale_to_screen_pixels() {
         let res = scale_to_screen(640.0, 360.0, (1280, 720), (1920, 1080), CoordinateFormat::Pixels).unwrap();
         assert_eq!(res, (960, 540));
@@ -345,8 +361,11 @@ mod tests {
         assert!(scale_to_screen(-5.0, 500.0, (1280, 720), (1920, 1080), CoordinateFormat::Norm1000).is_none());
         assert!(scale_to_screen(1050.0, 500.0, (1280, 720), (1920, 1080), CoordinateFormat::Norm1000).is_none());
         assert!(scale_to_screen(1.2, 0.5, (1280, 720), (1920, 1080), CoordinateFormat::Norm1).is_none());
+        assert!(scale_to_screen(-1.0, 50.0, (1280, 720), (1920, 1080), CoordinateFormat::Percent).is_none());
+        assert!(scale_to_screen(105.0, 50.0, (1280, 720), (1920, 1080), CoordinateFormat::Percent).is_none());
         assert!(scale_to_screen(2500.0, 500.0, (1280, 720), (1920, 1080), CoordinateFormat::Pixels).is_none());
     }
+
 
     #[test]
     fn describe_target_prefers_an_explicit_describe_field() {

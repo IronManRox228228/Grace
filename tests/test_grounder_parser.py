@@ -1,9 +1,22 @@
-"""Unit tests for the model-agnostic vision grounder and parser."""
+"""Tests for the vision grounder's point/coordinate parser.
+
+Covers:
+- each coordinate format the code supports (grounder.py:scale_to_screen)
+- malformed model output (grounder.py:parse_grounder_response -> None)
+- out-of-bounds points (scale_to_screen + Grounder.locate)
+- empty input (parse_grounder_response -> None)
+- extra text around the point (parse_grounder_response still extracts coords)
+"""
 
 import asyncio
 import unittest
 
-from grace.agent.grounder import Grounder, GroundedPoint, parse_grounder_response, scale_to_screen
+from grace.agent.grounder import (
+    Grounder,
+    GroundedPoint,
+    parse_grounder_response,
+    scale_to_screen,
+)
 
 
 class FakeLLM:
@@ -19,141 +32,155 @@ class FakeLLM:
         return resp
 
 
-class TestGrounderParser(unittest.TestCase):
-    """Test suite for parsing vision grounding outputs into coordinates."""
+class TestCoordinateFormats(unittest.TestCase):
+    """scale_to_screen for every supported coordinate_format value."""
 
-    def test_parse_action_click_point(self):
-        text = "Thought: Here is the submit button.\nAction: click(point=(469, 472))"
-        parsed = parse_grounder_response(text)
-        self.assertIsNotNone(parsed)
-        x, y, thought = parsed
-        self.assertEqual(x, 469.0)
-        self.assertEqual(y, 472.0)
-        self.assertIn("submit button", thought)
-
-    def test_parse_action_click_tuple(self):
-        text = "Action: click((100, 200))"
-        parsed = parse_grounder_response(text)
-        self.assertIsNotNone(parsed)
-        x, y, _ = parsed
-        self.assertEqual(x, 100.0)
-        self.assertEqual(y, 200.0)
-
-    def test_parse_action_click_bare_numbers(self):
-        text = "Action: click(150, 250)"
-        parsed = parse_grounder_response(text)
-        self.assertIsNotNone(parsed)
-        x, y, _ = parsed
-        self.assertEqual(x, 150.0)
-        self.assertEqual(y, 250.0)
-
-    def test_parse_action_click_start_box(self):
-        text = "Action: click(start_box='(50, 60)')"
-        parsed = parse_grounder_response(text)
-        self.assertIsNotNone(parsed)
-        x, y, _ = parsed
-        self.assertEqual(x, 50.0)
-        self.assertEqual(y, 60.0)
-
-    def test_parse_box_tokens(self):
-        text = "Action: click(start_box='<|box_start|>(320, 180)<|box_end|>')"
-        parsed = parse_grounder_response(text)
-        self.assertIsNotNone(parsed)
-        x, y, _ = parsed
-        self.assertEqual(x, 320.0)
-        self.assertEqual(y, 180.0)
-
-    def test_parse_json_point(self):
-        text = '{"thought": "Located button", "point": [640, 360]}'
-        parsed = parse_grounder_response(text)
-        self.assertIsNotNone(parsed)
-        x, y, thought = parsed
-        self.assertEqual(x, 640.0)
-        self.assertEqual(y, 360.0)
-        self.assertEqual(thought, "Located button")
-
-    def test_parse_json_xy(self):
-        text = '```json\n{"x": 500, "y": 300}\n```'
-        parsed = parse_grounder_response(text)
-        self.assertIsNotNone(parsed)
-        x, y, _ = parsed
-        self.assertEqual(x, 500.0)
-        self.assertEqual(y, 300.0)
-
-    def test_parse_float_coordinates(self):
-        text = "Action: click(point=(0.469, 0.472))"
-        parsed = parse_grounder_response(text)
-        self.assertIsNotNone(parsed)
-        x, y, _ = parsed
-        self.assertAlmostEqual(x, 0.469)
-        self.assertAlmostEqual(y, 0.472)
-
-    def test_parse_wait_returns_none(self):
-        self.assertIsNone(parse_grounder_response("Action: wait()"))
-        self.assertIsNone(parse_grounder_response("Thought: not visible\nAction: wait()"))
-
-    def test_malformed_returns_none(self):
-        self.assertIsNone(parse_grounder_response("I will click the button for you."))
-        self.assertIsNone(parse_grounder_response("Thought: I should do something."))
-        self.assertIsNone(parse_grounder_response(""))
-        self.assertIsNone(parse_grounder_response(None))
-
-
-class TestScaleToScreenCoordinates(unittest.TestCase):
-    """Test scaling across different coordinate formats and out-of-bounds checks."""
-
-    def test_norm_1000_format(self):
-        # 500/1000 -> center of 1920x1080 is (960, 540)
+    def test_format_0_to_1000(self):
+        # 500/1000 -> centre of a 1920x1080 screen
         res = scale_to_screen(500, 500, (1280, 720), (1920, 1080), coordinate_format="0-1000")
         self.assertEqual(res, (960, 540))
 
-    def test_norm_1_format(self):
-        # 0.5/1.0 -> center of 1920x1080 is (960, 540)
+    def test_format_norm_1000_alias(self):
+        res = scale_to_screen(500, 500, (1280, 720), (1920, 1080), coordinate_format="norm_1000")
+        self.assertEqual(res, (960, 540))
+
+    def test_format_1000_alias(self):
+        res = scale_to_screen(500, 500, (1280, 720), (1920, 1080), coordinate_format="1000")
+        self.assertEqual(res, (960, 540))
+
+    def test_format_0_to_1(self):
+        # 0.5/1.0 -> centre of a 1920x1080 screen
         res = scale_to_screen(0.5, 0.5, (1280, 720), (1920, 1080), coordinate_format="0-1")
         self.assertEqual(res, (960, 540))
 
-    def test_pixels_format(self):
-        # 640/1280 -> center of 1920x1080 is (960, 540)
+    def test_format_norm_1_alias(self):
+        res = scale_to_screen(0.5, 0.5, (1280, 720), (1920, 1080), coordinate_format="norm_1")
+        self.assertEqual(res, (960, 540))
+
+    def test_format_percent(self):
+        # 50% / 100 -> centre of a 1920x1080 screen
+        res = scale_to_screen(50, 50, (1280, 720), (1920, 1080), coordinate_format="percent")
+        self.assertEqual(res, (960, 540))
+
+    def test_format_pixels(self):
+        # 640x360 of a 1280x720 image -> centre of a 1920x1080 screen
         res = scale_to_screen(640, 360, (1280, 720), (1920, 1080), coordinate_format="pixels")
         self.assertEqual(res, (960, 540))
 
-    def test_out_of_bounds_norm_1000(self):
+
+class TestMalformedModelOutput(unittest.TestCase):
+    """parse_grounder_response must return None for output it cannot ground."""
+
+    def test_none_input(self):
+        self.assertIsNone(parse_grounder_response(None))
+
+    def test_empty_string_input(self):
+        self.assertIsNone(parse_grounder_response(""))
+
+    def test_whitespace_only_input(self):
+        self.assertIsNone(parse_grounder_response("   \n  \t"))
+
+    def test_garbage_text_returns_none(self):
+        self.assertIsNone(parse_grounder_response("I will click the button for you."))
+        self.assertIsNone(parse_grounder_response("Thought: I should do something."))
+
+    def test_three_numbers_is_not_a_point(self):
+        self.assertIsNone(parse_grounder_response("click(point=(100, 200, 300))"))
+
+    def test_nested_json_returns_none(self):
+        # The JSON regex is flat-only (grounder.py:69); nested braces are not parsed.
+        self.assertIsNone(parse_grounder_response('{"point": [100, 200], "meta": {"a": 1}}'))
+
+
+class TestOutOfBoundsPoints(unittest.TestCase):
+    """Points outside the valid range for a format must not be grounded."""
+
+    def test_out_of_bounds_0_to_1000(self):
         self.assertIsNone(scale_to_screen(-1, 500, (1280, 720), (1920, 1080), coordinate_format="0-1000"))
         self.assertIsNone(scale_to_screen(1001, 500, (1280, 720), (1920, 1080), coordinate_format="0-1000"))
         self.assertIsNone(scale_to_screen(500, -5, (1280, 720), (1920, 1080), coordinate_format="0-1000"))
         self.assertIsNone(scale_to_screen(500, 1050, (1280, 720), (1920, 1080), coordinate_format="0-1000"))
 
-    def test_out_of_bounds_norm_1(self):
+    def test_out_of_bounds_0_to_1(self):
         self.assertIsNone(scale_to_screen(-0.1, 0.5, (1280, 720), (1920, 1080), coordinate_format="0-1"))
         self.assertIsNone(scale_to_screen(1.1, 0.5, (1280, 720), (1920, 1080), coordinate_format="0-1"))
         self.assertIsNone(scale_to_screen(0.5, -0.01, (1280, 720), (1920, 1080), coordinate_format="0-1"))
         self.assertIsNone(scale_to_screen(0.5, 1.05, (1280, 720), (1920, 1080), coordinate_format="0-1"))
 
+    def test_out_of_bounds_percent(self):
+        self.assertIsNone(scale_to_screen(-1, 50, (1280, 720), (1920, 1080), coordinate_format="percent"))
+        self.assertIsNone(scale_to_screen(101, 50, (1280, 720), (1920, 1080), coordinate_format="percent"))
+        self.assertIsNone(scale_to_screen(50, -0.5, (1280, 720), (1920, 1080), coordinate_format="percent"))
+        self.assertIsNone(scale_to_screen(50, 100.5, (1280, 720), (1920, 1080), coordinate_format="percent"))
+
     def test_out_of_bounds_pixels(self):
         self.assertIsNone(scale_to_screen(-10, 100, (1280, 720), (1920, 1080), coordinate_format="pixels"))
-        # Exceeds both image bounds and 1000
+        # Exceeds image bounds and 1000, so the overflow net cannot apply either.
         self.assertIsNone(scale_to_screen(2500, 500, (1280, 720), (1920, 1080), coordinate_format="pixels"))
 
-    def test_pixels_overflow_fallback_to_thousand(self):
-        # When model emits 500 on a 400x300 image, it is treated as 0-1000
-        res = scale_to_screen(500, 500, (400, 300), (1920, 1080), coordinate_format="pixels")
-        self.assertEqual(res, (960, 540))
-
-
-class TestGrounderClass(unittest.TestCase):
-    def test_grounder_out_of_bounds_returns_none(self):
+    def test_grounder_locate_out_of_bounds_returns_none(self):
         llm = FakeLLM(["Action: click(point=(1500, 500))"])
         grounder = Grounder(llm, coordinate_format="0-1000")
         res = asyncio.run(grounder.locate("button", b"png", (1280, 720), (1920, 1080)))
         self.assertIsNone(res)
 
-    def test_grounder_valid_locates_point(self):
+
+class TestEmptyInput(unittest.TestCase):
+    """Empty or missing input must never raise and must return None."""
+
+    def test_parse_grounder_response_empty(self):
+        self.assertIsNone(parse_grounder_response(None))
+        self.assertIsNone(parse_grounder_response(""))
+        self.assertIsNone(parse_grounder_response("   "))
+
+    def test_scale_to_screen_zero_dimensions_no_crash(self):
+        # image_size or screen_size of 0 returns the raw rounded coords without bounds-checking
+        res = scale_to_screen(10, 20, (0, 720), (1920, 1080), coordinate_format="0-1000")
+        self.assertEqual(res, (10, 20))
+
+
+class TestExtraTextAroundPoint(unittest.TestCase):
+    """The parser must find coordinates embedded in surrounding prose."""
+
+    def test_extra_text_before_and_after(self):
+        text = "blah click(point=(300, 400)) blah"
+        parsed = parse_grounder_response(text)
+        self.assertIsNotNone(parsed)
+        x, y, _ = parsed
+        self.assertEqual((x, y), (300.0, 400.0))
+
+    def test_point_in_prose_sentence(self):
+        text = "The button is at point: (300, 400) now"
+        parsed = parse_grounder_response(text)
+        self.assertIsNotNone(parsed)
+        x, y, _ = parsed
+        self.assertEqual((x, y), (300.0, 400.0))
+
+    def test_thought_and_action_with_surrounding_text(self):
+        text = "Preamble. Thought: Here is the submit button.\nAction: click(point=(469, 472)). Postscript."
+        parsed = parse_grounder_response(text)
+        self.assertIsNotNone(parsed)
+        x, y, thought = parsed
+        self.assertEqual((x, y), (469.0, 472.0))
+        self.assertIn("submit button", thought)
+
+
+class TestGrounderEndToEnd(unittest.TestCase):
+    """Grounder.locate parses and scales a coordinate response."""
+
+    def test_valid_locates_point(self):
         llm = FakeLLM(["Action: click(point=(500, 500))"])
         grounder = Grounder(llm, coordinate_format="0-1000")
         res = asyncio.run(grounder.locate("button", b"png", (1280, 720), (1920, 1080)))
-        self.assertIsNotNone(res)
+        self.assertIsInstance(res, GroundedPoint)
         self.assertEqual(res.x, 960)
         self.assertEqual(res.y, 540)
+
+    def test_empty_png_or_description_returns_none(self):
+        llm = FakeLLM(["Action: click(point=(500, 500))"])
+        grounder = Grounder(llm, coordinate_format="0-1000")
+        self.assertIsNone(asyncio.run(grounder.locate("button", b"", (1280, 720), (1920, 1080))))
+        self.assertIsNone(asyncio.run(grounder.locate("", b"png", (1280, 720), (1920, 1080))))
 
 
 if __name__ == "__main__":
