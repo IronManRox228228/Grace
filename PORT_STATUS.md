@@ -58,7 +58,7 @@ cargo test -p grace-win --lib -- --ignored --test-threads=1
 |---|---|---|---|
 | `crates/grace-contract` | ~340 | `contract/grace-events.schema.json` | `GraceEvent` enum, schema-validated round trip. Unchanged since Phase 1. |
 | `crates/grace-core` | ~5,700 | `config.py`, `agent/safety.py`, `agent/loop.py`, `agent/memory.py`, `agent/perception.py`, `agent/planner.py`, `agent/grounder.py`, `intent/parser.py`, `intent/tools.py`, `intent/router.py`, `tools/dispatcher.py`, `response/generator.py`, `response/feedback.py`, `util/timing.py`, `text/sentence_split.py`, `main.py`'s `GraceApp` turn logic, `perception/elements.py`, `perception/element_graph.py` | The whole turn pipeline's decision logic. See below, module by module. |
-| `crates/grace-audio` | ~270 | `vad/detector.py`, `audio/wake_word.py` | `VadDetector`; `detect_wake_word` with whole-word boundary regex (`\b(keyword|grace|hey\s+grace)\b`) preventing substring false wakes like "gracefully" or "disgrace". Capture/pump are trait boundaries. |
+| `crates/grace-audio` | ~1,530 | `vad/detector.py`, `audio/wake_word.py`, `audio/transcription.py`, `audio/tts.py`, `audio/player.py` | Real microphone capture (`cpal`/WASAPI, 16kHz mono resampling); `AudioPump` with echo gating (`gate(0.20)`); Silero VAD v5 ONNX via `sherpa-rs`; Zipformer KWS keyword-spotting with whole-word regex matching and 500ms stop/cancel watch (`\b(stop|cancel)\b`); Sherpa-ONNX STT (`SherpaAsr`, Moonshine Base & Parakeet CTC via `sherpa-rs-sys` C FFI) implementing `SpeechToText`; Kokoro TTS (`SherpaKokoroTts` generating WAV audio) implementing `TextToSpeech` and `CpalTtsPlayer` with atomic barge-in stop flag and echo gating; `TranscriptSource` trait with `ScriptedTranscriptSource` and `RealTranscriptSource` / `OwnedRealTranscriptSource`. |
 | `crates/grace-models` | ~250 | `llm/gemma_client.py`'s HTTP shape | `HttpLlm`: a REAL (not stubbed) blocking HTTP client against a local llama.cpp server's `/v1/chat/completions`, non-streaming, matching `GemmaClient.chat(..., stream=False)`'s exact request shape including the `image_b64` → multimodal `image_url` reshaping. `ElementScorer` trait for a future GLiNER-style scorer, not implemented. |
 | `crates/grace-win` | ~600 | `automation/app_indexer.py`, `automation/dpi_helper.py`, a slice of `perception/element_graph.py`'s `active_window()` | `plan_launch`/`find_app` (Phase 1). `dpi::real::get_dpi_scale`/`ensure_dpi_aware` and `win32::real::foreground_window` - real `windows`-crate Win32 calls. UIA tree walk, win32 input driver (`DesktopActuator`), and input-time foreground window re-checks remain trait boundaries. |
 | `crates/grace-harness` | ~750 | `harness/tape.py`, `harness/replay.py` | Tape loader + diff machinery (Phase 1). `turn_replay.rs` drives the real `grace_core` turn engine against real tapes and diffs the resulting event stream. |
@@ -621,10 +621,15 @@ still apply unchanged. New this phase:
 
 ## Remaining work, roughly in the order it should happen
 
-1. **Real STT and a real transcript source**: sherpa-onnx (Parakeet/
-   Moonshine per PLAN §3) is the biggest single unlock - it's what turns
-   `run_demo_turn`'s fixed transcript into a real one and makes
-   `grace-audio`'s capture/pump traits worth implementing for real.
+1. ~~**Real STT and a real transcript source**: sherpa-onnx (Parakeet/Moonshine)~~ **Fully completed in Task 17**:
+   - `crates/grace-audio`: Real microphone capture via `cpal` (WASAPI, 16kHz mono resampling, 16-bit PCM), `AudioPump` with thread-safe queue, `gate(duration)` echo suppression, and timeout drains.
+   - Silero VAD v5 ONNX detector via `sherpa-rs` with explicit model existence checks pointing to `docs/MODELS.md`.
+   - Zipformer KWS wake-word detection with whole-word regex matching (`\b(keyword|grace|hey\s+grace)\b`), personalised model paths, and stop/cancel watch (`\b(stop|cancel)\b`, halts execution via callback within 500 ms).
+   - ASR engine (`SherpaAsr`) implementing `grace_core::models::SpeechToText`, supporting Moonshine Base (CPU floor) and Parakeet NeMo CTC (high tier) via `sherpa-rs-sys` C FFI.
+   - Kokoro TTS engine (`SherpaKokoroTts`) implementing `grace_core::models::TextToSpeech`, generating 16-bit PCM WAV.
+   - `CpalTtsPlayer` output player with atomic barge-in stop flag and 200 ms echo suppression (`pump.gate(0.20)`).
+   - `TranscriptSource` trait unifying scripted replay (`ScriptedTranscriptSource`) and real mic+VAD+ASR pipeline (`RealTranscriptSource`, `OwnedRealTranscriptSource`), wired into `grace_backend::turn::run_turn_with_source`.
+   - Manual example `crates/grace-audio/examples/real_audio.rs` demonstrating physical mic capture, VAD, ASR, and TTS playback without touching automated test suites.
 2. **`grace-win` real dispatch**: `ElementGraphSource` (the UIA tree walk -
    COM interop, `IUIAutomation`) and `DesktopActuator` (`SendInput` for
    click/type/key/scroll, plus the app-launch call `app_indexer::plan_launch`

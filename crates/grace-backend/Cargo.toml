@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+grace-audio.workspace = true
 grace-contract.workspace = true
 grace-core.workspace = true
 grace-models.workspace = true

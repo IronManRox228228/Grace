@@ -4,7 +4,21 @@
 //! speaker; anything that would is `#[ignore]`d with a reason, per the task's
 //! hard constraints.
 
+pub mod asr;
+pub mod capture;
+pub mod silero_vad;
+pub mod transcript_source;
+pub mod tts;
 pub mod vad;
+pub mod wake_word;
+
+pub use asr::SherpaAsr;
+pub use capture::{AudioPump, CpalAudioCapture};
+pub use silero_vad::SherpaSileroVad;
+pub use transcript_source::{OwnedRealTranscriptSource, RealTranscriptSource, ScriptedTranscriptSource, TranscriptSource};
+pub use tts::{CpalTtsPlayer, SherpaKokoroTts};
+pub use vad::VadDetector;
+pub use wake_word::{is_cancel_utterance, SherpaWakeWord};
 
 /// One chunk of 16-bit PCM audio, as handed to a `VadDetector` or a pump.
 pub type PcmChunk = Vec<u8>;

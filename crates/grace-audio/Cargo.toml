@@ -7,5 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cpal = "0.17.3"
 grace-core.workspace = true
+hound = "3.5"
+regex.workspace = true
+sherpa-rs = { version = "0.6.8", features = ["sys", "tts"] }
 thiserror.workspace = true
+

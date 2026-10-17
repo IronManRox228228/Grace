@@ -22,7 +22,7 @@ use grace_core::agent_loop::{AgentLoop, AgentLoopConfig};
 use grace_core::dispatcher::{Dispatcher, NoopSystemActions};
 use grace_core::events::EventSink;
 use grace_core::feedback::{Earcon, EarconPlayer};
-use grace_core::grace_app::{handle_activation_turn, ListenOutcome, RecordingWakeWordControl, TurnContext};
+use grace_core::grace_app::{handle_activation_turn, RecordingWakeWordControl, TurnContext};
 use grace_core::intent::IntentParser;
 use grace_core::models::{LargeLanguageModel, LlmRequest, RateLimitError, ScriptedTts};
 use grace_core::perception::ScriptedPerception;
@@ -90,11 +90,10 @@ fn ephemeral_http_port() -> u16 {
     port
 }
 
-/// Runs one activation turn with the fixed transcript `"open the
-/// calculator"` and emits its real event sequence to every client connected
-/// to `server`. See this module's doc comment for exactly what "real" means
-/// here.
-pub fn run_demo_turn(server: &Arc<WsEventServer>) {
+use grace_audio::{ScriptedTranscriptSource, TranscriptSource};
+
+/// Runs an activation turn using the provided `TranscriptSource` abstraction.
+pub fn run_turn_with_source(server: &Arc<WsEventServer>, mut source: Box<dyn TranscriptSource>) {
     let llama_url = std::env::var("LLAMA_SERVER_URL")
         .unwrap_or_else(|_| format!("http://127.0.0.1:{}", ephemeral_http_port()));
 
@@ -128,7 +127,20 @@ pub fn run_demo_turn(server: &Arc<WsEventServer>) {
         tts: &mut tts,
     };
 
-    handle_activation_turn(&mut ctx, ListenOutcome::Transcript("open the calculator".to_string()), 0.0, &|_| {}, INTENT_SYSTEM_PROMPT, &mut last_spoken_text);
+    let (outcome, elapsed) = source.capture_and_transcribe();
+    handle_activation_turn(&mut ctx, outcome, elapsed, &|_| {}, INTENT_SYSTEM_PROMPT, &mut last_spoken_text);
+}
+
+/// Runs one activation turn using a `TranscriptSource` behind the trait.
+///
+/// For automated tests, headless CI, and demo runs, uses `ScriptedTranscriptSource`
+/// (defaulting to `"open the calculator"` or `GRACE_TRANSCRIPT`), keeping tests and replay deterministic.
+pub fn run_demo_turn(server: &Arc<WsEventServer>) {
+    let transcript = std::env::var("GRACE_TRANSCRIPT")
+        .unwrap_or_else(|_| "open the calculator".to_string());
+    let source: Box<dyn TranscriptSource> =
+        Box::new(ScriptedTranscriptSource::from_transcripts(vec![&transcript]));
+    run_turn_with_source(server, source);
 }
 
 /// A minimal intent-parsing instruction. Not the full prompt
