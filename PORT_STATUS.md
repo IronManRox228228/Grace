@@ -637,10 +637,10 @@ still apply unchanged. New this phase:
   manually and passed against the real desktop), `grace-harness` (13 - up
   from 9, includes the real turn replay), `grace-backend` (11 - up from
   10, includes the real socket-to-turn-engine end-to-end test).
-- **Rust, end of Task 19 (this update)**: **287 passed, 3 ignored, 0
+- **Rust, end of Task 20 (this update)**: **289 passed, 3 ignored, 0
   failed** across the whole workspace (`cargo test --workspace`):
   `grace-contract` (4), `grace-core` (175), `grace-audio` (6), `grace-backend` (11),
-  `grace-memory` (39), `grace-models` (10), `grace-win` (27 passed + 3 ignored),
+  `grace-memory` (39), `grace-models` (10), `grace-shell` (2), `grace-win` (27 passed + 3 ignored),
   and `grace-harness` (15).
   All **30 of 30** tapes in `corpus/` replay cleanly through the Rust backend.
 - **Python**: re-ran `./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`:
@@ -689,12 +689,14 @@ still apply unchanged. New this phase:
    - Windows Job Object assignment with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` ensuring child `llama-server` processes never orphan upon parent exit or crash.
    - Hardware presets: `cpu-fleet` (micromodel slots on CPU floor) and `gpu-single` (buildathon single-model setup with `--mmproj` vision projector).
    - `HttpLlm` request cancellation: `cancel_token: Arc<AtomicBool>`, `with_cancel_token`, `cancel()`, and `reset_cancel()`.
-7. **Sidecar split + Tauri hardening**: once (1)-(2) make the Rust backend
-   do real, potentially-slow work, split `grace-backend` into its own
-   process with the Job Object/KILL_ON_JOB_CLOSE, restart/health-watch,
-   single-instance guard, and CSP items from PLAN §10.2's "Shell (Tauri)" list.
-   (Note: per-launch random WebSocket authentication token and 127.0.0.1
-   binding are now implemented across Tauri shell and `grace-backend`).
+7. ~~**Sidecar split + Tauri hardening**~~ **Fully completed in Task 20**:
+   - `crates/grace-backend/src/main.rs`: Standalone `grace-backend` sidecar binary with single-instance mutex (`Local\GraceBackendSingleInstanceMutex`), per-launch token verification, Origin allowlist enforcement, and live Windows automation / perception / system actions wiring.
+   - `src-tauri/src/backend.rs`: Default backend flipped to Rust (`selected_backend() -> BackendType::Rust`). Python remains selectable for one release via `GRACE_BACKEND=python` with deprecation notice.
+   - Job Object supervision: Spawns sidecar inside Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, ensuring clean child termination without orphaned processes on parent exit or crash.
+   - Health-watch: Background thread monitors sidecar process health and performs automated restart with exponential backoff on unexpected exit.
+   - In-process fallback: If standalone binary is not found, shell falls back gracefully to in-process Rust server runtime.
+   - Parity gate: `scripts/parity.ps1` runs both test suites and validates tape replay.
+
 8. **Security features & red-team parity across Rust and Python**:
    - **Mirrored in Rust**:
      - R11, R12, R22 (`crates/grace-win/src/actuator.rs`): Foreground window verification guard (`check_window_focus`) re-checked immediately before physical clicks, typing, and key presses, refusing execution on window focus mismatch.
@@ -711,4 +713,25 @@ still apply unchanged. New this phase:
      - TTSPlayer thread/stream synchronization (R40): Rust TTS player is currently a sidecar/trait boundary.
      - Cloud LLM fallback API key header (R41): Rust currently has no cloud Gemini fallback client.
      - Listen window speech extension and apology on cutoff (R39): Python `main.py` activation turn specific.
+
+## Python Retirement Plan
+
+### 1. What Remains in Python (Permanently Retained)
+- **On-device opportunistic training / fine-tuning scheduler (`src/grace/training/`)**: LoRA, PEFT, contrastive head training, and Torgo dysarthric speech fine-tuning permanently stay in Python due to deep PyTorch / CUDA ecosystem dependencies. They run as offline background batch jobs when the machine is idle and plugged in.
+- **Benchmark evaluation harnesses (`src/grace/bench/`)**: Torgo dysarthria evaluation, decision benchmarks, latency profiling.
+- **Tape recording / generation tools (`src/grace/harness/generate.py`)**.
+
+### 2. Serving Deprecation Schedule
+- **v0.1.0 (Current)**: Rust backend (`grace-backend`) is the default (`GRACE_BACKEND=rust`). Python backend remains selectable via `GRACE_BACKEND=python` with a deprecation notice.
+- **v0.2.0 (Next Minor)**: Python serving modules (`src/grace/main.py`, `src/grace/ws_server.py`, `src/grace/agent/`, `src/grace/intent/`, `src/grace/tools/`) will be formally deleted from the repository. The Rust binary (`grace-backend.exe`) and Tauri shell will be the sole supported runtime.
+
+### 3. Migration of `~/.grace/memory.db` to `grace-memory`
+- **Location**: Legacy database located at `~/.grace/memory.db` (or `%USERPROFILE%\.grace\memory.db`). Target database located at `%LOCALAPPDATA%\Grace\memory.db`.
+- **Migration Procedure**:
+  1. **Automatic Backup**: Before accessing, creates an immutable timestamped backup at `~/.grace/memory.db.bak.<timestamp>`.
+  2. **Fact Extraction**: Reads confirmed facts (`user_confirmed` provenance) and writes them to the new `grace-memory` SQLite schema.
+  3. **Privacy Invariant (R25/R34)**: Raw typed text is NEVER carried over in plain text. Only token lengths and salted HMAC-SHA256 hashes are transferred.
+  4. **Salt Migration**: Preserves existing cryptographic salt file `%LOCALAPPDATA%\Grace\.salt` or extracts from legacy metadata.
+  5. **FTS5 Index Reconstruction**: Automatically builds full-text search virtual tables in `grace-memory`.
+  6. **Failsafe**: The legacy database is never deleted or truncated by the migration; it remains preserved on disk.
 

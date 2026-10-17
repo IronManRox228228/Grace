@@ -19,5 +19,12 @@ tokio.workspace = true
 tokio-tungstenite = { workspace = true, features = [] }
 futures-util = "0.3"
 
-[dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "test-util"] }
+[[bin]]
+name = "grace-backend"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }

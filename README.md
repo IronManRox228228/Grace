@@ -50,14 +50,36 @@ USE_CLOUD_LLM=false
 ```
 
 ### Run
-Run the demo preflight check to verify models, hardware, audio, and offline guarantees:
+
+#### Primary Path (Native Rust Backend + Tauri Overlay Shell, Default)
+Build and run Grace directly using Cargo:
 ```cmd
-python scripts/demo_check.py
+cargo run -p grace-shell
 ```
-Start Grace:
+The shell automatically starts the high-performance Rust backend sidecar (`grace-backend.exe`) supervised inside a Windows Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) with automatic health-watch and recovery.
+
+To run the headless Rust backend sidecar directly without the UI overlay:
+```cmd
+cargo run -p grace-backend --bin grace-backend
+```
+
+#### Legacy Python Backend (Deprecated)
+The Python backend remains selectable for one release cycle:
+```cmd
+set GRACE_BACKEND=python
+cargo run -p grace-shell
+```
+Or run the Python entrypoint directly:
 ```cmd
 python -m grace.main
 ```
+
+#### Parity Verification Gate
+To verify cross-backend parity and run both test suites:
+```powershell
+powershell -File scripts/parity.ps1
+```
+
 Say: *"Grace, open Notepad and write my appointment at 3 PM."*
 
 ---

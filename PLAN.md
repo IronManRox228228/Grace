@@ -6,11 +6,10 @@ Agreed on 2026-09-26. This file is the handoff between sessions: read it before 
 
 ## 0. Where things stand
 
-- **Current phase:** Post-buildathon CPU floor micromodel fleet switchover (completed 2026-10-17, Task 13). The interim single-model setup (Holo3.1-4B) has transitioned to completed history and remains available as the `"gpu-single"` preset. The micromodel fleet (§3, §5) is now the primary active architecture (`"cpu-fleet"` preset default on CPU and iGPU tiers), featuring per-slot models, specialist element scoring, and a 4-rung Decision Ladder.
-- **Branch:** `migration/phase-0-contract-and-harness`. The Python → Rust/Tauri end-to-end port was already in progress before this plan; everything below assumes it continues.
-- **Committed and pushed (2026-09-26):** the user's QoL/accessibility batch plus the nine ship-blocker fixes (`3c7b990`), the 3 s minimum from wake word to idle on a silent activation (`4f108c6`), and phase 2 of the Rust port (`470c51b`; status in `PORT_STATUS.md`).
-- **Tests:** Python 841 passed, 1 skipped (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`). Rust 200 passed, 3 ignored (`cargo test --workspace`).
-- **Corpus:** the committed tapes predate the batch's tool-schema change, so they no longer replay. All 30 were regenerated and the user approved the diff on 2026-09-26: three new tool descriptions in every prompt; `empty_transcript` loses its dead pause and 0 s follow-up window (then held to 3 s); `safety_press_key_confirm` parks Alt+F4 before the planner call. Copying them into `corpus/` is still pending. Tapes for the new features (new tools, confirmation expiry and timeout, mumbled answers, turn-crash recovery) are approved to write but not yet written.
+- **Current phase:** Rust backend default switchover and sidecar split (completed 2026-10-18, Task 20). The Rust backend (`grace-backend`) is now the default runtime (`GRACE_BACKEND=rust`). The Tauri shell launches `grace-backend.exe` as an out-of-process sidecar supervised within a Windows Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) with automated health-watch and exponential backoff restart. Python serving is deprecated and scheduled for retirement in v0.2.0; offline training and benchmark scripts remain in Python permanently.
+- **Branch:** `migration/phase-0-contract-and-harness`.
+- **Tests:** Python **1136 passed, 1 skipped** (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`). Rust **287 passed, 3 ignored, 0 failed** across all 9 crates (`cargo test --workspace`).
+- **Corpus:** All **30 of 30** tapes in `corpus/` replay cleanly through the Rust backend with 100% exact event parity (`cargo test -p grace-harness turn_replay`). Parity gate script added at `scripts/parity.ps1`.
 
 ---
 
@@ -346,6 +345,10 @@ None. All items from the pre-buildathon review backlog have been closed and move
 - Choose every new runtime for Rust bindings: `sherpa-rs` / sherpa-onnx, llama.cpp (server or bindings), `ort`.
 - Keep the frozen event contract (`contract/`) as the seam. Port behind it, and grade the port against **reviewed** tapes (§10.2 first).
 - The pattern fast path, correction list, tier detection, thread budget and priority control belong in Rust from the start.
+- **Port completed & default (2026-10-18, Tasks 16-20):**
+  - All core turn logic, planning, grounding, tools, safety, memory, audio (cpal/WASAPI, Silero VAD, Zipformer KWS, Parakeet/Moonshine ASR, Kokoro TTS), Windows automation (UIA tree walk, Win32 actuator, BitBlt screenshot), and pure-Rust PDF tools (`lopdf`) ported.
+  - Tauri shell launches `grace-backend.exe` out-of-process sidecar supervised within a Windows Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) with health-watch and exponential backoff restart.
+  - Rust is now the default backend (`GRACE_BACKEND=rust`). Python backend remains selectable via `GRACE_BACKEND=python` with deprecation notice.
 
 ---
 
@@ -406,16 +409,20 @@ Things Grace knows about the user: contacts and relations, preferences, standing
 4. Fill in `LLAMA_CPP_SHA256` (R4).
 5. Record the demo: 3–4 core flows.
 
-**After the buildathon (In progress / Completed):**
+**After the buildathon (Completed):**
 
 1. **Harness trust:** commit or split the current working tree, regenerate and review the tapes, add the corpus-replay gate. *(Completed)*
 2. **Runtime slimming:** remove PyTorch; sherpa-onnx for ASR, TTS, VAD and wake word; thread budget; priority control. *(Completed, Tasks 07-08)*
 3. **Benchmark 1:** TORGO ASR. *(Completed, Task 09)*
 4. **Word biasing and correction list**, plus switch input for confirmations. *(Completed, Task 10)*
 5. **Benchmarks 2 and 3, fine-tunes, and fleet switchover.** *(Completed, Tasks 11-13: fleet switchover active with Decision Ladder and specialist scorer)*
-6. **Enrollment flow and opportunistic training.** *(Task 14, next)*
-7. **Remaining backlog (§10.2)**, in parallel with the Rust port.
-8. **Memory (§12):** `crates/grace-memory`.
+6. **Enrollment flow and opportunistic training.** *(Completed, Tasks 14-15)*
+7. **Memory (§12):** `crates/grace-memory`. *(Completed, Task 16)*
+8. **Real audio:** `crates/grace-audio`. *(Completed, Task 17)*
+9. **Real desktop:** `crates/grace-win`. *(Completed, Task 18)*
+10. **Agentic tape replay, pure-Rust PDF tools, and llama-server supervisor:** `crates/grace-harness`, `grace-core`, `grace-models`. *(Completed, Task 19)*
+11. **Rust default, sidecar split, and release bundle:** `grace-backend`, `src-tauri`. *(Completed, Task 20)*
+
 
 ---
 
