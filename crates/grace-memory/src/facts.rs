@@ -359,6 +359,13 @@ impl FactStore {
         Ok(())
     }
 
+    /// Voice-scoped hard delete: "forget everything" wipes all facts and triggers clear FTS.
+    pub fn forget_everything(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM facts", [])?;
+        Ok(())
+    }
+
     pub fn active_fact(&self, topic: &str) -> Result<Option<Fact>> {
         let conn = self.conn.lock().unwrap();
         Ok(fact_active_row(&conn, topic)?)

@@ -168,14 +168,22 @@ class PersistentMemoryStore:
             except Exception as exc:
                 logger.warning(f"Persistent memory DB init failed: {exc}")
 
-    def save_step(self, user_goal: str, action: str, params: dict, result: dict) -> None:
-        """Persist a completed action step to SQLite disk database."""
+    def save_step(self, user_goal: str, action: str, params: dict, result: dict, app: str = "unknown") -> None:
+        """Persist a completed action step to SQLite disk database with typed text redacted."""
         with self._lock:
             try:
+                params_to_save = params
+                if isinstance(params, dict) and "text" in params and isinstance(params["text"], str):
+                    import hashlib
+                    raw_text = params["text"]
+                    h = hashlib.sha256(f"{self.salt}:{raw_text}".encode("utf-8")).hexdigest()[:16]
+                    params_to_save = dict(params)
+                    params_to_save["text"] = f"[REDACTED len={len(raw_text)} hash={h}]"
+
                 with self._conn:
                     self._conn.execute(
                         "INSERT INTO task_history (user_goal, action, params, result, timestamp) VALUES (?, ?, ?, ?, ?)",
-                        (user_goal, action, json.dumps(params), json.dumps(result), time.time()),
+                        (user_goal, action, json.dumps(params_to_save), json.dumps(result), time.time()),
                     )
                 self._flush_encrypted()
             except Exception as exc:
@@ -238,10 +246,47 @@ class PersistentMemoryStore:
                 with self._conn:
                     cursor = self._conn.cursor()
                     cursor.execute("DELETE FROM task_history WHERE user_goal = ?", (goal,))
-                    deleted = cursor.rowcount
+                    deleted += cursor.rowcount
+                    cursor.execute("DELETE FROM user_preferences WHERE key LIKE ?", (f"%{goal}%",))
+                    deleted += cursor.rowcount
                 self._flush_encrypted()
             except Exception as exc:
                 logger.debug(f"Failed to forget goal from persistent memory: {exc}")
+        return deleted
+
+    def forget_today(self, start_time: Optional[float] = None) -> int:
+        """Forget all records logged today."""
+        if start_time is None:
+            t = time.localtime()
+            start_time = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, t.tm_isdst))
+        deleted = 0
+        with self._lock:
+            try:
+                with self._conn:
+                    cursor = self._conn.cursor()
+                    cursor.execute("DELETE FROM task_history WHERE timestamp >= ?", (start_time,))
+                    deleted = cursor.rowcount
+                self._flush_encrypted()
+            except Exception as exc:
+                logger.debug(f"Failed to forget today from persistent memory: {exc}")
+        return deleted
+
+    def forget_app(self, app_name: str) -> int:
+        """Forget all records matching an application name."""
+        deleted = 0
+        pattern = f"%{app_name.lower()}%"
+        with self._lock:
+            try:
+                with self._conn:
+                    cursor = self._conn.cursor()
+                    cursor.execute(
+                        "DELETE FROM task_history WHERE lower(user_goal) LIKE ? OR lower(params) LIKE ?",
+                        (pattern, pattern),
+                    )
+                    deleted = cursor.rowcount
+                self._flush_encrypted()
+            except Exception as exc:
+                logger.debug(f"Failed to forget app {app_name} from persistent memory: {exc}")
         return deleted
 
     def forget_everything(self) -> None:

@@ -160,7 +160,24 @@ pub fn build_prompt(
     expectation_note: &str,
     window_title: &str,
 ) -> String {
+    build_prompt_with_memory(goal, elements_prompt, history, scratchpad, expectation_note, window_title, None)
+}
+
+pub fn build_prompt_with_memory(
+    goal: &str,
+    elements_prompt: &str,
+    history: &str,
+    scratchpad: &str,
+    expectation_note: &str,
+    window_title: &str,
+    memory_context: Option<&str>,
+) -> String {
     let mut sections = vec![format!("### Goal\n{goal}")];
+    if let Some(mem) = memory_context {
+        if !mem.trim().is_empty() {
+            sections.push(format!("### Known user facts\n{}", mem.trim()));
+        }
+    }
     if !window_title.is_empty() {
         sections.push(format!("### Active window\n{window_title}"));
     }
@@ -196,6 +213,8 @@ pub struct PlanArgs {
     pub expectation_note: String,
     pub window_title: String,
     pub image_b64: Option<String>,
+    /// Active confirmed user facts (~1-2k chars) injected into the prompt.
+    pub memory_context: Option<String>,
     /// `None` for the configured planner model; `Some` for the escalation
     /// ladder's third rung.
     pub model: Option<String>,
@@ -248,13 +267,14 @@ impl<'a> Planner<'a> {
             }
         }
 
-        let prompt = build_prompt(
+        let prompt = build_prompt_with_memory(
             &args.goal,
             &args.elements_prompt,
             &args.history,
             &args.scratchpad,
             &args.expectation_note,
             &args.window_title,
+            args.memory_context.as_deref(),
         );
 
         self.calls += 1;

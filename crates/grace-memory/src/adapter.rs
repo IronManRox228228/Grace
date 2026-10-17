@@ -26,10 +26,18 @@ use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+struct ActiveEpisode {
+    goal: String,
+    app: String,
+    started_at_unix: i64,
+    steps: Vec<StepInput>,
+}
+
 pub struct GraceMemoryStore {
     facts: FactStore,
     history: HistoryStore,
     turn: AtomicI64,
+    current_episode: Option<ActiveEpisode>,
 }
 
 impl GraceMemoryStore {
@@ -38,7 +46,12 @@ impl GraceMemoryStore {
         std::fs::create_dir_all(dir)?;
         let facts = FactStore::open(&dir.join("facts.db"))?;
         let history = HistoryStore::open(&dir.join("history.db"), HistoryConfig::default())?;
-        Ok(Self { facts, history, turn: AtomicI64::new(0) })
+        Ok(Self {
+            facts,
+            history,
+            turn: AtomicI64::new(0),
+            current_episode: None,
+        })
     }
 
     /// Direct access to the facts store, for callers (confirmation flows,
@@ -56,33 +69,147 @@ impl GraceMemoryStore {
     }
 }
 
+impl Drop for GraceMemoryStore {
+    fn drop(&mut self) {
+        if let Some(active) = self.current_episode.take() {
+            if !active.steps.is_empty() {
+                let app = if active.app.is_empty() { "unknown".to_string() } else { active.app };
+                let episode = EpisodeInput {
+                    goal: active.goal,
+                    app,
+                    started_at_unix: active.started_at_unix,
+                    duration_ms: (((unix_now() - active.started_at_unix).max(0) * 1000).min(u32::MAX as i64)) as u32,
+                    outcome: Outcome::Unknown,
+                    corrected: false,
+                    steps: active.steps,
+                };
+                let _ = self.history.record_episode(episode);
+            }
+        }
+    }
+}
+
 impl PersistentStore for GraceMemoryStore {
-    fn save_step(&mut self, user_goal: &str, action: &str, params: &Value, result: &Value) {
-        let turn = self.turn.fetch_add(1, Ordering::Relaxed);
+    fn save_step(&mut self, user_goal: &str, app: &str, action: &str, params: &Value, result: &Value) {
+        let _turn = self.turn.fetch_add(1, Ordering::Relaxed);
         let outcome = infer_outcome(result);
         let typed_text = params.get("text").and_then(Value::as_str).map(str::to_string);
-        let episode = EpisodeInput {
-            goal: user_goal.to_string(),
-            // The legacy trait carries no app/window name; see this
-            // module's doc comment.
-            app: "unknown".to_string(),
-            started_at_unix: unix_now(),
-            duration_ms: 0,
-            outcome,
-            corrected: false,
-            steps: vec![StepInput {
-                ts_delta_ms: 0,
-                action: action.to_string(),
-                label: None,
-                outcome: if matches!(outcome, Outcome::Failure) { StepOutcome::Error } else { StepOutcome::Ok },
-                typed_text,
-            }],
+        let step = StepInput {
+            ts_delta_ms: 0,
+            action: action.to_string(),
+            label: None,
+            outcome: if matches!(outcome, Outcome::Failure) { StepOutcome::Error } else { StepOutcome::Ok },
+            typed_text,
         };
-        // A persistence hiccup must never crash a turn - best-effort, like
-        // the Python original's own broad `except Exception` around every
-        // SQLite call.
-        let _ = self.history.record_episode(episode);
-        let _ = turn;
+
+        if let Some(active) = &mut self.current_episode {
+            if active.app.is_empty() && !app.is_empty() && app != "unknown" {
+                active.app = app.to_string();
+            }
+            active.steps.push(step);
+        } else {
+            // Fallback for callers that don't bracket turns with begin_episode / end_episode:
+            let app_name = if app.is_empty() { "unknown".to_string() } else { app.to_string() };
+            let episode = EpisodeInput {
+                goal: user_goal.to_string(),
+                app: app_name,
+                started_at_unix: unix_now(),
+                duration_ms: 0,
+                outcome,
+                corrected: false,
+                steps: vec![step],
+            };
+            let _ = self.history.record_episode(episode);
+        }
+    }
+
+    fn begin_episode(&mut self, user_goal: &str) {
+        if let Some(previous) = self.current_episode.take() {
+            if !previous.steps.is_empty() {
+                let app = if previous.app.is_empty() { "unknown".to_string() } else { previous.app };
+                let episode = EpisodeInput {
+                    goal: previous.goal,
+                    app,
+                    started_at_unix: previous.started_at_unix,
+                    duration_ms: (((unix_now() - previous.started_at_unix).max(0) * 1000).min(u32::MAX as i64)) as u32,
+                    outcome: Outcome::Unknown,
+                    corrected: false,
+                    steps: previous.steps,
+                };
+                let _ = self.history.record_episode(episode);
+            }
+        }
+        self.current_episode = Some(ActiveEpisode {
+            goal: user_goal.to_string(),
+            app: String::new(),
+            started_at_unix: unix_now(),
+            steps: Vec::new(),
+        });
+    }
+
+    fn end_episode(&mut self, outcome_hint: grace_core::memory::EpisodeOutcomeHint) {
+        if let Some(active) = self.current_episode.take() {
+            let outcome = match outcome_hint {
+                grace_core::memory::EpisodeOutcomeHint::Success => Outcome::Success,
+                grace_core::memory::EpisodeOutcomeHint::Failure => Outcome::Failure,
+                grace_core::memory::EpisodeOutcomeHint::Unknown => Outcome::Unknown,
+            };
+            let app = if active.app.is_empty() { "unknown".to_string() } else { active.app };
+            let episode = EpisodeInput {
+                goal: active.goal,
+                app,
+                started_at_unix: active.started_at_unix,
+                duration_ms: (((unix_now() - active.started_at_unix).max(0) * 1000).min(u32::MAX as i64)) as u32,
+                outcome,
+                corrected: false,
+                steps: active.steps,
+            };
+            let _ = self.history.record_episode(episode);
+        }
+    }
+
+    fn render_prompt_context(&self, budget_chars: usize) -> Option<String> {
+        self.facts.render_context(budget_chars).ok().filter(|s| !s.is_empty())
+    }
+
+    fn store_fact_heard(&mut self, topic: &str, group_key: Option<&str>, value: &str) -> std::result::Result<i64, String> {
+        let turn = self.turn.fetch_add(1, Ordering::Relaxed);
+        self.facts
+            .store(topic, group_key, FactKind::Fact, value, NewFactProvenance::UserHeard, turn, false)
+            .map_err(|e| e.to_string())
+    }
+
+    fn confirm_fact(&mut self, topic: &str) -> std::result::Result<(), String> {
+        let turn = self.turn.fetch_add(1, Ordering::Relaxed);
+        self.facts.confirm(topic, turn).map_err(|e| e.to_string())
+    }
+
+    fn forget_fact(&mut self, topic: &str) -> std::result::Result<(), String> {
+        self.facts.forget(topic).map_err(|e| e.to_string())
+    }
+
+    fn check_conflicts(&self, group_key: &str) -> Vec<String> {
+        self.facts
+            .conflicts(group_key)
+            .map(|list| list.into_iter().map(|f| format!("{}: {}", f.topic, f.value)).collect())
+            .unwrap_or_default()
+    }
+
+    fn forget_today(&mut self, start_unix: i64, end_unix: i64) -> std::result::Result<u64, String> {
+        self.history.forget_today(start_unix, end_unix).map_err(|e| e.to_string())
+    }
+
+    fn forget_app(&mut self, app: &str) -> std::result::Result<u64, String> {
+        self.history.forget_app(app).map_err(|e| e.to_string())
+    }
+
+    fn forget_everything(&mut self) -> std::result::Result<(), String> {
+        self.facts.forget_everything().map_err(|e| e.to_string())?;
+        self.history.forget_everything().map_err(|e| e.to_string())
+    }
+
+    fn compact_once(&mut self, batch_limit: usize) -> std::result::Result<(), String> {
+        self.history.compact_once(unix_now(), batch_limit).map(|_| ()).map_err(|e| e.to_string())
     }
 
     fn set_preference(&mut self, key: &str, value: &str) {
@@ -127,10 +254,11 @@ mod tests {
     fn save_step_records_a_queryable_episode() {
         let dir = tempdir().unwrap();
         let mut store = GraceMemoryStore::open(dir.path()).unwrap();
-        store.save_step("open calculator", "open_app", &json!({"name": "Calculator"}), &json!({"status": "ok"}));
+        store.save_step("open calculator", "Calculator", "open_app", &json!({"name": "Calculator"}), &json!({"status": "ok"}));
 
         let results = store.history().search_episodes("calculator", 10).unwrap();
         assert_eq!(results.len(), 1);
+        assert_eq!(results[0].app, "Calculator");
     }
 
     #[test]
@@ -152,5 +280,59 @@ mod tests {
         let mut memory = grace_core::memory::AgentMemory::new("goal", 0, 0.0).with_persistent_store(store);
         memory.add_step("t", "open_app", json!({"name": "Notepad"}), json!({"status": "ok"}), None);
         assert_eq!(memory.steps_taken.len(), 1);
+    }
+
+    #[test]
+    fn multi_step_episode_collapses_at_boundaries() {
+        let dir = tempdir().unwrap();
+        let mut store = GraceMemoryStore::open(dir.path()).unwrap();
+        store.begin_episode("search docs");
+        store.save_step("search docs", "Chrome", "open_app", &json!({"name": "Chrome"}), &json!({"status": "ok"}));
+        store.save_step("search docs", "Chrome", "cua_type_text", &json!({"text": "rust docs"}), &json!({"status": "ok"}));
+        store.end_episode(grace_core::memory::EpisodeOutcomeHint::Success);
+
+        let results = store.history().search_episodes("search docs", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].app, "Chrome");
+        assert_eq!(results[0].step_count, 2);
+    }
+
+    #[test]
+    fn fact_confirmation_flow_and_prompt_injection() {
+        let dir = tempdir().unwrap();
+        let mut store = GraceMemoryStore::open(dir.path()).unwrap();
+        store.store_fact_heard("family:sister", Some("family"), "Priya").unwrap();
+        // Pending fact is not rendered in prompt context
+        assert_eq!(store.render_prompt_context(1000), None);
+
+        // Confirm promotes to user_confirmed and renders in prompt
+        store.confirm_fact("family:sister").unwrap();
+        let rendered = store.render_prompt_context(1000).unwrap();
+        assert!(rendered.contains("family:sister: Priya"));
+
+        // Forget fact removes it
+        store.forget_fact("family:sister").unwrap();
+        assert_eq!(store.render_prompt_context(1000), None);
+    }
+
+    #[test]
+    fn voice_hard_forget_and_compaction() {
+        let dir = tempdir().unwrap();
+        let mut store = GraceMemoryStore::open(dir.path()).unwrap();
+        store.save_step("open chrome", "Chrome", "open_app", &json!({"name": "Chrome"}), &json!({"status": "ok"}));
+        store.save_step("open word", "Word", "open_app", &json!({"name": "Word"}), &json!({"status": "ok"}));
+        assert_eq!(store.history().search_episodes("chrome", 10).unwrap().len(), 1);
+
+        // Forget app
+        store.forget_app("Chrome").unwrap();
+        assert_eq!(store.history().search_episodes("chrome", 10).unwrap().len(), 0);
+        assert_eq!(store.history().search_episodes("word", 10).unwrap().len(), 1);
+
+        // Compact once
+        store.compact_once(100).unwrap();
+
+        // Forget everything
+        store.forget_everything().unwrap();
+        assert_eq!(store.history().search_episodes("word", 10).unwrap().len(), 0);
     }
 }

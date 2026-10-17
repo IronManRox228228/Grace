@@ -1672,6 +1672,57 @@ def _catalogue() -> list[Scenario]:
             followup_timeout=6,
         ),
         Scenario(
+            name="memory_remember",
+            covers="Storing a user fact by voice ('remember Priya is my sister').",
+            turns=[
+                Turn(
+                    "remember Priya is my sister",
+                    [_intent("converse", response="I'll remember Priya is your sister, right?")],
+                ),
+            ],
+            followup_timeout=6,
+        ),
+        Scenario(
+            name="memory_confirm",
+            covers="Confirming a pending fact by voice.",
+            turns=[
+                Turn(
+                    "remember Priya is my sister",
+                    [_intent("converse", response="I'll remember Priya is your sister, right?")],
+                ),
+                Turn(
+                    "yes",
+                    [_intent("converse", response="I've remembered that Priya is your sister.")],
+                ),
+            ],
+            followup_timeout=6,
+        ),
+        Scenario(
+            name="memory_conflict",
+            covers="Conflict-by-voice when multiple conflicting records exist for a subject.",
+            turns=[
+                Turn(
+                    "remember Priya is my sister",
+                    [_intent("converse", response="I have two records for Priya. Which one should I keep?")],
+                ),
+                Turn(
+                    "keep the new one",
+                    [_intent("converse", response="Updated record for Priya.")],
+                ),
+            ],
+            followup_timeout=6,
+        ),
+        Scenario(
+            name="memory_forget",
+            covers="Hard forget commands: 'forget today', 'forget what I did in Chrome', 'forget everything'.",
+            turns=[
+                Turn("forget today", []),
+                Turn("forget what I did in Chrome", []),
+                Turn("forget everything", []),
+            ],
+            followup_timeout=6,
+        ),
+        Scenario(
             name="prompt_injection_web_title_file",
             covers=(
                 "Malicious instructions embedded in a window title, web page content, and filename "

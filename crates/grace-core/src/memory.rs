@@ -64,7 +64,7 @@ pub enum EpisodeOutcomeHint {
 /// them, and PORT_STATUS.md for wiring `AgentLoop` to call them directly as
 /// a follow-up.
 pub trait PersistentStore: Send {
-    fn save_step(&mut self, user_goal: &str, action: &str, params: &Value, result: &Value);
+    fn save_step(&mut self, user_goal: &str, app: &str, action: &str, params: &Value, result: &Value);
     fn set_preference(&mut self, key: &str, value: &str);
     fn get_preference(&self, key: &str) -> Option<String>;
 
@@ -72,23 +72,255 @@ pub trait PersistentStore: Send {
     fn begin_episode(&mut self, _user_goal: &str) {}
     /// Called when a goal ends, if the caller tracks that boundary.
     fn end_episode(&mut self, _outcome: EpisodeOutcomeHint) {}
+
+    /// Render active confirmed facts up to budget_chars for prompt injection.
+    fn render_prompt_context(&self, _budget_chars: usize) -> Option<String> { None }
+
+    /// Record a fact heard in conversation as UserHeard (pending confirmation).
+    fn store_fact_heard(&mut self, _topic: &str, _group_key: Option<&str>, _value: &str) -> Result<i64, String> {
+        Ok(0)
+    }
+
+    /// Confirm a pending fact, promoting it to UserConfirmed provenance.
+    fn confirm_fact(&mut self, _topic: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Hard delete a fact ("forget that").
+    fn forget_fact(&mut self, _topic: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Check if there are conflicting active facts sharing a group key.
+    fn check_conflicts(&self, _group_key: &str) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Hard-delete episodes from today.
+    fn forget_today(&mut self, _start_unix: i64, _end_unix: i64) -> Result<u64, String> {
+        Ok(0)
+    }
+
+    /// Hard-delete all episodes, routines, and rollups for a given app.
+    fn forget_app(&mut self, _app: &str) -> Result<u64, String> {
+        Ok(0)
+    }
+
+    /// Hard-delete everything across facts and history.
+    fn forget_everything(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Run idle compaction once.
+    fn compact_once(&mut self, _batch_limit: usize) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
 pub struct InMemoryStore {
-    pub saved_steps: Vec<(String, String, Value, Value)>,
+    pub saved_steps: Vec<(String, String, String, Value, Value)>, // (goal, app, action, params, result)
     pub preferences: BTreeMap<String, String>,
+    pub facts: BTreeMap<String, (String, bool)>, // topic -> (value, confirmed)
+    pub episodes: Vec<(String, String, EpisodeOutcomeHint)>, // (goal, app, outcome)
+    pub current_episode: Option<(String, String)>,
 }
 
 impl PersistentStore for InMemoryStore {
-    fn save_step(&mut self, user_goal: &str, action: &str, params: &Value, result: &Value) {
-        self.saved_steps.push((user_goal.to_string(), action.to_string(), params.clone(), result.clone()));
+    fn save_step(&mut self, user_goal: &str, app: &str, action: &str, params: &Value, result: &Value) {
+        self.saved_steps.push((user_goal.to_string(), app.to_string(), action.to_string(), params.clone(), result.clone()));
     }
     fn set_preference(&mut self, key: &str, value: &str) {
         self.preferences.insert(key.to_string(), value.to_string());
     }
     fn get_preference(&self, key: &str) -> Option<String> {
         self.preferences.get(key).cloned()
+    }
+    fn begin_episode(&mut self, user_goal: &str) {
+        self.current_episode = Some((user_goal.to_string(), String::new()));
+    }
+    fn end_episode(&mut self, outcome: EpisodeOutcomeHint) {
+        if let Some((goal, app)) = self.current_episode.take() {
+            self.episodes.push((goal, app, outcome));
+        }
+    }
+    fn render_prompt_context(&self, budget_chars: usize) -> Option<String> {
+        let mut out = String::new();
+        for (topic, (value, confirmed)) in &self.facts {
+            if *confirmed {
+                let line = format!("- {}: {}\n", topic, value);
+                if out.len() + line.len() > budget_chars {
+                    break;
+                }
+                out.push_str(&line);
+            }
+        }
+        if out.is_empty() { None } else { Some(out) }
+    }
+    fn store_fact_heard(&mut self, topic: &str, _group_key: Option<&str>, value: &str) -> Result<i64, String> {
+        self.facts.insert(topic.to_string(), (value.to_string(), false));
+        Ok(self.facts.len() as i64)
+    }
+    fn confirm_fact(&mut self, topic: &str) -> Result<(), String> {
+        if let Some((_, confirmed)) = self.facts.get_mut(topic) {
+            *confirmed = true;
+            Ok(())
+        } else {
+            Err("Fact not found".to_string())
+        }
+    }
+    fn forget_fact(&mut self, topic: &str) -> Result<(), String> {
+        self.facts.remove(topic);
+        Ok(())
+    }
+    fn check_conflicts(&self, group_key: &str) -> Vec<String> {
+        self.facts.keys().filter(|k| k.starts_with(group_key)).cloned().collect()
+    }
+    fn forget_today(&mut self, _start_unix: i64, _end_unix: i64) -> Result<u64, String> {
+        let count = self.saved_steps.len() as u64;
+        self.saved_steps.clear();
+        self.episodes.clear();
+        Ok(count)
+    }
+    fn forget_app(&mut self, app: &str) -> Result<u64, String> {
+        let before = self.saved_steps.len();
+        self.saved_steps.retain(|(_, a, _, _, _)| a != app);
+        self.episodes.retain(|(_, a, _)| a != app);
+        Ok((before - self.saved_steps.len()) as u64)
+    }
+    fn forget_everything(&mut self) -> Result<(), String> {
+        self.saved_steps.clear();
+        self.preferences.clear();
+        self.facts.clear();
+        self.episodes.clear();
+        self.current_episode = None;
+        Ok(())
+    }
+}
+
+impl<T: PersistentStore + ?Sized> PersistentStore for std::sync::Arc<std::sync::Mutex<T>> {
+    fn save_step(&mut self, user_goal: &str, app: &str, action: &str, params: &Value, result: &Value) {
+        if let Ok(mut g) = self.lock() {
+            g.save_step(user_goal, app, action, params, result);
+        }
+    }
+    fn set_preference(&mut self, key: &str, value: &str) {
+        if let Ok(mut g) = self.lock() {
+            g.set_preference(key, value);
+        }
+    }
+    fn get_preference(&self, key: &str) -> Option<String> {
+        self.lock().ok().and_then(|g| g.get_preference(key))
+    }
+    fn begin_episode(&mut self, user_goal: &str) {
+        if let Ok(mut g) = self.lock() {
+            g.begin_episode(user_goal);
+        }
+    }
+    fn end_episode(&mut self, outcome: EpisodeOutcomeHint) {
+        if let Ok(mut g) = self.lock() {
+            g.end_episode(outcome);
+        }
+    }
+    fn render_prompt_context(&self, budget_chars: usize) -> Option<String> {
+        self.lock().ok().and_then(|g| g.render_prompt_context(budget_chars))
+    }
+    fn store_fact_heard(&mut self, topic: &str, group_key: Option<&str>, value: &str) -> Result<i64, String> {
+        if let Ok(mut g) = self.lock() {
+            g.store_fact_heard(topic, group_key, value)
+        } else {
+            Err("Lock poisoned".to_string())
+        }
+    }
+    fn confirm_fact(&mut self, topic: &str) -> Result<(), String> {
+        if let Ok(mut g) = self.lock() {
+            g.confirm_fact(topic)
+        } else {
+            Err("Lock poisoned".to_string())
+        }
+    }
+    fn forget_fact(&mut self, topic: &str) -> Result<(), String> {
+        if let Ok(mut g) = self.lock() {
+            g.forget_fact(topic)
+        } else {
+            Err("Lock poisoned".to_string())
+        }
+    }
+    fn check_conflicts(&self, group_key: &str) -> Vec<String> {
+        self.lock().ok().map(|g| g.check_conflicts(group_key)).unwrap_or_default()
+    }
+    fn forget_today(&mut self, start_unix: i64, end_unix: i64) -> Result<u64, String> {
+        if let Ok(mut g) = self.lock() {
+            g.forget_today(start_unix, end_unix)
+        } else {
+            Err("Lock poisoned".to_string())
+        }
+    }
+    fn forget_app(&mut self, app: &str) -> Result<u64, String> {
+        if let Ok(mut g) = self.lock() {
+            g.forget_app(app)
+        } else {
+            Err("Lock poisoned".to_string())
+        }
+    }
+    fn forget_everything(&mut self) -> Result<(), String> {
+        if let Ok(mut g) = self.lock() {
+            g.forget_everything()
+        } else {
+            Err("Lock poisoned".to_string())
+        }
+    }
+    fn compact_once(&mut self, batch_limit: usize) -> Result<(), String> {
+        if let Ok(mut g) = self.lock() {
+            g.compact_once(batch_limit)
+        } else {
+            Err("Lock poisoned".to_string())
+        }
+    }
+}
+
+impl PersistentStore for Box<dyn PersistentStore> {
+    fn save_step(&mut self, user_goal: &str, app: &str, action: &str, params: &Value, result: &Value) {
+        (**self).save_step(user_goal, app, action, params, result);
+    }
+    fn set_preference(&mut self, key: &str, value: &str) {
+        (**self).set_preference(key, value);
+    }
+    fn get_preference(&self, key: &str) -> Option<String> {
+        (**self).get_preference(key)
+    }
+    fn begin_episode(&mut self, user_goal: &str) {
+        (**self).begin_episode(user_goal);
+    }
+    fn end_episode(&mut self, outcome: EpisodeOutcomeHint) {
+        (**self).end_episode(outcome);
+    }
+    fn render_prompt_context(&self, budget_chars: usize) -> Option<String> {
+        (**self).render_prompt_context(budget_chars)
+    }
+    fn store_fact_heard(&mut self, topic: &str, group_key: Option<&str>, value: &str) -> Result<i64, String> {
+        (**self).store_fact_heard(topic, group_key, value)
+    }
+    fn confirm_fact(&mut self, topic: &str) -> Result<(), String> {
+        (**self).confirm_fact(topic)
+    }
+    fn forget_fact(&mut self, topic: &str) -> Result<(), String> {
+        (**self).forget_fact(topic)
+    }
+    fn check_conflicts(&self, group_key: &str) -> Vec<String> {
+        (**self).check_conflicts(group_key)
+    }
+    fn forget_today(&mut self, start_unix: i64, end_unix: i64) -> Result<u64, String> {
+        (**self).forget_today(start_unix, end_unix)
+    }
+    fn forget_app(&mut self, app: &str) -> Result<u64, String> {
+        (**self).forget_app(app)
+    }
+    fn forget_everything(&mut self) -> Result<(), String> {
+        (**self).forget_everything()
+    }
+    fn compact_once(&mut self, batch_limit: usize) -> Result<(), String> {
+        (**self).compact_once(batch_limit)
     }
 }
 
@@ -144,10 +376,24 @@ impl AgentMemory {
         result: Value,
         user_update: Option<String>,
     ) -> &StepRecord {
+        self.add_step_with_app("unknown", thought, action, params, result, user_update)
+    }
+
+    pub fn add_step_with_app(
+        &mut self,
+        app: impl AsRef<str>,
+        thought: impl Into<String>,
+        action: impl Into<String>,
+        params: Value,
+        result: Value,
+        user_update: Option<String>,
+    ) -> &StepRecord {
         self.current_iteration += 1;
         let action = action.into();
+        let app_str = app.as_ref();
+        let effective_app = if app_str.trim().is_empty() { "unknown" } else { app_str.trim() };
         if let Some(store) = self.persistent_store.as_mut() {
-            store.save_step(&self.user_goal, &action, &params, &result);
+            store.save_step(&self.user_goal, effective_app, &action, &params, &result);
         }
         let record = StepRecord {
             step_number: self.current_iteration,
@@ -159,6 +405,22 @@ impl AgentMemory {
         };
         self.steps_taken.push(record);
         self.steps_taken.last().unwrap()
+    }
+
+    pub fn begin_episode(&mut self, user_goal: &str) {
+        if let Some(store) = self.persistent_store.as_mut() {
+            store.begin_episode(user_goal);
+        }
+    }
+
+    pub fn end_episode(&mut self, outcome: EpisodeOutcomeHint) {
+        if let Some(store) = self.persistent_store.as_mut() {
+            store.end_episode(outcome);
+        }
+    }
+
+    pub fn render_prompt_context(&self, budget_chars: usize) -> Option<String> {
+        self.persistent_store.as_ref().and_then(|s| s.render_prompt_context(budget_chars))
     }
 
     /// Record something now known to be true, outside the 3-step window.
@@ -438,7 +700,7 @@ mod tests {
     #[test]
     fn in_memory_store_records_steps_and_preferences() {
         let mut store = InMemoryStore::default();
-        store.save_step("goal", "open_app", &json!({"name": "Notepad"}), &json!({"status": "ok"}));
+        store.save_step("goal", "Notepad", "open_app", &json!({"name": "Notepad"}), &json!({"status": "ok"}));
         assert_eq!(store.saved_steps.len(), 1);
         store.set_preference("voice", "af_bella");
         assert_eq!(store.get_preference("voice"), Some("af_bella".to_string()));

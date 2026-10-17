@@ -220,6 +220,99 @@ fn park_if_confirmation_required(ctx: &mut TurnContext, intent: &Intent, result:
     true
 }
 
+fn today_unix_range() -> (i64, i64) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let start = now - (now % 86400);
+    let end = start + 86400;
+    (start, end)
+}
+
+fn handle_voice_memory_command(ctx: &mut TurnContext, transcript: &str, clean: &str, last_spoken_text: &mut String) -> Option<bool> {
+    if clean == "forget today" || clean == "forget what i did today" {
+        if let Some(store) = ctx.agent_loop.store() {
+            let (start, end) = today_unix_range();
+            if let Ok(mut g) = store.lock() {
+                let _ = g.forget_today(start, end);
+            }
+        }
+        let msg = "I've forgotten everything from today.";
+        *last_spoken_text = msg.to_string();
+        speak(ctx, msg);
+        return Some(true);
+    }
+
+    if clean == "forget everything" || clean == "forget all" {
+        if let Some(store) = ctx.agent_loop.store() {
+            if let Ok(mut g) = store.lock() {
+                let _ = g.forget_everything();
+            }
+        }
+        let msg = "I've forgotten everything.";
+        *last_spoken_text = msg.to_string();
+        speak(ctx, msg);
+        return Some(true);
+    }
+
+    if clean.starts_with("forget what i did in ") {
+        let app = clean.trim_start_matches("forget what i did in ").trim();
+        if let Some(store) = ctx.agent_loop.store() {
+            if let Ok(mut g) = store.lock() {
+                let _ = g.forget_app(app);
+            }
+        }
+        let msg = format!("I've forgotten your history in {app}.");
+        *last_spoken_text = msg.clone();
+        speak(ctx, &msg);
+        return Some(true);
+    }
+
+    if clean == "forget that" {
+        if let Some(store) = ctx.agent_loop.store() {
+            if let Ok(mut g) = store.lock() {
+                let _ = g.forget_fact("last_fact");
+            }
+        }
+        let msg = "I've forgotten that.";
+        *last_spoken_text = msg.to_string();
+        speak(ctx, msg);
+        return Some(true);
+    }
+
+    if clean.starts_with("remember ") {
+        let fact_text = transcript.trim().strip_prefix("remember ").or_else(|| transcript.trim().strip_prefix("Remember ")).unwrap_or(transcript.trim()).trim();
+        let fact_clean = fact_text.strip_prefix("that ").unwrap_or(fact_text);
+        let topic = format!("user:{}", fact_clean.to_lowercase().replace(' ', "_"));
+        let group = "user_facts";
+
+        let conflicts = if let Some(store) = ctx.agent_loop.store() {
+            store.lock().map(|g| g.check_conflicts(group)).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        if conflicts.len() > 1 {
+            let msg = "I have two records for that. Which one should I keep?".to_string();
+            *last_spoken_text = msg.clone();
+            speak(ctx, &msg);
+            return Some(true);
+        }
+
+        if let Some(store) = ctx.agent_loop.store() {
+            if let Ok(mut g) = store.lock() {
+                let _ = g.store_fact_heard(&topic, Some(group), fact_clean);
+            }
+        }
+
+        let prompt = format!("I'll remember {fact_clean}, right?");
+        ctx.agent_loop.park_fact(topic, prompt.clone());
+        *last_spoken_text = prompt.clone();
+        speak(ctx, &prompt);
+        return Some(true);
+    }
+
+    None
+}
+
 /// Handle one activation turn, given the outcome of the (out-of-scope,
 /// real-hardware) listen loop already captured as a `ListenOutcome`.
 /// `elapsed_listen_seconds` is how long that loop actually ran (its
@@ -294,6 +387,11 @@ pub fn handle_activation_turn(
     if ctx.agent_loop.has_pending_confirmation() && resolve_pending_confirmation(ctx, transcript) {
         ctx.sink.emit(GraceEvent::ConversationFinished);
         return true;
+    }
+
+    if let Some(res) = handle_voice_memory_command(ctx, transcript, &clean, last_spoken_text) {
+        ctx.sink.emit(GraceEvent::ConversationFinished);
+        return res;
     }
 
     ctx.sink.emit(GraceEvent::UnderstandingStarted { label: "Understanding request…".to_string() });
@@ -374,6 +472,10 @@ pub fn handle_followup_transcript(ctx: &mut TurnContext, transcript: &str, inten
 
     if ctx.agent_loop.has_pending_confirmation() && resolve_pending_confirmation(ctx, transcript) {
         return true;
+    }
+
+    if let Some(res) = handle_voice_memory_command(ctx, transcript, &clean, last_spoken_text) {
+        return res;
     }
 
     let intent = generate_intent(transcript, intent_system_prompt, ctx.planner_llm, ctx.intent_parser);
@@ -673,5 +775,80 @@ mod tests {
             *started,
             GraceEvent::ToolExecutionStarted { label: "Opening calculator…".to_string(), tool: None, step: None }
         );
+    }
+
+    #[test]
+    fn voice_remember_and_confirm_lifecycle() {
+        use crate::memory::{InMemoryStore, PersistentStore};
+        use std::sync::{Arc, Mutex};
+
+        let store = Arc::new(Mutex::new(InMemoryStore::default()));
+        let mut fixture = Fixture::new(vec![]);
+        fixture.agent_loop.set_store(store.clone());
+
+        // 1. User says "remember Priya is my sister"
+        let mut last = String::new();
+        let res = fixture.run(|ctx| handle_activation_turn(ctx, ListenOutcome::Transcript("remember Priya is my sister".to_string()), 0.0, &|_| {}, "prompt", &mut last));
+        assert!(res);
+        assert!(fixture.agent_loop.has_pending_confirmation());
+        assert_eq!(last, "I'll remember Priya is my sister, right?");
+
+        // Before confirmation, the fact is pending (not confirmed)
+        {
+            let g = store.lock().unwrap();
+            assert_eq!(g.facts.get("user:priya_is_my_sister"), Some(&("Priya is my sister".to_string(), false)));
+            assert_eq!(g.render_prompt_context(1000), None);
+        }
+
+        // 2. User confirms: "yes"
+        let mut last2 = String::new();
+        let res2 = fixture.run(|ctx| handle_activation_turn(ctx, ListenOutcome::Transcript("yes".to_string()), 0.0, &|_| {}, "prompt", &mut last2));
+        assert!(res2);
+        assert!(!fixture.agent_loop.has_pending_confirmation());
+
+        // Now the fact is confirmed and rendered in prompt context
+        {
+            let g = store.lock().unwrap();
+            assert_eq!(g.facts.get("user:priya_is_my_sister"), Some(&("Priya is my sister".to_string(), true)));
+            assert!(g.render_prompt_context(1000).unwrap().contains("Priya is my sister"));
+        }
+    }
+
+    #[test]
+    fn voice_forget_commands() {
+        use crate::memory::{InMemoryStore, PersistentStore};
+        use std::sync::{Arc, Mutex};
+
+        let store = Arc::new(Mutex::new(InMemoryStore::default()));
+        let mut fixture = Fixture::new(vec![]);
+        fixture.agent_loop.set_store(store.clone());
+
+        {
+            let mut g = store.lock().unwrap();
+            g.save_step("open chrome", "chrome", "open_app", &serde_json::json!({}), &serde_json::json!({"status": "ok"}));
+            g.save_step("open word", "word", "open_app", &serde_json::json!({}), &serde_json::json!({"status": "ok"}));
+            assert_eq!(g.saved_steps.len(), 2);
+        }
+
+        // 1. "forget what I did in Chrome"
+        let mut last = String::new();
+        let res = fixture.run(|ctx| handle_activation_turn(ctx, ListenOutcome::Transcript("forget what I did in Chrome".to_string()), 0.0, &|_| {}, "prompt", &mut last));
+        assert!(res);
+        assert_eq!(last, "I've forgotten your history in chrome.");
+        {
+            let g = store.lock().unwrap();
+            assert_eq!(g.saved_steps.len(), 1);
+            assert_eq!(g.saved_steps[0].1, "word");
+        }
+
+        // 2. "forget today"
+        let mut last2 = String::new();
+        let res2 = fixture.run(|ctx| handle_activation_turn(ctx, ListenOutcome::Transcript("forget today".to_string()), 0.0, &|_| {}, "prompt", &mut last2));
+        assert!(res2);
+        assert_eq!(last2, "I've forgotten everything from today.");
+        {
+            let g = store.lock().unwrap();
+            assert_eq!(g.saved_steps.len(), 0);
+        }
     }
 }

@@ -16,6 +16,7 @@ pub(crate) fn open(path: &Path) -> Result<Connection> {
 }
 
 fn apply_pragmas(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
     // auto_vacuum must be set before any tables exist to take effect without
     // a full VACUUM, so callers open the connection and call this before
     // running their schema's CREATE TABLE statements.
@@ -27,6 +28,11 @@ fn apply_pragmas(conn: &Connection) -> Result<()> {
     conn.pragma_update_and_check(None, "journal_mode", "WAL", |_row| Ok(()))?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.pragma_update_and_check(None, "wal_autocheckpoint", 0, |_row| Ok(()))?;
+    conn.pragma_update(None, "cache_size", -64000)?;
+    conn.pragma_update(None, "temp_store", "MEMORY")?;
+    conn.pragma_update_and_check(None, "journal_size_limit", 67108864, |_row| Ok(()))?;
+    conn.pragma_update_and_check(None, "mmap_size", 268435456, |_row| Ok(()))?;
     Ok(())
 }
 

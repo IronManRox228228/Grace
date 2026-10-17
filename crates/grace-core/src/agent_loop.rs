@@ -13,7 +13,7 @@ use crate::dispatcher::Dispatcher;
 use crate::events::EventSink;
 use crate::grounder::{describe_target, GroundedPoint, Grounder};
 use crate::intent::Intent;
-use crate::memory::AgentMemory;
+use crate::memory::{AgentMemory, EpisodeOutcomeHint, PersistentStore};
 use crate::models::LargeLanguageModel;
 use crate::perception::{observe_for_planner, PerceptionSource, ScreenSnapshot};
 use crate::planner::{PlanArgs, PlanError, PlannedStep, Planner};
@@ -22,7 +22,7 @@ use grace_contract::GraceEvent;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Tools whose execution constitutes actually doing something to the
@@ -72,6 +72,8 @@ pub enum Pending {
     Intent { intent: Intent, prompt: String, parked_at: Instant },
     /// A step mid-goal; resuming it continues the loop.
     Step { memory: AgentMemory, step: PlannedStep, prompt: String, parked_at: Instant },
+    /// A fact confirmation waiting for a yes/no ("I'll remember Priya is your sister, right?").
+    Fact { topic: String, prompt: String, parked_at: Instant },
 }
 
 impl Pending {
@@ -79,6 +81,7 @@ impl Pending {
         match self {
             Pending::Intent { prompt, .. } => prompt,
             Pending::Step { prompt, .. } => prompt,
+            Pending::Fact { prompt, .. } => prompt,
         }
     }
 
@@ -86,6 +89,7 @@ impl Pending {
         match self {
             Pending::Intent { parked_at, .. } => *parked_at,
             Pending::Step { parked_at, .. } => *parked_at,
+            Pending::Fact { parked_at, .. } => *parked_at,
         }
     }
 }
@@ -125,11 +129,30 @@ pub struct AgentLoop {
     /// call once this returns. Checked between steps and again immediately
     /// before a step is dispatched.
     cancel: Arc<AtomicBool>,
+    store: Option<Arc<Mutex<dyn PersistentStore>>>,
 }
 
 impl AgentLoop {
     pub fn new(config: AgentLoopConfig) -> Self {
-        Self { config, pending: None, cancel: Arc::new(AtomicBool::new(false)) }
+        Self {
+            config,
+            pending: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+            store: None,
+        }
+    }
+
+    pub fn with_store(mut self, store: Arc<Mutex<dyn PersistentStore>>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    pub fn set_store(&mut self, store: Arc<Mutex<dyn PersistentStore>>) {
+        self.store = Some(store);
+    }
+
+    pub fn store(&self) -> Option<Arc<Mutex<dyn PersistentStore>>> {
+        self.store.clone()
     }
 
     // -- cancellation (R5) ----------------------------------------------
@@ -187,6 +210,11 @@ impl AgentLoop {
         self.pending = Some(Pending::Intent { intent, prompt, parked_at: Instant::now() });
     }
 
+    /// Hold a fact confirmation until the user confirms or declines.
+    pub fn park_fact(&mut self, topic: String, prompt: String) {
+        self.pending = Some(Pending::Fact { topic, prompt, parked_at: Instant::now() });
+    }
+
     /// Continue whatever stopped for a safety confirmation.
     pub fn resume_pending(
         &mut self,
@@ -203,6 +231,27 @@ impl AgentLoop {
         };
 
         match pending {
+            Pending::Fact { topic, .. } => {
+                if approved {
+                    if let Some(store) = self.store.as_mut() {
+                        let _ = store.confirm_fact(&topic);
+                    }
+                    json!({
+                        "status": "ok",
+                        "final_response": "I'll remember that.",
+                        "steps": [],
+                    })
+                } else {
+                    if let Some(store) = self.store.as_mut() {
+                        let _ = store.forget_fact(&topic);
+                    }
+                    json!({
+                        "status": "ok",
+                        "final_response": "Alright, I won't remember that.",
+                        "steps": [],
+                    })
+                }
+            }
             Pending::Intent { intent, .. } => {
                 if !approved {
                     return json!({"status": "ok", "final_response": "Alright, I won't do that.", "steps": []});
@@ -221,6 +270,7 @@ impl AgentLoop {
                     memory.is_completed = true;
                     memory.final_response = Some("Alright, I won't do that.".to_string());
                     memory.add_step(step.thought.clone(), "converse", json!({}), json!({"status": "cancelled"}), Some("Cancelled".to_string()));
+                    memory.end_episode(EpisodeOutcomeHint::Failure);
                     return build_result(&memory);
                 }
 
@@ -243,7 +293,10 @@ impl AgentLoop {
         perception: &mut dyn PerceptionSource,
         sink: &mut dyn EventSink,
     ) -> Value {
-        let memory = AgentMemory::new(user_goal, self.config.max_iterations, self.config.max_seconds);
+        let mut memory = AgentMemory::new(user_goal, self.config.max_iterations, self.config.max_seconds);
+        if let Some(store) = self.store.clone() {
+            memory = memory.with_persistent_store(Box::new(store));
+        }
         self.pending = None;
         self.cancel.store(false, Ordering::SeqCst);
         self.continue_loop(memory, None, None, planner_llm, vision_llm, dispatcher, perception, sink)
@@ -261,6 +314,7 @@ impl AgentLoop {
         perception: &mut dyn PerceptionSource,
         sink: &mut dyn EventSink,
     ) -> Value {
+        memory.begin_episode(&memory.user_goal.clone());
         let mut planner = Planner::new(planner_llm, self.config.planner_max_calls_per_goal);
         let mut consecutive_failures: u32 = 0;
         let mut last_observation: Option<String> = None;
@@ -268,10 +322,12 @@ impl AgentLoop {
 
         while !memory.is_completed && !memory.is_exceeded() {
             if self.cancel_requested() {
+                memory.end_episode(EpisodeOutcomeHint::Failure);
                 return cancel_result(&memory);
             }
 
             if memory.is_out_of_time() {
+                memory.end_episode(EpisodeOutcomeHint::Failure);
                 return timeout_result(&memory);
             }
 
@@ -284,6 +340,7 @@ impl AgentLoop {
             }
 
             let expectation_note = expectation_note(last_step.as_ref(), last_result.as_ref(), &snapshot);
+            let memory_context = memory.render_prompt_context(1500);
 
             let plan_args = PlanArgs {
                 goal: memory.user_goal.clone(),
@@ -293,6 +350,7 @@ impl AgentLoop {
                 expectation_note: expectation_note.clone(),
                 window_title: snapshot.window_title.clone(),
                 image_b64: view.image_b64.clone(),
+                memory_context,
                 model: None,
             };
 
@@ -300,17 +358,22 @@ impl AgentLoop {
                 Ok(Some(step)) => step,
                 Ok(None) => {
                     memory.set_scratchpad("last_error", json!("The previous plan could not be parsed."));
-                    memory.add_step("", "converse", json!({}), json!({"status": "error", "error": "unparseable plan"}), Some("Rethinking…".to_string()));
+                    memory.add_step_with_app(&snapshot.window_title, "", "converse", json!({}), json!({"status": "error", "error": "unparseable plan"}), Some("Rethinking…".to_string()));
                     last_step = None;
                     last_result = None;
                     consecutive_failures += 1;
                     if consecutive_failures >= self.config.max_consecutive_failures {
+                        memory.end_episode(EpisodeOutcomeHint::Failure);
                         return plan_failure_result(&memory);
                     }
                     continue;
                 }
-                Err(PlanError::BudgetExceeded(_)) => return budget_result(&memory),
+                Err(PlanError::BudgetExceeded(_)) => {
+                    memory.end_episode(EpisodeOutcomeHint::Failure);
+                    return budget_result(&memory);
+                }
                 Err(PlanError::RateLimited(e)) => {
+                    memory.end_episode(EpisodeOutcomeHint::Failure);
                     return json!({
                         "status": "rate_limited",
                         "final_response": "I've hit my request limit for now. Please try again shortly.",
@@ -327,6 +390,7 @@ impl AgentLoop {
 
             if rung == "stop" {
                 memory.rule_out(&format!("{} on this screen", step.action), "tried at every tier; nothing changed");
+                memory.end_episode(EpisodeOutcomeHint::Failure);
                 return no_progress_result(&memory, &snapshot);
             }
 
@@ -337,7 +401,10 @@ impl AgentLoop {
                         step = stronger;
                     }
                     Ok(None) => {}
-                    Err(ReplanError::BudgetExceeded) => return budget_result(&memory),
+                    Err(ReplanError::BudgetExceeded) => {
+                        memory.end_episode(EpisodeOutcomeHint::Failure);
+                        return budget_result(&memory);
+                    }
                 }
             }
 
@@ -367,6 +434,7 @@ impl AgentLoop {
             // this step was being worked out must still be honoured before
             // it is ever sent to the desktop.
             if self.cancel_requested() {
+                memory.end_episode(EpisodeOutcomeHint::Failure);
                 return cancel_result(&memory);
             }
 
@@ -386,7 +454,7 @@ impl AgentLoop {
                 if verified {
                     memory.is_completed = true;
                     memory.final_response = Some(final_response(&step, &memory));
-                    memory.add_step(step.thought.clone(), step.action.clone(), step.params.clone(), exec_result, Some(step.user_update.clone()));
+                    memory.add_step_with_app(&snapshot.window_title, step.thought.clone(), step.action.clone(), step.params.clone(), exec_result, Some(step.user_update.clone()));
                     // No ToolExecutionFinished here - matches loop.py, whose
                     // emit for it sits after this "verified -> break" path,
                     // so a converse-completed goal never reaches it.
@@ -398,7 +466,7 @@ impl AgentLoop {
 
             remember_outcome(&step, &exec_result, &mut memory);
             harvest(&exec_result, &mut memory);
-            memory.add_step(step.thought.clone(), step.action.clone(), step.params.clone(), exec_result.clone(), Some(step.user_update.clone()));
+            memory.add_step_with_app(&snapshot.window_title, step.thought.clone(), step.action.clone(), step.params.clone(), exec_result.clone(), Some(step.user_update.clone()));
             sink.emit(GraceEvent::ToolExecutionFinished {
                 tool: Some(step.action.clone()),
                 status: Some(exec_result.get("status").and_then(Value::as_str).unwrap_or("ok").to_string()),
@@ -406,6 +474,9 @@ impl AgentLoop {
             last_step = Some(step);
             last_result = Some(exec_result);
         }
+
+        let outcome = if memory.is_completed { EpisodeOutcomeHint::Success } else { EpisodeOutcomeHint::Failure };
+        memory.end_episode(outcome);
 
         if memory.is_exceeded() && !memory.is_completed {
             return json!({
@@ -466,6 +537,7 @@ impl AgentLoop {
             expectation_note: expectation_note.to_string(),
             window_title: snapshot.window_title.clone(),
             image_b64: view.image_b64.clone(),
+            memory_context: memory.render_prompt_context(1500),
             model: self.config.stronger_model.clone(),
         };
         match planner.plan(&args) {

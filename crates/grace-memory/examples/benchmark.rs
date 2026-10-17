@@ -73,7 +73,19 @@ fn percentile(sorted: &[Duration], p: f64) -> Duration {
     sorted[idx.min(sorted.len() - 1)]
 }
 
+#[cfg(windows)]
+#[link(name = "winmm")]
+extern "system" {
+    fn timeBeginPeriod(uperiod: u32) -> u32;
+    fn timeEndPeriod(uperiod: u32) -> u32;
+}
+
 fn main() {
+    #[cfg(windows)]
+    unsafe {
+        timeBeginPeriod(1);
+    }
+
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("benchmark_history.db");
     let store = HistoryStore::open(&path, HistoryConfig::default()).expect("open history store");
@@ -85,9 +97,14 @@ fn main() {
     let mut ts = start_unix;
     let mut total_steps: u64 = 0;
     let mut total_episodes: u64 = 0;
+    let years: i64 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .or_else(|| std::env::var("BENCHMARK_YEARS").ok().and_then(|s| s.parse().ok()))
+        .unwrap_or(YEARS);
     let overall_start = Instant::now();
 
-    for year in 1..=YEARS {
+    for year in 1..=years {
         let year_start = Instant::now();
         for _day in 0..DAYS_PER_YEAR {
             let mut steps_today = 0usize;
@@ -152,6 +169,22 @@ fn main() {
     println!();
     println!("write latency (record_episode round trip: channel send + one writer-thread transaction + reply):");
     println!("  p50 = {p50:?}, p99 = {p99:?}, p99.9 = {p999:?}, max = {max:?}");
+
+    let mut writer_latencies = store.take_writer_latencies();
+    if !writer_latencies.is_empty() {
+        writer_latencies.sort();
+        let w_p50 = percentile(&writer_latencies, 0.50);
+        let w_p99 = percentile(&writer_latencies, 0.99);
+        let w_p999 = percentile(&writer_latencies, 0.999);
+        let w_max = *writer_latencies.last().unwrap();
+        println!("writer-thread transaction latency (db only):");
+        println!("  p50 = {w_p50:?}, p99 = {w_p99:?}, p99.9 = {w_p999:?}, max = {w_max:?}");
+    }
+
+    #[cfg(windows)]
+    unsafe {
+        timeEndPeriod(1);
+    }
 
     // "What did I do yesterday in Word" - the day immediately before the
     // benchmark's final simulated timestamp, filtered to one app.

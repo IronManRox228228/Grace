@@ -279,6 +279,10 @@ class GraceApp:
             config=self.config,
         )
 
+        # Persistent memory store (PLAN §12, Task 16)
+        from grace.agent.memory import PersistentMemoryStore
+        self.memory_store = PersistentMemoryStore()
+
         # TTS
         if getattr(self.config, "tts_engine", "kokoro") == "sherpa":
             from grace.audio.sherpa_engine import SherpaTTS
@@ -844,6 +848,36 @@ class GraceApp:
         await self._speak_response(response_text)
         return True
 
+    async def _handle_voice_memory_command(self, transcript: str, clean: str) -> Optional[bool]:
+        """Handle voice memory forget commands (Task 16)."""
+        store = getattr(self, "memory_store", None)
+        if not store:
+            return None
+
+        if clean in ("forget today", "forget what i did today"):
+            store.forget_today()
+            msg = "I've forgotten everything from today."
+            self._last_spoken_text = msg
+            await self._speak_response(msg)
+            return True
+
+        if clean in ("forget everything", "forget all"):
+            store.forget_everything()
+            msg = "I've forgotten everything."
+            self._last_spoken_text = msg
+            await self._speak_response(msg)
+            return True
+
+        if clean.startswith("forget what i did in "):
+            app = clean[len("forget what i did in "):].strip()
+            store.forget_app(app)
+            msg = f"I've forgotten your history in {app}."
+            self._last_spoken_text = msg
+            await self._speak_response(msg)
+            return True
+
+        return None
+
     async def _park_if_confirmation_required(self, intent, result: dict) -> bool:
         """Ask the question a refused dispatch came back with. True if parked."""
         if result.get("status") != "confirmation_required":
@@ -1303,6 +1337,11 @@ class GraceApp:
                 await self.ws_server.emit({"type": "ConversationFinished"})
                 return True
 
+        mem_handled = await self._handle_voice_memory_command(transcript, clean_transcript)
+        if mem_handled is not None:
+            await self.ws_server.emit({"type": "ConversationFinished"})
+            return mem_handled
+
         # Task 13 Decision Ladder Rung 1: Pattern fast-path (no model call required)
         ladder_fast_path = None
         if self.fleet_config.is_fleet:
@@ -1591,6 +1630,10 @@ class GraceApp:
         if self.agent_loop.has_pending_confirmation:
             if await self._resolve_pending_confirmation(transcript):
                 return True
+
+        mem_handled = await self._handle_voice_memory_command(transcript, clean_transcript)
+        if mem_handled is not None:
+            return mem_handled
 
         try:
             async with stage("intent_llm"):

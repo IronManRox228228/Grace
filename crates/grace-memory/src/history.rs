@@ -166,8 +166,7 @@ impl Default for HistoryConfig {
 // ---------------------------------------------------------------------------
 
 enum Job {
-    RecordEpisode { input: EpisodeInput, reply: mpsc::Sender<Result<i64>> },
-    Compact { now_unix: i64, batch_limit: usize, reply: mpsc::Sender<Result<CompactionReport>> },
+    RecordEpisode { input: EpisodeInput, reply: mpsc::SyncSender<Result<i64>> },
     ForgetToday { start_unix: i64, end_unix: i64, reply: mpsc::Sender<Result<u64>> },
     ForgetApp { app: String, reply: mpsc::Sender<Result<u64>> },
     ForgetGoal { goal: String, reply: mpsc::Sender<Result<u64>> },
@@ -179,7 +178,9 @@ pub struct HistoryStore {
     sender: SyncSender<Job>,
     writer_thread: Option<JoinHandle<()>>,
     read_conn: Mutex<Connection>,
+    compact_conn: Mutex<Connection>,
     latencies: Arc<Mutex<Vec<Duration>>>,
+    config: HistoryConfig,
     #[allow(dead_code)]
     path: PathBuf,
 }
@@ -190,16 +191,25 @@ impl HistoryStore {
         init_schema(&write_conn)?;
         let salt = ensure_salt(path, &write_conn)?;
         let read_conn = db::open(path)?;
+        let compact_conn = db::open(path)?;
 
         let (sender, receiver) = mpsc::sync_channel(config.channel_capacity.max(1));
         let latencies = Arc::new(Mutex::new(Vec::new()));
         let latencies_for_writer = latencies.clone();
         let writer_thread = std::thread::Builder::new()
             .name("grace-memory-writer".to_string())
-            .spawn(move || writer_loop(write_conn, receiver, config, latencies_for_writer, salt))
+            .spawn(move || writer_loop(write_conn, receiver, latencies_for_writer, salt))
             .expect("failed to spawn the grace-memory writer thread");
 
-        Ok(Self { sender, writer_thread: Some(writer_thread), read_conn: Mutex::new(read_conn), latencies, path: path.to_path_buf() })
+        Ok(Self {
+            sender,
+            writer_thread: Some(writer_thread),
+            read_conn: Mutex::new(read_conn),
+            compact_conn: Mutex::new(compact_conn),
+            latencies,
+            config,
+            path: path.to_path_buf(),
+        })
     }
 
     /// Off the hot path: enqueue on the bounded channel and block only long
@@ -207,19 +217,22 @@ impl HistoryStore {
     /// callers should treat this as fire-and-forget from a background task,
     /// not call it inline in the turn itself.
     pub fn record_episode(&self, input: EpisodeInput) -> Result<i64> {
-        let (reply_tx, reply_rx) = mpsc::channel();
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         self.sender.send(Job::RecordEpisode { input, reply: reply_tx }).map_err(|_| MemoryError::WriterGone)?;
         reply_rx.recv().map_err(|_| MemoryError::WriterGone)?
     }
 
-    /// Idle-time compaction, one small batch at a time (PLAN.md §12.2:
-    /// "runs when the machine is idle, in small batches, at low priority").
-    /// Callers loop this during idle ticks; `batch_limit` bounds how many
-    /// episodes move tiers per call.
+    /// Idle-time compaction, running off the writer thread on its own
+    /// connection (PLAN.md §12.2). Callers loop this during idle ticks;
+    /// `batch_limit` bounds how many episodes move tiers per call.
     pub fn compact_once(&self, now_unix: i64, batch_limit: usize) -> Result<CompactionReport> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender.send(Job::Compact { now_unix, batch_limit, reply: reply_tx }).map_err(|_| MemoryError::WriterGone)?;
-        reply_rx.recv().map_err(|_| MemoryError::WriterGone)?
+        let mut conn = self.compact_conn.lock().unwrap();
+        compact_tx(&mut conn, now_unix, batch_limit, &self.config)
+    }
+
+    /// Idle driver helper for background compaction with small batch sizes.
+    pub fn compact_idle(&self, now_unix: i64) -> Result<CompactionReport> {
+        self.compact_once(now_unix, 100)
     }
 
     /// Voice-scoped hard delete: "forget today". `[start_unix, end_unix)`
@@ -377,7 +390,7 @@ fn load_dict(conn: &Connection, table: &str) -> Result<HashMap<String, i64>> {
     rows.collect::<rusqlite::Result<HashMap<_, _>>>().map_err(Into::into)
 }
 
-fn writer_loop(mut conn: Connection, receiver: Receiver<Job>, config: HistoryConfig, latencies: Arc<Mutex<Vec<Duration>>>, salt: u64) {
+fn writer_loop(mut conn: Connection, receiver: Receiver<Job>, latencies: Arc<Mutex<Vec<Duration>>>, salt: u64) {
     let mut caches = DictCaches::load(&conn).unwrap_or_default();
     for job in receiver.iter() {
         match job {
@@ -386,9 +399,6 @@ fn writer_loop(mut conn: Connection, receiver: Receiver<Job>, config: HistoryCon
                 let result = record_episode_tx(&mut conn, &mut caches, input, salt);
                 latencies.lock().unwrap().push(start.elapsed());
                 let _ = reply.send(result);
-            }
-            Job::Compact { now_unix, batch_limit, reply } => {
-                let _ = reply.send(compact_tx(&mut conn, now_unix, batch_limit, &config));
             }
             Job::ForgetToday { start_unix, end_unix, reply } => {
                 let _ = reply.send(forget_today_tx(&mut conn, start_unix, end_unix));
@@ -558,43 +568,75 @@ fn record_episode_tx(conn: &mut Connection, caches: &mut DictCaches, input: Epis
         })?);
     }
 
-    tx.execute(
-        "INSERT INTO episodes (goal_id, app_id, started_at, duration_ms, step_count, outcome, corrected)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![goal_id, app_id, input.started_at_unix, input.duration_ms, input.steps.len() as i64, input.outcome.as_u8(), input.corrected as i64],
-    )?;
+    {
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO episodes (goal_id, app_id, started_at, duration_ms, step_count, outcome, corrected)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?;
+        stmt.execute(params![
+            goal_id,
+            app_id,
+            input.started_at_unix,
+            input.duration_ms,
+            input.steps.len() as i64,
+            input.outcome.as_u8(),
+            input.corrected as i64
+        ])?;
+    }
     let episode_id = tx.last_insert_rowid();
 
-    tx.execute(
-        "INSERT INTO episodes_fts(rowid, goal_text, app_text) VALUES (?1, ?2, ?3)",
-        params![episode_id, input.goal, input.app],
-    )?;
-
     {
-        let mut stmt = tx.prepare("INSERT INTO steps (episode_id, payload) VALUES (?1, ?2)")?;
-        for blob in &payload_blobs {
-            stmt.execute(params![episode_id, blob])?;
+        let mut stmt = tx.prepare_cached("INSERT INTO episodes_fts(rowid, goal_text, app_text) VALUES (?1, ?2, ?3)")?;
+        stmt.execute(params![episode_id, input.goal, input.app])?;
+    }
+
+    match payload_blobs.len() {
+        0 => {}
+        1 => {
+            let mut stmt = tx.prepare_cached("INSERT INTO steps (episode_id, payload) VALUES (?1, ?2)")?;
+            stmt.execute(params![episode_id, &payload_blobs[0]])?;
+        }
+        2 => {
+            let mut stmt = tx.prepare_cached("INSERT INTO steps (episode_id, payload) VALUES (?1, ?2), (?1, ?3)")?;
+            stmt.execute(params![episode_id, &payload_blobs[0], &payload_blobs[1]])?;
+        }
+        3 => {
+            let mut stmt = tx.prepare_cached("INSERT INTO steps (episode_id, payload) VALUES (?1, ?2), (?1, ?3), (?1, ?4)")?;
+            stmt.execute(params![episode_id, &payload_blobs[0], &payload_blobs[1], &payload_blobs[2]])?;
+        }
+        4 => {
+            let mut stmt = tx.prepare_cached("INSERT INTO steps (episode_id, payload) VALUES (?1, ?2), (?1, ?3), (?1, ?4), (?1, ?5)")?;
+            stmt.execute(params![episode_id, &payload_blobs[0], &payload_blobs[1], &payload_blobs[2], &payload_blobs[3]])?;
+        }
+        _ => {
+            let mut stmt = tx.prepare_cached("INSERT INTO steps (episode_id, payload) VALUES (?1, ?2)")?;
+            for blob in &payload_blobs {
+                stmt.execute(params![episode_id, blob])?;
+            }
         }
     }
 
-    // Routine collapse: the same goal+app+action-sequence bumps counters on
-    // one row instead of adding a new one every time it succeeds again.
+    // Routine collapse: atomic UPSERT in one query for all episodes.
     let sequence_hash = hash_sequence(&action_ids);
     let success = matches!(input.outcome, Outcome::Success);
-    let updated = tx.execute(
-        "UPDATE routines SET count = count + 1,
-             success_count = success_count + ?4,
-             fail_count = fail_count + ?5,
-             last_used_at = ?3
-         WHERE goal_id = ?1 AND app_id = ?2 AND sequence_hash = ?6",
-        params![goal_id, app_id, input.started_at_unix, success as i64, (!success) as i64, sequence_hash],
-    )?;
-    if updated == 0 {
-        tx.execute(
+    {
+        let mut stmt = tx.prepare_cached(
             "INSERT INTO routines (goal_id, app_id, sequence_hash, count, success_count, fail_count, last_used_at)
-             VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)",
-            params![goal_id, app_id, sequence_hash, success as i64, (!success) as i64, input.started_at_unix],
+             VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)
+             ON CONFLICT(goal_id, app_id, sequence_hash) DO UPDATE SET
+                 count = count + 1,
+                 success_count = success_count + excluded.success_count,
+                 fail_count = fail_count + excluded.fail_count,
+                 last_used_at = excluded.last_used_at",
         )?;
+        stmt.execute(params![
+            goal_id,
+            app_id,
+            sequence_hash,
+            success as i64,
+            (!success) as i64,
+            input.started_at_unix
+        ])?;
     }
 
     tx.commit()?;
@@ -618,7 +660,9 @@ fn intern(tx: &rusqlite::Transaction, cache: &mut HashMap<String, i64>, table: &
     if let Some(id) = cache.get(text) {
         return Ok(*id);
     }
-    tx.execute(&format!("INSERT INTO {table} (text) VALUES (?1)"), params![text])?;
+    let sql = format!("INSERT INTO {table} (text) VALUES (?1)");
+    let mut stmt = tx.prepare_cached(&sql)?;
+    stmt.execute(params![text])?;
     let id = tx.last_insert_rowid();
     cache.insert(text.to_string(), id);
     Ok(id)
@@ -650,13 +694,14 @@ fn compact_tx(conn: &mut Connection, now_unix: i64, batch_limit: usize, config: 
     let hot_cutoff_failed = now_unix - config.hot_retention_failed.as_secs() as i64;
     let warm_cutoff = now_unix - config.warm_retention.as_secs() as i64;
 
-    {
-        let tx = conn.transaction()?;
-
-        // Hot -> warm: drop step detail once an episode is past its hot
-        // window. Failed/corrected episodes get the longer window.
+    // Hot -> warm: drop step detail once an episode is past its hot
+    // window. Failed/corrected episodes get the longer window.
+    // Done in sub-batches of up to 1,000 to keep transaction durations minimal and yield.
+    let mut remaining_hot = batch_limit;
+    while remaining_hot > 0 {
+        let chunk_limit = remaining_hot.min(1000);
         let episode_ids: Vec<i64> = {
-            let mut stmt = tx.prepare(
+            let mut stmt = conn.prepare(
                 "SELECT DISTINCT e.id FROM episodes e
                  JOIN steps s ON s.episode_id = e.id
                  WHERE (e.outcome != 1 AND e.corrected = 0 AND e.started_at < ?1)
@@ -664,42 +709,69 @@ fn compact_tx(conn: &mut Connection, now_unix: i64, batch_limit: usize, config: 
                  LIMIT ?3",
             )?;
             let rows = stmt
-                .query_map(params![hot_cutoff_normal, hot_cutoff_failed, batch_limit as i64], |r| r.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
+                .query_map(params![hot_cutoff_normal, hot_cutoff_failed, chunk_limit as i64], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             rows
         };
-        for id in &episode_ids {
-            tx.execute("DELETE FROM steps WHERE episode_id = ?1", params![id])?;
+        if episode_ids.is_empty() {
+            break;
         }
-        report.episodes_moved_hot_to_warm = episode_ids.len() as u64;
+        let chunk_len = episode_ids.len();
+        {
+            let tx = conn.transaction()?;
+            for id in &episode_ids {
+                tx.execute("DELETE FROM steps WHERE episode_id = ?1", params![id])?;
+            }
+            tx.commit()?;
+        }
+        report.episodes_moved_hot_to_warm += chunk_len as u64;
+        remaining_hot = remaining_hot.saturating_sub(chunk_len);
+        std::thread::yield_now();
+        if chunk_len < chunk_limit {
+            break;
+        }
+    }
 
-        // Warm -> cold: past its warm window entirely, so fold it into its
-        // month's roll-up counts and drop the episode row (and its FTS
-        // entry, and any leftover steps) itself.
+    // Warm -> cold: past its warm window entirely, so fold it into its
+    // month's roll-up counts and drop the episode row (and its FTS
+    // entry, and any leftover steps) itself.
+    let mut remaining_warm = batch_limit;
+    while remaining_warm > 0 {
+        let chunk_limit = remaining_warm.min(1000);
         let warm_rows: Vec<(i64, i64, i64, i64, i64)> = {
-            let mut stmt = tx.prepare("SELECT id, goal_id, app_id, started_at, outcome FROM episodes WHERE started_at < ?1 LIMIT ?2")?;
+            let mut stmt = conn.prepare("SELECT id, goal_id, app_id, started_at, outcome FROM episodes WHERE started_at < ?1 LIMIT ?2")?;
             let rows = stmt
-                .query_map(params![warm_cutoff, batch_limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
-                .collect::<rusqlite::Result<_>>()?;
+                .query_map(params![warm_cutoff, chunk_limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             rows
         };
-
-        let mut by_month: HashMap<String, HashMap<(i64, i64, u8), u64>> = HashMap::new();
-        for (_, goal_id, app_id, started_at, outcome) in &warm_rows {
-            let month = unix_to_year_month(*started_at);
-            *by_month.entry(month).or_default().entry((*goal_id, *app_id, *outcome as u8)).or_insert(0) += 1;
+        if warm_rows.is_empty() {
+            break;
         }
-        for (month, counts) in by_month {
-            merge_into_rollup(&tx, &month, counts)?;
+        let chunk_len = warm_rows.len();
+        {
+            let tx = conn.transaction()?;
+            let mut by_month: HashMap<String, HashMap<(i64, i64, u8), u64>> = HashMap::new();
+            for (_, goal_id, app_id, started_at, outcome) in &warm_rows {
+                let month = unix_to_year_month(*started_at);
+                *by_month.entry(month).or_default().entry((*goal_id, *app_id, *outcome as u8)).or_insert(0) += 1;
+            }
+            for (month, counts) in by_month {
+                merge_into_rollup(&tx, &month, counts)?;
+            }
+            for (id, ..) in &warm_rows {
+                tx.execute("DELETE FROM steps WHERE episode_id = ?1", params![id])?;
+                tx.execute("DELETE FROM episodes_fts WHERE rowid = ?1", params![id])?;
+                tx.execute("DELETE FROM episodes WHERE id = ?1", params![id])?;
+            }
+            tx.commit()?;
         }
-        for (id, ..) in &warm_rows {
-            tx.execute("DELETE FROM steps WHERE episode_id = ?1", params![id])?;
-            tx.execute("DELETE FROM episodes_fts WHERE rowid = ?1", params![id])?;
-            tx.execute("DELETE FROM episodes WHERE id = ?1", params![id])?;
+        report.episodes_moved_warm_to_cold += chunk_len as u64;
+        remaining_warm = remaining_warm.saturating_sub(chunk_len);
+        std::thread::yield_now();
+        if chunk_len < chunk_limit {
+            break;
         }
-        report.episodes_moved_warm_to_cold = warm_rows.len() as u64;
-
-        tx.commit()?;
     }
 
     // Size-cap backstop: if the file is still over budget after ordinary
@@ -721,7 +793,11 @@ fn compact_tx(conn: &mut Connection, now_unix: i64, batch_limit: usize, config: 
             None => break,
         }
     }
-    let _ = conn.execute_batch("PRAGMA incremental_vacuum;");
+    // Checkpoint WAL frames back to the database file passively without blocking writers or readers.
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+    if report.episodes_moved_warm_to_cold > 0 || report.months_pruned_for_size_cap > 0 {
+        let _ = conn.execute_batch("PRAGMA incremental_vacuum;");
+    }
     report.size_bytes_after = size_of(conn)?;
     Ok(report)
 }
