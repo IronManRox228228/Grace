@@ -20,9 +20,9 @@ _SECRET_PATTERNS = [
     re.compile(r"\b(?:bearer\s+[a-zA-Z0-9_\-\.]{16,})\b", re.IGNORECASE),
     # Credit/debit card numbers (13-19 digits, with optional spaces, dashes, commas, or dots - R25)
     re.compile(r"\b(?:\d{4}[,\.\s-]+){3}\d{1,4}\b"),
-    # Delimiter-separated passphrases of length >= 14 (e.g. correct-horse-battery-staple - R25)
-    re.compile(r"\b(?=[a-zA-Z_\-\.]{14,})(?:[a-zA-Z]{3,}[-_.]){2,}[a-zA-Z]{3,}\b"),
 ]
+
+_PASSPHRASE_PATTERN = re.compile(r"\b(?=[a-zA-Z_\-\.]{14,})(?:[a-zA-Z]{3,}[-_.]){2,}[a-zA-Z]{3,}\b")
 
 
 _PASSWORD_HINTS = (
@@ -77,6 +77,26 @@ def redact_string(text: str, username: str = "", home: str = "") -> str:
     # 3. Redact secret patterns
     for pattern in _SECRET_PATTERNS:
         out = pattern.sub("<redacted>", out)
+
+    # 4. Redact passphrases (excluding known tools and untrusted delimiters)
+    try:
+        from grace.intent.tools import ALL_TOOLS
+        excluded = {t.name for t in ALL_TOOLS}
+    except Exception:
+        excluded = set()
+    excluded |= {
+        "UNTRUSTED_DATA_START", "UNTRUSTED_DATA_END",
+        "untrusted_data_start", "untrusted_data_end",
+        "set_speech_rate", "cua_list_windows", "cua_secondary_action",
+    }
+    def _sub_passphrase(m: re.Match) -> str:
+        word = m.group(0)
+        if word in excluded or word.lower() in excluded:
+            return word
+        if word.startswith("cua_") or "UNTRUSTED_DATA" in word:
+            return word
+        return "<redacted>"
+    out = _PASSPHRASE_PATTERN.sub(_sub_passphrase, out)
 
     return out
 

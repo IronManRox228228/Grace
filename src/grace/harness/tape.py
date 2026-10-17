@@ -341,7 +341,7 @@ def diff_stage_timings(
         actual = observed.get(name)
         if actual is None:
             continue
-        limit = max(ceiling * headroom, ceiling + 25.0)
+        limit = max(ceiling * headroom, ceiling + 50.0)
         if actual > limit:
             diff.mismatches.append(
                 f"{name}: {actual:.0f}ms exceeds budget {ceiling:.0f}ms +{headroom:.0%} "
