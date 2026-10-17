@@ -475,6 +475,19 @@ class GraceApp:
         if self._llama_process is not None:
             pid = self._llama_process.pid
             log.info(f"Stopping llama-server PID {pid}...")
+            # Kill the tree only while the process is still alive. Once it has
+            # exited, Windows may hand its PID to an unrelated process, and
+            # `taskkill /T` on that PID would kill that process and all its
+            # children.
+            if self._llama_process.poll() is None:
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        capture_output=True,
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
             try:
                 self._llama_process.terminate()
                 try:
@@ -484,10 +497,6 @@ class GraceApp:
                     self._llama_process.wait(timeout=3)
             except Exception as e:
                 log.warning(f"Error terminating llama-server process: {e}")
-            try:
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
-            except Exception:
-                pass
             self._llama_process = None
 
     async def _wait_for_llama_server(self, timeout: int = 120) -> bool:
