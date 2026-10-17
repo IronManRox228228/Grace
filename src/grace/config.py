@@ -76,6 +76,8 @@ class Config:
     hardware_tier: Optional[str] = field(default_factory=lambda: os.getenv("HARDWARE_TIER", None))
     thread_budget: Optional[int] = field(default_factory=lambda: int(os.getenv("THREAD_BUDGET", "0")) if os.getenv("THREAD_BUDGET") else None)
     process_priority_control: bool = field(default_factory=lambda: os.getenv("PROCESS_PRIORITY_CONTROL", "true").lower() in ("true", "1", "yes"))
+    # Micromodel Fleet & Preset Configuration (PLAN §3, §5, Task 13)
+    preset: str = field(default_factory=lambda: os.getenv("GRACE_PRESET", "cpu-fleet"))
 
     # Engine Selection (whisper / sherpa, kokoro / sherpa, etc.)
     stt_engine: str = field(default_factory=lambda: os.getenv("STT_ENGINE", "whisper").lower())
@@ -212,3 +214,8 @@ class Config:
         local model or cloud model, there is no contention.
         """
         return (not self.use_cloud_llm) and bool(self.local_planner_model_path)
+
+    @property
+    def fleet_config(self):
+        from grace.fleet import get_fleet_config
+        return get_fleet_config(self.preset, self)

@@ -6,7 +6,7 @@ Agreed on 2026-09-26. This file is the handoff between sessions: read it before 
 
 ## 0. Where things stand
 
-- **Current phase (from 2026-10-16): the Symphony 2026 Buildathon (Bolna).** It is virtual. Submit by 2026-10-31. The shortlist comes on 11-03, interviews are 11-05 to 11-07, and the finale is on 11-20 in Bengaluru. Until then the micromodel fleet (§3) is deferred and one mid-size model runs every LLM slot (see "Interim" in §3). The demo targets the RTX 4060. CPU-floor work (§2, §4) waits until after the buildathon.
+- **Current phase:** Post-buildathon CPU floor micromodel fleet switchover (completed 2026-10-17, Task 13). The interim single-model setup (Holo3.1-4B) has transitioned to completed history and remains available as the `"gpu-single"` preset. The micromodel fleet (§3, §5) is now the primary active architecture (`"cpu-fleet"` preset default on CPU and iGPU tiers), featuring per-slot models, specialist element scoring, and a 4-rung Decision Ladder.
 - **Branch:** `migration/phase-0-contract-and-harness`. The Python → Rust/Tauri end-to-end port was already in progress before this plan; everything below assumes it continues.
 - **Committed and pushed (2026-09-26):** the user's QoL/accessibility batch plus the nine ship-blocker fixes (`3c7b990`), the 3 s minimum from wake word to idle on a silent activation (`4f108c6`), and phase 2 of the Rust port (`470c51b`; status in `PORT_STATUS.md`).
 - **Tests:** Python 841 passed, 1 skipped (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`). Rust 200 passed, 3 ignored (`cargo test --workspace`).
@@ -47,26 +47,26 @@ Grace detects the hardware at startup and picks where each model runs. Same mode
 
 ## 3. Model stack
 
-**Interim: one model for every slot (decided 2026-10-16, for the buildathon).**
-- **Model:** a single vision-capable model with decent computer-use ability, such as Qwythos 4B or Qwythos 9B v2. The user picks and downloads it. It is served by the existing llama-server (with its vision projector).
-- **It covers every LLM slot:**
-  - tool calling
-  - planning
-  - element selection (picking an element id from the summarised list)
-  - visual grounding when an app exposes no usable tree (the job UI-TARS used to do)
-  - yes/no on confirmation answers
-  - routing
-  
-  That means one prompt format, one server and one set of tapes.
-- **Why:** tuning and benchmarking five small models doesn't fit in 15 days. One model keeps iteration fast while the harness is made reliable on the hardest tasks.
-- **Unchanged:** ASR, TTS, the wake word, and the cloud model as an optional fallback.
-- **UI-TARS is scrapped (2026-10-16).** It is an obsolete computer-use model. Its grounder path and action parser are removed once the interim model's vision grounding is wired, so there is never a window with no visual fallback.
-- **VRAM:** with UI-TARS gone, only one model sits on the 4060's 8 GB. A 9B at Q4 is about 5.5 GB plus the vision projector and KV cache, so it fits but with little headroom.
-- **CPU floor:** neither model is viable on the CPU floor. The floor stays the long-term target.
-- **Bar:** the hardest corpus scenarios pass in a live run on the 4060, not only in replay.
-- **Rule:** every harness fix stays model-agnostic. Prompts live in one place, and there are no model-specific parsing hacks. Switching back to the fleet below is then a config change plus a benchmark.
+**Active architecture: the micromodel fleet (activated 2026-10-17, Task 13).**
+- **Presets:**
+  - `"cpu-fleet"` (Default on CPU floor and iGPU):
+    - Tool calling: LFM2.5-350M / FunctionGemma 270M (GGUF / llama_cpp)
+    - Element selection: GLiNER2.5-Decide (340M) / Julia-1 (ONNX int8)
+    - Yes/No: GLiNER2.5-Decide / Contrastive Head (ONNX)
+    - Routing: Contrastive Head / Fast-path
+    - Vision: LFM2.5-VL-450M (GGUF)
+    - Mid-size fallback: LFM2.5-1.2B-Instruct (GGUF, loaded on-demand only)
+  - `"gpu-single"` (Preserved buildathon setup, for high-spec NPU/dGPU):
+    - Holo3.1-4B serving all slots via single llama-server instance.
+- **Responsibilities Split:** The tool caller decides *what* and describes the target in words without ever seeing the element tree; the decision model / element scorer decides *where* over candidate element summaries.
+- **Decision Safety:** Actions are only dispatched if the top candidate score clears the threshold (0.70) and beats the runner-up by a safety margin (0.15); otherwise it escalates.
 
-**Long-term target: the micromodel fleet.**
+**Historical Interim: one model for every slot (Buildathon phase, 2026-10-16 to 2026-10-17).**
+*(Completed history — now preserved as the `"gpu-single"` preset)*
+- **Model:** A single vision-capable model (Holo3.1-4B / Qwythos 4B) served by llama-server covering all slots during the buildathon sprint.
+- **CPU floor:** Transitioned to the micromodel fleet in Task 13 to enable sub-50ms CPU execution within strict thread budgets.
+
+**The Micromodel Fleet Specification:**
 
 | Slot | Pick | Challenger | Switch if… |
 |---|---|---|---|
@@ -406,16 +406,16 @@ Things Grace knows about the user: contacts and relations, preferences, standing
 4. Fill in `LLAMA_CPP_SHA256` (R4).
 5. Record the demo: 3–4 core flows.
 
-**After the buildathon,** resume the list below.
+**After the buildathon (In progress / Completed):**
 
-1. **Harness trust:** commit or split the current working tree (ask the user first), regenerate and review the tapes, add the corpus-replay gate.
-2. **Runtime slimming:** remove PyTorch; sherpa-onnx for ASR, TTS, VAD and wake word; thread budget; priority control.
-3. **Benchmark 1:** TORGO ASR.
-4. **Word biasing and correction list**, plus switch input for confirmations.
-5. **Benchmarks 2 and 3**, then the fine-tunes.
-6. **Enrollment flow and opportunistic training.**
+1. **Harness trust:** commit or split the current working tree, regenerate and review the tapes, add the corpus-replay gate. *(Completed)*
+2. **Runtime slimming:** remove PyTorch; sherpa-onnx for ASR, TTS, VAD and wake word; thread budget; priority control. *(Completed, Tasks 07-08)*
+3. **Benchmark 1:** TORGO ASR. *(Completed, Task 09)*
+4. **Word biasing and correction list**, plus switch input for confirmations. *(Completed, Task 10)*
+5. **Benchmarks 2 and 3, fine-tunes, and fleet switchover.** *(Completed, Tasks 11-13: fleet switchover active with Decision Ladder and specialist scorer)*
+6. **Enrollment flow and opportunistic training.** *(Task 14, next)*
 7. **Remaining backlog (§10.2)**, in parallel with the Rust port.
-8. **Memory (§12):** `crates/grace-memory`, started 2026-09-26 by a Sonnet subagent.
+8. **Memory (§12):** `crates/grace-memory`.
 
 ---
 

@@ -43,7 +43,7 @@ from grace.stt.whisper_stream import WhisperStreaming
 from grace.llm.gemma_client import GemmaClient, RateLimitError
 from grace.llm.model_swap import ModelSwapManager, LocalModelSpec
 from grace.intent.prompt import get_system_prompt
-from grace.intent.parser import IntentParser
+from grace.intent.parser import Intent, IntentParser
 from grace.automation.computer_use import ComputerUse
 from grace.tools.dispatcher import Dispatcher
 from grace.tts.kokoro_engine import KokoroEngine
@@ -340,6 +340,12 @@ class GraceApp:
             switch_key=getattr(self.config, "switch_key", "space"),
             on_action=self._handle_switch_action,
         )
+
+        # Task 13: Decision Ladder & Micromodel Fleet (PLAN §3, §5)
+        from grace.fleet import get_fleet_config
+        from grace.agent.decision_ladder import DecisionLadder
+        self.fleet_config = get_fleet_config(getattr(self.config, "preset", None), self.config)
+        self.decision_ladder = DecisionLadder(fleet_config=self.fleet_config)
 
 
     # An activation that hears nothing still holds the pill open this long,
@@ -1282,6 +1288,38 @@ class GraceApp:
             if await self._resolve_pending_confirmation(transcript):
                 await self.ws_server.emit({"type": "ConversationFinished"})
                 return True
+
+        # Task 13 Decision Ladder Rung 1: Pattern fast-path (no model call required)
+        ladder_fast_path = None
+        if self.fleet_config.is_fleet:
+            app_idx = getattr(getattr(self, "dispatcher", None), "_app_indexer", None)
+            ladder_fast_path = self.decision_ladder.check_pattern_fast_path(
+                transcript,
+                corrections=self.corrections,
+                app_indexer=app_idx,
+            )
+
+        if ladder_fast_path is not None:
+            log.info(f"DecisionLadder Rung 1 matched: {ladder_fast_path.tool}({ladder_fast_path.params})")
+            trace.mark_event("decision_ladder_rung1_pattern")
+            intent = Intent(tool=ladder_fast_path.tool, params=ladder_fast_path.params)
+            await self.ws_server.emit({"type": "UnderstandingStarted", "label": "Executing command\u2026"})
+            await self.ws_server.emit({"type": "UnderstandingFinished"})
+            complexity = TaskComplexity.FAST_PATH
+            trace.mark_event(f"route_{complexity.value}")
+            log.info(f"Fast-path executing tool '{intent.tool}' with params={intent.params}")
+            async with trace.stage("exec"):
+                result = await self.dispatcher.execute(intent)
+            trace.mark_event("action_done")
+            if await self._park_if_confirmation_required(intent, result):
+                return True
+            response_text = result.get("text")
+            if response_text:
+                async with trace.stage("speak"):
+                    await self._speak_response(response_text)
+                trace.mark_event("spoken_reply_done")
+            await self.ws_server.emit({"type": "ConversationFinished"})
+            return True
 
         # 4. Generate intent
         await self.ws_server.emit({"type": "UnderstandingStarted", "label": "Understanding request\u2026"})

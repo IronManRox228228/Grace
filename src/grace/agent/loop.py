@@ -188,6 +188,15 @@ class AgentLoop:
         self._cancel_hook = None
         AgentLoop._cancel_flag = False
         AgentLoop._typing_cut_off = False
+
+        # Fleet Configuration & Decision Models (PLAN §3, §5, Task 13)
+        from grace.fleet import get_fleet_config
+        from grace.agent.element_scorer import ElementScorer
+        from grace.agent.decision_ladder import DecisionLadder
+        self._fleet_config = get_fleet_config(getattr(config, "preset", None), config)
+        self._element_scorer = ElementScorer(self._fleet_config.get_slot("element_selection"))
+        self._decision_ladder = DecisionLadder(fleet_config=self._fleet_config, element_scorer=self._element_scorer)
+
         try:
             from grace.automation.computer_use import ComputerUse
             ComputerUse.set_cancel_checker(
@@ -390,6 +399,7 @@ class AgentLoop:
             expectation_note = self._expectation_note(last_step, last_result, snapshot)
 
             try:
+                hide_tree = self._fleet_config.is_fleet
                 async with stage(f"plan#{step_no}") as plan_stage:
                     step = await self._planner.plan(
                         goal=memory.user_goal,
@@ -399,6 +409,7 @@ class AgentLoop:
                         expectation_note=expectation_note,
                         window_title=_window_title(snapshot),
                         image_b64=view.image_b64,
+                        hide_tree=hide_tree,
                     )
                     plan_stage.detail(
                         f"{step.action if step else 'unparsed'} "
@@ -499,6 +510,34 @@ class AgentLoop:
                     "pending_step": step.to_dict(),
                     "steps": [s.to_dict() for s in memory.steps_taken],
                 }
+
+            # Decision Ladder (PLAN §3, §5, Task 13):
+            # Split of responsibilities: tool caller decides what; decision model decides where
+            if self._fleet_config.is_fleet and step and step.action in ("cua_click", "cua_secondary_action", "cua_set_value"):
+                if not step.params.get("element_id"):
+                    target_desc = step.params.get("target_name") or step.params.get("name") or step.thought
+                    candidates = getattr(snapshot, "ui_elements", None) or getattr(snapshot, "elements", None) or []
+                    if candidates and target_desc:
+                        ladder_res = self._decision_ladder.resolve_element_action(
+                            tool_action=step.action,
+                            target_description=target_desc,
+                            candidates=candidates,
+                            params=step.params,
+                        )
+                        if ladder_res.target_element_id is not None:
+                            step.params["element_id"] = ladder_res.target_element_id
+                            step.params["_ladder_rung"] = ladder_res.rung.value
+                        else:
+                            step.params["_ladder_rung"] = ladder_res.rung.value
+
+            ladder_rung = step.params.get("_ladder_rung", "rung2_specialists")
+            try:
+                from grace.harness.timing import get_turn_trace
+                current_trace = get_turn_trace()
+                if current_trace:
+                    current_trace.mark_event(f"decision_ladder_{ladder_rung}")
+            except Exception:
+                pass
 
             if step.needs_grounding or rung == "reground":
                 async with stage(f"ground#{step_no}"):

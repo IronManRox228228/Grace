@@ -211,6 +211,7 @@ class Planner:
         scratchpad: str = "",
         expectation_note: str = "",
         window_title: str = "",
+        hide_tree: bool = False,
     ) -> str:
         sections = [f"### Goal\n{goal}"]
         if window_title:
@@ -222,7 +223,19 @@ class Planner:
         # Wrapped as untrusted (R1): every OCR line, DOM label, and UIA name
         # here came off the screen, not from the user, and a hostile page can
         # put anything it wants in an element's name or a line of OCR text.
-        sections.append(f"### What is on screen\n{wrap_untrusted(elements_prompt)}")
+        #
+        # Split of responsibilities (PLAN §3, Task 13): In the fleet setup, the
+        # tool caller never sees the tree. It describes what to interact with in
+        # words (target_name), and the specialist decision model decides where.
+        if not hide_tree:
+            sections.append(f"### What is on screen\n{wrap_untrusted(elements_prompt)}")
+        else:
+            sections.append(
+                "### Target Guidance\n"
+                "Describe what UI element to interact with in plain words using `target_name` "
+                "in params (e.g. `target_name=\"Search button\"`). A specialist decision model "
+                "resolves the exact screen element."
+            )
         if history:
             # Wrapped as untrusted too (R18): a step's recorded result can
             # include up to 300 characters of a tool's raw output - the same
@@ -249,6 +262,7 @@ class Planner:
         window_title: str = "",
         image_b64: Optional[str] = None,
         model: Optional[str] = None,
+        hide_tree: bool = False,
     ) -> Optional[PlannedStep]:
         """Ask for the next step. Returns None if the model gave nothing usable.
 
@@ -268,6 +282,7 @@ class Planner:
             scratchpad=scratchpad,
             expectation_note=expectation_note,
             window_title=window_title,
+            hide_tree=hide_tree,
         )
 
         self._calls += 1
