@@ -100,17 +100,15 @@ if exist "frontend\package.json" (
 echo.
 if !FAILURES! gtr 0 (
     echo ============================================================
-    echo   [PARTIAL / WARNING] Setup finished with !FAILURES! warning(s) or failure(s).
+    echo   [ERROR] Setup failed with !FAILURES! error(s).
     echo   Some components were not set up successfully. Review logs above.
-    echo   To activate the environment: call venv\Scripts\activate.bat
-    echo   To launch Grace: python scripts/launch_grace.py or python -m grace
     echo ============================================================
+    exit /b 1
 ) else (
     echo ============================================================
     echo   [SUCCESS] Full setup complete!
-    echo   All ignored dependencies and binaries (.env, venv, llama cpp, models, libs/*.jar, node_modules) are ready.
+    echo   All dependencies and binaries are ready.
     echo   To activate the environment: call venv\Scripts\activate.bat
     echo   To launch Grace: python scripts/launch_grace.py or python -m grace
     echo ============================================================
 )
-pause

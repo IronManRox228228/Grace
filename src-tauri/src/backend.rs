@@ -134,11 +134,21 @@ impl Backend {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let data_dir = PathBuf::from(local_app_data).join("Grace");
+            let _ = std::fs::create_dir_all(&data_dir);
+            command.env("GRACE_DATA_DIR", data_dir);
+        }
+
         #[cfg(windows)]
         command.creation_flags(CREATE_NO_WINDOW);
 
         let child = match command.spawn() {
             Ok(mut child) => {
+                #[cfg(windows)]
+                Self::assign_to_job_object(&child);
+
                 if let Some(stdout) = child.stdout.take() {
                     relay(stdout, false);
                 }
@@ -158,6 +168,48 @@ impl Backend {
             rust_runtime: None,
         }
     }
+
+#[cfg(windows)]
+fn assign_to_job_object(child: &Child) {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::System::JobObjects::*;
+    use windows::Win32::Foundation::HANDLE;
+
+    unsafe {
+        let job = match CreateJobObjectW(None, None) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("[Grace] Failed to create job object: {e}");
+                return;
+            }
+        };
+
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+        let res = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if let Err(e) = res {
+            eprintln!("[Grace] Failed to set job object limit: {e}");
+            return;
+        }
+
+        let process_handle = HANDLE(child.as_raw_handle() as _);
+        if let Err(e) = AssignProcessToJobObject(job, process_handle) {
+            eprintln!("[Grace] Failed to assign child process to job object: {e}");
+        } else {
+            println!("[Grace] Child process assigned to Job Object with KILL_ON_JOB_CLOSE");
+            let _ = job;
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn assign_to_job_object(_child: &Child) {}
 
     /// Starts `grace_backend`'s `WsEventServer` in-process on a dedicated
     /// multi-thread Tokio runtime. Experimental: see this module's doc

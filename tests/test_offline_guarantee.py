@@ -90,6 +90,7 @@ class TestOfflineGuarantee:
                 from grace.audio.pump import _tape
                 return _tape(chunk)
             def drain(self): return 0
+            def gate(self, duration_seconds: float) -> None: pass
 
         class FakeWhisperModel:
             def __init__(self, transcript):

@@ -145,12 +145,20 @@ class AppIndexer:
         except Exception as e:
             logger.debug(f"UWP App index query skipped: {e}")
 
+    @staticmethod
+    def _is_uninstaller(name: str, path: str = "") -> bool:
+        combined = f"{name} {path}".lower()
+        return any(kw in combined for kw in ("uninstall", "uninst", "setup", "installer"))
+
     def find_app(self, query: str) -> Optional[str]:
         """Find matching application target path or AppID."""
         if not query:
             return None
 
+        import re
+
         q = query.lower().strip()
+        query_wants_uninstaller = any(kw in q for kw in ("uninstall", "uninst", "setup", "installer"))
 
         with self._lock:
             # 1. Exact match in indexed shortcuts / EXEs
@@ -161,15 +169,46 @@ class AppIndexer:
             if q in self._uwp_apps:
                 return f"uwp:{self._uwp_apps[q]}"
 
-            # 3. Partial match in indexed shortcuts
+            # 3. Scored match in indexed shortcuts
+            # (demote_uninstaller, match_tier, name_len, path)
+            candidates = []
             for app_name, app_path in self._apps.items():
-                if q in app_name or app_name in q:
-                    return app_path
+                is_uninst = self._is_uninstaller(app_name, app_path)
+                demote = 1 if (is_uninst and not query_wants_uninstaller) else 0
 
-            # 4. Partial match in UWP apps
+                if app_name.startswith(q):
+                    tier = 0
+                elif re.search(r"\b" + re.escape(q) + r"\b", app_name):
+                    tier = 1
+                elif q in app_name:
+                    tier = 2
+                else:
+                    continue
+                candidates.append((demote, tier, len(app_name), app_path))
+
+            if candidates:
+                candidates.sort(key=lambda c: (c[0], c[1], c[2]))
+                return candidates[0][3]
+
+            # 4. Scored match in UWP apps
+            uwp_candidates = []
             for uwp_name, appid in self._uwp_apps.items():
-                if q in uwp_name or uwp_name in q:
-                    return f"uwp:{appid}"
+                is_uninst = self._is_uninstaller(uwp_name)
+                demote = 1 if (is_uninst and not query_wants_uninstaller) else 0
+
+                if uwp_name.startswith(q):
+                    tier = 0
+                elif re.search(r"\b" + re.escape(q) + r"\b", uwp_name):
+                    tier = 1
+                elif q in uwp_name:
+                    tier = 2
+                else:
+                    continue
+                uwp_candidates.append((demote, tier, len(uwp_name), appid))
+
+            if uwp_candidates:
+                uwp_candidates.sort(key=lambda c: (c[0], c[1], c[2]))
+                return f"uwp:{uwp_candidates[0][3]}"
 
         return None
 

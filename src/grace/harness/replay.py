@@ -68,6 +68,7 @@ class TapeLlm:
     """
 
     def __init__(self, tape: Tape):
+        self.tape = tape
         self._by_digest = tape.llm_by_digest()
         self._consumed: dict[str, int] = {}
         self.requests: list[dict] = []
@@ -85,10 +86,10 @@ class TapeLlm:
                    model=None):
         from ..llm.gemma_client import _redact_images
 
-        # Built to match GemmaClient.chat's recorded request exactly, image
-        # redaction included, so the digest is comparable.
+        effective_model = model or ((self.tape.meta or {}).get("config") or {}).get("gemini_model_name")
         request = {
             "backend": "replay",
+            "model": effective_model,
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": stream,
@@ -97,7 +98,8 @@ class TapeLlm:
         digest = llm_request_digest(request)
         self.requests.append({"request": request, "request_digest": digest})
 
-        record = self._next(digest, messages)
+        fallback_digest = llm_request_digest({**request, "model": None})
+        record = self._next(digest, messages, fallback_digest=fallback_digest)
         error = record.get("error")
 
         if not stream:
@@ -138,8 +140,12 @@ class TapeLlm:
         tokens = [token async for token in stream]
         return "".join(tokens) if tokens else None
 
-    def _next(self, digest: str, messages) -> dict:
+    def _next(self, digest: str, messages, fallback_digest: Optional[str] = None) -> dict:
         records = self._by_digest.get(digest)
+        if not records and fallback_digest:
+            records = self._by_digest.get(fallback_digest)
+            if records:
+                digest = fallback_digest
         index = self._consumed.get(digest, 0)
         if not records or index >= len(records):
             preview = ""
@@ -324,6 +330,9 @@ class TapePump:
     def stop(self) -> None:
         return None
 
+    def gate(self, duration_seconds: float) -> None:
+        pass
+
     @property
     def exhausted(self) -> bool:
         return self._index >= len(self._chunks)
@@ -352,11 +361,13 @@ class TapePump:
         import time as _time
         if self._started is None:
             self._started = _time.perf_counter()
+            self._first_offset = self._chunks[0][0] if self._chunks else 0.0
 
         offset_ms, chunk = self._chunks[self._index]
         self._index += 1
 
-        due = self._started + offset_ms / 1000.0
+        first_off = getattr(self, "_first_offset", 0.0)
+        due = self._started + (offset_ms - first_off) / 1000.0
         delay = due - _time.perf_counter()
         if delay > 0:
             # Capped so one long pause in a recording cannot stall a CI run;
@@ -771,6 +782,8 @@ async def replay(tape: Tape) -> ReplayResult:
                 "failed even though the transcript may match"
             )
 
+    from .tape import diff_transcripts, diff_stage_timings
+
     diffs = [
         diff_event_streams(tape.event_stream, [
             e for e in ws.events if e.get("type") != "TurnTrace"
@@ -778,6 +791,33 @@ async def replay(tape: Tape) -> ReplayResult:
         diff_dispatches(tape.dispatch_calls, dispatcher.calls),
         diff_prompts(tape.llm, llm.requests),
     ]
+
+    if tape.stt:
+        diffs.append(diff_transcripts(tape.stt, whisper.transcripts))
+
+    budget = tape.stage_budget()
+    if budget:
+        observed_stages: dict[str, float] = {}
+        for ev in ws.events:
+            if ev.get("type") == "TurnTrace":
+                for stage in ev.get("trace", {}).get("stages", []):
+                    if stage.get("ms") is not None:
+                        observed_stages[stage["name"]] = max(
+                            observed_stages.get(stage["name"], 0.0), stage["ms"]
+                        )
+        if observed_stages:
+            diffs.append(diff_stage_timings(budget, observed_stages))
+
+    exhaustion_mismatches = [note for note in notes if note.startswith("tape exhausted:")]
+    if exhaustion_mismatches:
+        diffs.append(Diff(kind="tape_exhausted", mismatches=exhaustion_mismatches))
+
+    if pump.ran_dry and pump.paced_faithfully:
+        diffs.append(Diff(kind="pump_ran_dry", mismatches=["recorded audio ended before the VAD closed the turn"]))
+
+    if whisper.digest_misses and pump.paced_faithfully:
+        diffs.append(Diff(kind="digest_misses", mismatches=[f"{whisper.digest_misses} transcription(s) had digest misses"]))
+
     return ReplayResult(tape, diffs, notes)
 
 

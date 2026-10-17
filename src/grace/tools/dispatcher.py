@@ -415,32 +415,34 @@ class Dispatcher:
                 "text": "I can't close apps using wildcards.",
             }
 
+        im_name = name if name.lower().endswith(".exe") else f"{name}.exe"
+        display_name = name[:-4] if name.lower().endswith(".exe") else name
         try:
             # taskkill blocks for up to 10s; keep it off the event loop.
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["taskkill", "/F", "/IM", f"{name}.exe"],
+                ["taskkill", "/F", "/IM", im_name],
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
             if result.returncode == 0:
-                return {"status": "ok", "text": f"I've closed {name}."}
+                return {"status": "ok", "text": f"I've closed {display_name}."}
             else:
                 result2 = await asyncio.to_thread(
                     subprocess.run,
-                    ["taskkill", "/F", "/FI", f"WINDOWTITLE eq {name}"],
+                    ["taskkill", "/F", "/FI", f"WINDOWTITLE eq {display_name}"],
                     capture_output=True,
                     text=True,
                     timeout=10,
                 )
                 if result2.returncode == 0:
-                    return {"status": "ok", "text": f"I've closed {name}."}
-                return {"status": "error", "error": result2.stderr, "text": f"I couldn't find {name} to close it."}
+                    return {"status": "ok", "text": f"I've closed {display_name}."}
+                return {"status": "error", "error": result2.stderr or result.stderr, "text": f"I couldn't find {display_name} to close it."}
         except subprocess.TimeoutExpired:
             return {"status": "error", "error": "Timed out closing app", "text": "I couldn't close that in time."}
         except Exception as e:
-            return {"status": "error", "error": str(e), "text": f"I couldn't close {name}. {e}"}
+            return {"status": "error", "error": str(e), "text": f"I couldn't close {display_name}. {e}"}
 
     async def _search_files(self, params: dict) -> dict:
         query = params.get("query", "")
@@ -786,11 +788,11 @@ class Dispatcher:
                     "volume": new_percent,
                 }
             except Exception as ex:
-                logger.warning(f"pycaw volume adjustment fallback: {ex}")
+                logger.warning(f"pycaw volume adjustment failed: {ex}")
                 return {
-                    "status": "ok",
-                    "text": f"Volume {mode} by {amount}.",
-                    "volume": amount,
+                    "status": "error",
+                    "error": str(ex),
+                    "text": f"Could not adjust volume: {ex}",
                 }
 
         try:
@@ -801,7 +803,9 @@ class Dispatcher:
     async def _lock_computer(self, params: dict) -> dict:
         try:
             ctypes = __import__("ctypes")
-            ctypes.windll.user32.LockWorkStation()
+            res = ctypes.windll.user32.LockWorkStation()
+            if not res:
+                return {"status": "error", "error": "LockWorkStation returned 0", "text": "I couldn't lock your computer."}
             return {"status": "ok", "text": "I've locked your computer."}
         except Exception as e:
             return {"status": "error", "error": str(e), "text": "I couldn't lock your computer."}
@@ -818,16 +822,24 @@ class Dispatcher:
         if not name:
             return {"status": "error", "error": "Missing 'name' parameter"}
 
+        if not os.path.isabs(name) and name != os.path.basename(name):
+            return {
+                "status": "error",
+                "error": f"Refusing '{name}': relative paths with directories are not supported. Specify a file name or absolute path.",
+                "text": "I can only delete a file by its name or full path.",
+            }
+
         def _do_delete():
             user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
             paths_to_try = []
             if os.path.isabs(name):
                 paths_to_try.append(name)
-            paths_to_try.extend([
-                os.path.join(user_profile, "Documents", name),
-                os.path.join(user_profile, "Desktop", name),
-                os.path.join(user_profile, "Downloads", name),
-            ])
+            else:
+                paths_to_try.extend([
+                    os.path.join(user_profile, "Documents", name),
+                    os.path.join(user_profile, "Desktop", name),
+                    os.path.join(user_profile, "Downloads", name),
+                ])
 
             target_path = None
             for path in paths_to_try:
@@ -851,9 +863,22 @@ class Dispatcher:
             except Exception:
                 import win32com.shell.shell as shell
                 import win32com.shell.shellcon as shellcon
-                shell.SHFileOperation(
+                res, aborted = shell.SHFileOperation(
                     (0, shellcon.FO_DELETE, target_path, None, shellcon.FOF_ALLOWUNDO | shellcon.FOF_NOCONFIRMATION, None, None)
                 )
+                if res != 0 or aborted:
+                    return {
+                        "status": "error",
+                        "error": f"SHFileOperation failed with code {res} (aborted={aborted})",
+                        "text": f"I couldn't move '{os.path.basename(target_path)}' to the Recycle Bin.",
+                    }
+
+            if os.path.exists(target_path):
+                return {
+                    "status": "error",
+                    "error": f"File '{target_path}' still exists after deletion attempt.",
+                    "text": f"I couldn't delete '{os.path.basename(target_path)}'.",
+                }
 
             return {
                 "status": "ok",

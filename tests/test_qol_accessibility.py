@@ -70,6 +70,7 @@ class TestSyntheticEarcons:
         FeedbackSounds.play_cancel()
         FeedbackSounds.play_error()
         FeedbackSounds.play_listening()
+        assert mock_play.call_count == 4
 
 
 class TestKokoroSpeedAndCache:
@@ -198,13 +199,15 @@ class TestDispatcherQoLTools:
         mock_hotkey.assert_called_once_with("ctrl", "z")
 
     @pytest.mark.asyncio
-    async def test_describe_screen_handler(self):
+    @patch("win32gui.GetForegroundWindow", return_value=12345)
+    @patch("win32gui.GetWindowText", return_value="Test Foreground App")
+    async def test_describe_screen_handler(self, mock_title, mock_hwnd):
         dispatcher = Dispatcher(computer_use=None)
         intent = Intent(tool="describe_screen", params={})
         result = await dispatcher.execute(intent)
         assert result["status"] == "ok"
-        assert "text" in result
-        assert "window_title" in result
+        assert result["window_title"] == "Test Foreground App"
+        assert "Test Foreground App" in result["text"]
 
     @pytest.mark.asyncio
     async def test_set_speech_rate_handler(self):

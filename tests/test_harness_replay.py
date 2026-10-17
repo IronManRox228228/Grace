@@ -61,6 +61,9 @@ class _ScriptedPump:
     def stop(self):
         return None
 
+    def gate(self, duration_seconds: float) -> None:
+        pass
+
     async def get(self, timeout=None):
         import asyncio
         if self._index >= len(self._chunks):
@@ -148,6 +151,8 @@ async def _run_recorded_turn(scripted):
 
         app = main_mod.GraceApp()
         app._running = True
+        from grace.harness.clock import install_audio_clock_vad
+        install_audio_clock_vad(app)
         app.pump = _ScriptedPump(_speech_then_silence())
         _install_fake_whisper(app, scripted["transcript"])
 

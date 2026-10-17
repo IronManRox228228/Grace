@@ -137,13 +137,18 @@ class WhisperStreaming:
 
     def _transcribe_pcm(self, raw_bytes: bytes) -> str:
         """Convert int16 PCM bytes to float32 audio and run Whisper inference."""
-        if not self._initialized:
-            self._initialize()
-
         buf = raw_bytes
         if len(buf) % 2 != 0:
             buf = buf[:-1]
+        if len(buf) == 0:
+            return ""
+
+        if not self._initialized:
+            self._initialize()
+
         audio_array = np.frombuffer(buf, dtype=np.int16).astype(np.float32) / 32768.0
+        if len(audio_array) == 0:
+            return ""
 
         started = time.perf_counter()
         segments, _info = self._model.transcribe(

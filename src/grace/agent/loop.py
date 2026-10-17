@@ -153,14 +153,16 @@ class AgentLoop:
         grounder: Optional[Grounder] = None,
         max_iterations: Optional[int] = None,
         start_grounding_backend=None,
+        config: Optional[Any] = None,
     ):
+        self._config = config
         self._gemma = gemma
         self._vision_llm = vision_llm or gemma
         self._dispatcher = dispatcher
         self._perception = perception or PerceptionEngine()
         self._ws_server = ws_server
-        self._planner = planner or Planner(gemma, max_calls=_config_int("planner_max_calls_per_goal", 0))
-        coord_format = _config_str("grounder_coordinate_format", "0-1000")
+        self._planner = planner or Planner(gemma, max_calls=_config_int("planner_max_calls_per_goal", 0, config=config))
+        coord_format = _config_str("grounder_coordinate_format", "0-1000", config=config)
         self._grounder = grounder or Grounder(
             self._vision_llm,
             on_demand_start=start_grounding_backend,
@@ -169,17 +171,17 @@ class AgentLoop:
         # `is None`, not `or`: 0 is a meaningful value here (unlimited).
         self._max_iterations = (
             max_iterations if max_iterations is not None
-            else _config_int("agent_max_iterations", DEFAULT_MAX_ITERATIONS)
+            else _config_int("agent_max_iterations", DEFAULT_MAX_ITERATIONS, config=config)
         )
         self._max_consecutive_failures = _config_int(
-            "agent_max_consecutive_plan_failures", DEFAULT_MAX_CONSECUTIVE_PLAN_FAILURES
+            "agent_max_consecutive_plan_failures", DEFAULT_MAX_CONSECUTIVE_PLAN_FAILURES, config=config
         )
         self._max_repeated_actions = _config_int(
-            "agent_max_repeated_actions", DEFAULT_MAX_REPEATED_ACTIONS
+            "agent_max_repeated_actions", DEFAULT_MAX_REPEATED_ACTIONS, config=config
         )
-        self._max_seconds = _config_int("agent_max_seconds", DEFAULT_MAX_SECONDS)
+        self._max_seconds = _config_int("agent_max_seconds", DEFAULT_MAX_SECONDS, config=config)
         self._stronger_model = _config_str(
-            "stronger_planner_model", DEFAULT_STRONGER_PLANNER_MODEL
+            "stronger_planner_model", DEFAULT_STRONGER_PLANNER_MODEL, config=config
         )
         self._pending: Optional[dict[str, Any]] = None
         self._cancel_requested = False
@@ -501,6 +503,10 @@ class AgentLoop:
             if step.needs_grounding or rung == "reground":
                 async with stage(f"ground#{step_no}"):
                     await self._ground(step, snapshot, force=(rung == "reground"))
+
+            # Pin element IDs to the snapshot the planner saw
+            if snapshot and getattr(snapshot, "graph", None) is not None:
+                step.params["_graph"] = snapshot.graph
 
             # Checked again here, not just at the top of the loop: planning
             # (and grounding, above) can take long enough that a "stop" heard
@@ -1060,20 +1066,29 @@ def _rung(attempt: int, before_stop: int) -> str:
     return ESCALATION_LADDER[max(0, index)]
 
 
-def _config_str(field: str, default: str) -> str:
+def _config_str(field: str, default: str, config: Optional[Any] = None) -> str:
     try:
+        if config is not None:
+            value = getattr(config, field, None)
+            if value is not None:
+                return str(value)
         from grace.config import Config
 
-        value = getattr(Config(), field, default)
-        return value if value is not None else default
+        value = getattr(Config(), field, None)
+        return str(value) if value is not None else default
     except Exception:
         return default
 
 
-def _config_int(field: str, default: int) -> int:
+def _config_int(field: str, default: int, config: Optional[Any] = None) -> int:
     try:
+        if config is not None:
+            val = getattr(config, field, None)
+            if val is not None:
+                return int(val)
         from grace.config import Config
 
-        return int(getattr(Config(), field, default) or default)
+        val = getattr(Config(), field, None)
+        return int(val) if val is not None else default
     except Exception:
         return default

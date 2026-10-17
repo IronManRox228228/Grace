@@ -13,8 +13,12 @@ class TestCuaEnhancements:
         self.cua = ComputerUse()
         self.cua.start()
 
-    def test_press_key_mapping(self):
+    def test_press_key_mapping(self, monkeypatch):
         """Verify Return, Control_L, and hotkeys map without throwing PyAutoGUI key errors."""
+        import pyautogui
+        monkeypatch.setattr(pyautogui, "position", lambda: (500, 500))
+        monkeypatch.setattr(pyautogui, "hotkey", lambda *a, **k: None)
+        monkeypatch.setattr(pyautogui, "press", lambda *a, **k: None)
         res1 = self.cua.perform("press_key", {"key": "Return"})
         assert res1.get("ok") is True
 

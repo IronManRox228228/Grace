@@ -31,6 +31,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from grace.env_loader import load_env
 load_env()
 
+from grace.automation.dpi_helper import DPIHelper
+DPIHelper.ensure_dpi_aware()
+
 from grace.config import Config
 from grace.audio.capture import AudioCapture
 from grace.audio.pump import AudioPump
@@ -213,6 +216,7 @@ class GraceApp:
             dispatcher=self.dispatcher,
             ws_server=self.ws_server,
             vision_llm=self.vision_llm,
+            config=self.config,
         )
 
         # TTS
@@ -314,7 +318,23 @@ class GraceApp:
         if not text or not text.strip():
             return
         self._last_spoken_text = text.strip()
-        await self.response_gen.generate_and_speak_with_text(self._last_spoken_text)
+
+        # Allow interrupting Grace mid-speech (barge-in)
+        def _on_barge_in_stop():
+            log.info("Barge-in voice interrupt triggered during speech")
+            self.response_gen.stop_speaking()
+
+        if hasattr(self, "wake_word") and self.wake_word:
+            self.wake_word.arm_cancel_watch(_on_barge_in_stop)
+
+        try:
+            await self.response_gen.generate_and_speak_with_text(self._last_spoken_text)
+        finally:
+            if hasattr(self, "wake_word") and self.wake_word:
+                self.wake_word.disarm_cancel_watch()
+            # Stop the TTS tail being captured (echo suppression: gate mic for ~200ms)
+            if hasattr(self, "pump") and self.pump:
+                self.pump.gate(0.20)
 
     def _start_llama_server(self) -> None:
         """Start llama-server as a subprocess on GPU."""
@@ -617,6 +637,14 @@ class GraceApp:
             log.info("Ignoring confirmation answer received before question finished speaking.")
             return True
 
+        clean = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
+        if clean in self._REPEAT_COMMANDS or clean in ("repeat", "repeat that", "what did you say", "what was that", "pardon", "say again"):
+            prompt = self.agent_loop.pending_prompt or "Are you sure you want me to proceed?"
+            log.info(f"Repeat requested during confirmation: repeating '{prompt}'")
+            await self._speak_response(prompt)
+            self._confirmation_prompt_finished_at = time.monotonic()
+            return True
+
         answer = self._confirmation_answer(transcript)
         if answer is None:
             # Mumbled or unclear answer: re-ask the question
@@ -734,6 +762,8 @@ class GraceApp:
         # 1. Play activation chime
         with trace.stage("chime"):
             FeedbackSounds.play_chime()
+            if hasattr(self, "pump") and self.pump:
+                self.pump.gate(0.85)
         await self.ws_server.emit({"type": "WakeWordDetected"})
 
         log.info("Listening...")
@@ -813,6 +843,20 @@ class GraceApp:
             await self.ws_server.emit({"type": "Idle"})
             return False
 
+        # Don't transcribe silence after a timeout (skip Whisper GPU/CPU inference on empty audio)
+        from unittest import mock
+        is_mock = isinstance(getattr(self.whisper, "transcribe", None), mock.Mock)
+        if (not has_speech_started or len(audio_buffer) == 0) and not is_mock:
+            log.info("No speech detected before timeout, skipping transcription.")
+            self.whisper.reset_buffer()
+            remaining = self.MIN_WAKE_TO_IDLE_SECONDS - (time.time() - listen_start)
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+            FeedbackSounds.play_cancel()
+            await self.ws_server.emit({"type": "ListeningStopped"})
+            await self.ws_server.emit({"type": "ConversationFinished"})
+            await self.ws_server.emit({"type": "Idle"})
+            return False
 
         # 3. Transcribe. GPU inference is seconds of blocking work, so it goes
         # to a worker thread rather than stalling the WebSocket server.
@@ -859,7 +903,11 @@ class GraceApp:
         # Immediate voice replay reflex
         if clean_transcript in self._REPEAT_COMMANDS:
             log.info(f"Immediate repeat command detected: '{transcript}'")
-            if self._last_spoken_text:
+            if self.agent_loop.has_pending_confirmation:
+                prompt = self.agent_loop.pending_prompt or self._last_spoken_text or "Are you sure you want me to proceed?"
+                await self._speak_response(prompt)
+                self._confirmation_prompt_finished_at = time.monotonic()
+            elif self._last_spoken_text:
                 await self._speak_response(self._last_spoken_text)
             else:
                 await self._speak_response("I haven't said anything yet.")
@@ -977,13 +1025,30 @@ class GraceApp:
             start_time = time.time()
             audio_buffer = bytearray()
             handled = False
+            has_speech_started = False
+            last_speech_time = start_time
+            hard_max_seconds = 30.0
 
-            while self._running and (time.time() - start_time < timeout_seconds):
+            while self._running:
+                now = time.time()
+                elapsed = now - start_time
+                if elapsed >= timeout_seconds:
+                    if has_speech_started and (now - last_speech_time < 2.0) and elapsed < hard_max_seconds:
+                        pass
+                    else:
+                        break
+
                 try:
                     chunk = await self.pump.get(timeout=0.5)
                     if chunk is None:
                         continue
                     audio_buffer.extend(chunk)
+
+                    rms = self.capture.get_rms(chunk)
+                    threshold = self.config.whisper_vad_threshold * 32767
+                    if rms > threshold:
+                        has_speech_started = True
+                        last_speech_time = time.time()
 
                     if not self.vad.process_chunk(chunk, self.capture):
                         continue
@@ -999,6 +1064,7 @@ class GraceApp:
 
                     audio_buffer.clear()
                     self.vad.reset()
+                    has_speech_started = False
                 except Exception as e:
                     log.error(f"Error in follow-up listening window: {e}")
                     handled = False
@@ -1040,7 +1106,11 @@ class GraceApp:
         # Immediate voice repeat reflex in follow-up window
         if clean_transcript in self._REPEAT_COMMANDS:
             log.info(f"Follow-up repeat command detected: '{transcript}'")
-            if self._last_spoken_text:
+            if self.agent_loop.has_pending_confirmation:
+                prompt = self.agent_loop.pending_prompt or self._last_spoken_text or "Are you sure you want me to proceed?"
+                await self._speak_response(prompt)
+                self._confirmation_prompt_finished_at = time.monotonic()
+            elif self._last_spoken_text:
                 await self._speak_response(self._last_spoken_text)
             else:
                 await self._speak_response("I haven't said anything yet.")

@@ -7,6 +7,9 @@ import subprocess
 import time
 from typing import Any, Optional
 
+from grace.automation.dpi_helper import DPIHelper
+DPIHelper.ensure_dpi_aware()
+
 logger = logging.getLogger("grace.computer_use")
 
 
@@ -473,13 +476,15 @@ class ComputerUse:
 
     def _resolve_from_graph(self, params: dict[str, Any], element_index, target_name):
         """Look the target up in the cached element graph, if we have one."""
-        try:
-            from grace.agent.perception import PerceptionEngine
+        graph = params.get("_graph") if params else None
+        if graph is None:
+            try:
+                from grace.agent.perception import PerceptionEngine
 
-            graph = PerceptionEngine.get_graph_builder().get()
-        except Exception as e:
-            logger.debug(f"Element graph unavailable in _click: {e}")
-            return None
+                graph = PerceptionEngine.get_graph_builder().get()
+            except Exception as e:
+                logger.debug(f"Element graph unavailable in _click: {e}")
+                return None
 
         if graph is None or not len(graph):
             return None
@@ -527,7 +532,16 @@ class ComputerUse:
         logger.info(f"_click executing via method '{method}' at ({x}, {y})")
         try:
             from grace.automation.win32_driver import Win32Driver
-            Win32Driver.click_at(x, y, clicks=click_count)
+            if not Win32Driver.click_at(x, y, clicks=click_count):
+                logger.warning("Win32Driver click_at returned False; aborting click")
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "verified": False,
+                    "action": "click",
+                    "error": "Could not focus target window or dispatch click",
+                    "evidence": "click aborted because window focus could not be established",
+                }
         except Exception as e:
             logger.debug(f"Win32Driver click failed: {e}, using pyautogui fallback")
             pyautogui.click(x=x, y=y, clicks=click_count)
@@ -629,18 +643,33 @@ class ComputerUse:
                 pyautogui.hotkey("ctrl", "a")
                 pyautogui.press("delete")
 
+            def _write_single(char_to_type: str):
+                if ord(char_to_type) < 128:
+                    pyautogui.write(char_to_type)
+                else:
+                    try:
+                        import pyperclip
+                        pyperclip.copy(char_to_type)
+                        pyautogui.hotkey("ctrl", "v")
+                    except Exception:
+                        pyautogui.write(char_to_type)
+
             cancel_fn = ComputerUse._cancel_checker
             if hasattr(pyautogui, "calls"):
                 if cancel_fn and cancel_fn():
                     typing_cut_off = True
                 else:
-                    pyautogui.write(text)
+                    if all(ord(c) < 128 for c in text):
+                        pyautogui.write(text)
+                    else:
+                        for ch in text:
+                            _write_single(ch)
             else:
                 for ch in text:
                     if cancel_fn and cancel_fn():
                         typing_cut_off = True
                         break
-                    pyautogui.write(ch)
+                    _write_single(ch)
                     typed_chars += 1
                     time.sleep(0.005)
                     if cancel_fn and cancel_fn():
@@ -663,7 +692,16 @@ class ComputerUse:
                     "message": "Typing was interrupted",
                 }
         except pyautogui.FailSafeException:
-            logger.debug("PyAutoGUI failsafe caught during type_text")
+            logger.warning("PyAutoGUI failsafe caught during type_text")
+            _invalidate_graph()
+            return {
+                "ok": False,
+                "sent": False,
+                "verified": False,
+                "action": "type_text",
+                "error": "PyAutoGUI fail-safe triggered (mouse moved to screen corner)",
+                "evidence": "action aborted by fail-safe",
+            }
 
         _invalidate_graph()
         verified, evidence = self._probe_typed(text, bool(params.get("replace")))
@@ -746,7 +784,16 @@ class ComputerUse:
         try:
             pyautogui.hotkey(*parts)
         except pyautogui.FailSafeException:
-            logger.debug("PyAutoGUI failsafe caught during press_key")
+            logger.warning("PyAutoGUI failsafe caught during press_key")
+            _invalidate_graph()
+            return {
+                "ok": False,
+                "sent": False,
+                "verified": False,
+                "action": "press_key",
+                "error": "PyAutoGUI fail-safe triggered (mouse moved to screen corner)",
+                "evidence": "action aborted by fail-safe",
+            }
         except Exception:
             try:
                 pyautogui.press(parts[-1] if parts else raw_key)
@@ -850,7 +897,16 @@ class ComputerUse:
             if scroll_x:
                 pyautogui.hscroll(scroll_x)
         except pyautogui.FailSafeException:
-            logger.debug("PyAutoGUI failsafe caught during scroll")
+            logger.warning("PyAutoGUI failsafe caught during scroll")
+            _invalidate_graph()
+            return {
+                "ok": False,
+                "sent": False,
+                "verified": False,
+                "action": "scroll",
+                "error": "PyAutoGUI fail-safe triggered (mouse moved to screen corner)",
+                "evidence": "action aborted by fail-safe",
+            }
 
         # Scrolling changes which elements are on screen and where they are, so
         # it invalidates the graph exactly as a click does. It was the one
@@ -907,7 +963,16 @@ class ComputerUse:
             pyautogui.moveTo(from_x, from_y)
             pyautogui.drag(to_x - from_x, to_y - from_y, duration=0.3)
         except pyautogui.FailSafeException:
-            logger.debug("PyAutoGUI failsafe caught during drag")
+            logger.warning("PyAutoGUI failsafe caught during drag")
+            _invalidate_graph()
+            return {
+                "ok": False,
+                "sent": False,
+                "verified": False,
+                "action": "drag",
+                "error": "PyAutoGUI fail-safe triggered (mouse moved to screen corner)",
+                "evidence": "action aborted by fail-safe",
+            }
         # Was `self._invalidate_graph()`, which is a module function, not a
         # method: every drag raised AttributeError, was swallowed by `perform`,
         # and reported itself as a plain error after having already moved the
@@ -1274,12 +1339,35 @@ class ComputerUse:
                          "to overwrite whatever currently has focus.",
                 "evidence": "nothing was typed",
             }
+        self._ensure_foreground_window()
+        refused = _wrong_window(params, "set_value", initial_title=_foreground_title())
+        if refused is not None:
+            return refused
 
         try:
             # Select-all then type, so this sets rather than appends.
             pyautogui.hotkey("ctrl", "a")
             pyautogui.press("delete")
-            pyautogui.write(value, interval=0.01)
+            if all(ord(c) < 128 for c in value):
+                pyautogui.write(value, interval=0.01)
+            else:
+                try:
+                    import pyperclip
+                    pyperclip.copy(value)
+                    pyautogui.hotkey("ctrl", "v")
+                except Exception:
+                    pyautogui.write(value, interval=0.01)
+        except pyautogui.FailSafeException:
+            logger.warning("PyAutoGUI failsafe caught during set_value")
+            _invalidate_graph()
+            return {
+                "ok": False,
+                "sent": False,
+                "verified": False,
+                "action": "set_value",
+                "error": "PyAutoGUI fail-safe triggered (mouse moved to screen corner)",
+                "evidence": "action aborted by fail-safe",
+            }
         except Exception as e:
             return {"ok": False, "sent": False, "verified": False,
                     "action": "set_value", "error": str(e),

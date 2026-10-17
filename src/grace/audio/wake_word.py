@@ -49,6 +49,7 @@ class WakeWordDetector:
         # the same native Kaldi object from outside that thread with no
         # synchronization at all. One lock shared by both sides closes that race.
         self._rec_lock = threading.Lock()
+        self._reset_requested = False
 
         # Set only while an agent goal is running (R5): lets a spoken
         # "stop"/"cancel" interrupt a running task without needing the wake
@@ -134,6 +135,12 @@ class WakeWordDetector:
 
         try:
             with self._rec_lock:
+                if self._reset_requested:
+                    self._reset_requested = False
+                    try:
+                        self._rec.Reset()
+                    except Exception:
+                        pass
                 is_final = self._rec.AcceptWaveform(data)
                 res = self._rec.Result() if is_final else None
                 part = self._rec.PartialResult() if not is_final else None
@@ -225,12 +232,7 @@ class WakeWordDetector:
         """Reset detection event."""
         self._event.clear()
         self._audio_buffer.clear()
-        if self._rec is not None:
-            try:
-                with self._rec_lock:
-                    self._rec.Reset()
-            except Exception:
-                pass
+        self._reset_requested = True
 
     def arm_cancel_watch(self, callback: Callable[[], None]) -> None:
         """Start watching recognized speech for a spoken "stop"/"cancel".

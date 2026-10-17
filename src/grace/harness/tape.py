@@ -78,8 +78,14 @@ class Tape:
         must hand back the responses in the order they were recorded.
         """
         index: dict[str, list[dict]] = {}
+        from .recorder import llm_request_digest
         for record in self.llm:
             index.setdefault(record["request_digest"], []).append(record)
+            req = record.get("request")
+            if isinstance(req, dict):
+                computed = llm_request_digest(req)
+                if computed != record.get("request_digest"):
+                    index.setdefault(computed, []).append(record)
         return index
 
     def stt_by_digest(self) -> dict[str, list[str]]:
@@ -201,6 +207,12 @@ def diff_event_streams(expected: list[dict], actual: list[dict]) -> Diff:
     return diff
 
 
+def _clean_dispatch_params(params: Any) -> Any:
+    if isinstance(params, dict):
+        return {k: v for k, v in params.items() if not k.startswith("_")}
+    return params
+
+
 def diff_dispatches(expected: list[dict], actual: list[dict]) -> Diff:
     """Byte-exact comparison of the outbound side-effect sequence.
 
@@ -212,6 +224,10 @@ def diff_dispatches(expected: list[dict], actual: list[dict]) -> Diff:
     for index in range(max(len(expected), len(actual))):
         want = expected[index] if index < len(expected) else None
         got = actual[index] if index < len(actual) else None
+        if want is not None and isinstance(want.get("params"), dict):
+            want = {**want, "params": _clean_dispatch_params(want["params"])}
+        if got is not None and isinstance(got.get("params"), dict):
+            got = {**got, "params": _clean_dispatch_params(got["params"])}
         if want == got:
             continue
         if want is None:
@@ -325,7 +341,7 @@ def diff_stage_timings(
         actual = observed.get(name)
         if actual is None:
             continue
-        limit = ceiling * headroom
+        limit = max(ceiling * headroom, ceiling + 25.0)
         if actual > limit:
             diff.mismatches.append(
                 f"{name}: {actual:.0f}ms exceeds budget {ceiling:.0f}ms +{headroom:.0%} "

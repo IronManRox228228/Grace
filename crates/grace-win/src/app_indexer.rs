@@ -48,6 +48,11 @@ pub enum AppTarget {
 /// (either direction) over indexed shortcuts, then the same two passes over
 /// UWP apps. `apps` and `uwp_apps` are keyed by the same lowercase name
 /// `_apps`/`_uwp_apps` use in Python.
+fn is_uninstaller(name: &str, path: &str) -> bool {
+    let combined = format!("{name} {path}").to_lowercase();
+    ["uninstall", "uninst", "setup", "installer"].iter().any(|kw| combined.contains(kw))
+}
+
 pub fn find_app(
     query: &str,
     apps: &BTreeMap<String, String>,
@@ -55,6 +60,9 @@ pub fn find_app(
 ) -> Option<AppTarget> {
     let q = query.to_lowercase();
     let q = q.trim();
+    if q.is_empty() {
+        return None;
+    }
 
     if let Some(path) = apps.get(q) {
         return Some(AppTarget::Path(path.clone()));
@@ -62,16 +70,55 @@ pub fn find_app(
     if let Some(appid) = uwp_apps.get(q) {
         return Some(AppTarget::Uwp(appid.clone()));
     }
+
+    let query_wants_uninstaller = ["uninstall", "uninst", "setup", "installer"]
+        .iter()
+        .any(|kw| q.contains(kw));
+
+    let mut candidates = Vec::new();
     for (app_name, app_path) in apps {
-        if app_name.contains(q) || q.contains(app_name.as_str()) {
-            return Some(AppTarget::Path(app_path.clone()));
-        }
+        let is_uninst = is_uninstaller(app_name, app_path);
+        let demote = if is_uninst && !query_wants_uninstaller { 1 } else { 0 };
+
+        let tier = if app_name.starts_with(q) {
+            0
+        } else if app_name.split(|c: char| !c.is_alphanumeric()).any(|w| w == q) {
+            1
+        } else if app_name.contains(q) {
+            2
+        } else {
+            continue;
+        };
+        candidates.push((demote, tier, app_name.len(), app_path.clone()));
     }
+
+    if !candidates.is_empty() {
+        candidates.sort_by_key(|c| (c.0, c.1, c.2));
+        return Some(AppTarget::Path(candidates[0].3.clone()));
+    }
+
+    let mut uwp_candidates = Vec::new();
     for (uwp_name, appid) in uwp_apps {
-        if uwp_name.contains(q) || q.contains(uwp_name.as_str()) {
-            return Some(AppTarget::Uwp(appid.clone()));
-        }
+        let is_uninst = is_uninstaller(uwp_name, "");
+        let demote = if is_uninst && !query_wants_uninstaller { 1 } else { 0 };
+
+        let tier = if uwp_name.starts_with(q) {
+            0
+        } else if uwp_name.split(|c: char| !c.is_alphanumeric()).any(|w| w == q) {
+            1
+        } else if uwp_name.contains(q) {
+            2
+        } else {
+            continue;
+        };
+        uwp_candidates.push((demote, tier, uwp_name.len(), appid.clone()));
     }
+
+    if !uwp_candidates.is_empty() {
+        uwp_candidates.sort_by_key(|c| (c.0, c.1, c.2));
+        return Some(AppTarget::Uwp(uwp_candidates[0].3.clone()));
+    }
+
     None
 }
 
@@ -177,5 +224,15 @@ mod tests {
             plan_launch("some random app", &apps(), &BTreeMap::new()),
             LaunchPlan::RawFallback("some random app".to_string())
         );
+    }
+
+    #[test]
+    fn zoom_matches_app_not_uninstaller() {
+        let mut apps = BTreeMap::new();
+        apps.insert("uninstall zoom".to_string(), "C:/Program Files/Zoom/uninstall.exe".to_string());
+        apps.insert("zoom workplace".to_string(), "C:/Program Files/Zoom/bin/zoom.exe".to_string());
+
+        let target = find_app("zoom", &apps, &BTreeMap::new());
+        assert_eq!(target, Some(AppTarget::Path("C:/Program Files/Zoom/bin/zoom.exe".to_string())));
     }
 }

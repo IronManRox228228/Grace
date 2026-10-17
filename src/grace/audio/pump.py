@@ -50,6 +50,7 @@ class AudioPump:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._dropped = 0
+        self._gate_until = 0.0
 
     @property
     def is_running(self) -> bool:
@@ -59,6 +60,12 @@ class AudioPump:
     def dropped_chunks(self) -> int:
         """Chunks discarded because the loop could not keep up. Diagnostic only."""
         return self._dropped
+
+    def gate(self, duration_seconds: float) -> None:
+        """Gate incoming mic input for duration_seconds (echo suppression for chime and TTS)."""
+        import time
+        self._gate_until = max(self._gate_until, time.monotonic() + duration_seconds)
+        self.drain()
 
     def start(self, loop: Optional[asyncio.AbstractEventLoop] = None) -> "AudioPump":
         if self._running:
@@ -86,13 +93,17 @@ class AudioPump:
         logger.info(f"Audio pump stopped ({self._dropped} chunks dropped)")
 
     def _reader(self) -> None:
+        consecutive_errors = 0
         while self._running:
             try:
                 chunk = self._capture.get_chunk()
+                consecutive_errors = 0
             except Exception as e:
-                logger.warning(f"Audio pump read failed: {e}")
-                # Don't spin at full speed on a dead device.
-                threading.Event().wait(0.05)
+                consecutive_errors += 1
+                logger.warning(f"Audio pump read failed (consecutive={consecutive_errors}): {e}")
+                # Don't spin at full speed on an unplugged or dead device. Back off up to 1.0s.
+                backoff = min(1.0, 0.05 * (2 ** min(consecutive_errors, 5)))
+                threading.Event().wait(backoff)
                 continue
             if not chunk or not self._running:
                 continue
@@ -107,6 +118,9 @@ class AudioPump:
 
     def _offer(self, chunk: bytes) -> None:
         """Enqueue on the loop thread, evicting the oldest chunk when full."""
+        import time
+        if time.monotonic() < self._gate_until:
+            return
         q = self._queue
         if q is None:
             return

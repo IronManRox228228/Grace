@@ -123,7 +123,7 @@ class PlannedStep:
         return {
             "thought": self.thought,
             "action": self.action,
-            "params": self.params,
+            "params": {k: v for k, v in self.params.items() if not k.startswith("_")},
             "expect": self.expect,
             "is_completed": self.is_completed,
             "final_response": self.final_response,

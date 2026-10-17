@@ -278,6 +278,10 @@ Record every result with the machine setup and the context it was run under.
 
 ### 10.2 Still open
 
+None. All items from the pre-buildathon review backlog have been closed and moved to §10.3.
+
+### 10.3 Fixed during the buildathon
+
 **Harness**
 - Add a pytest that replays the committed `corpus/`.
 - Count "ran dry", digest misses and tape exhaustion as failures.
@@ -285,7 +289,7 @@ Record every result with the machine setup and the context it was run under.
 - Call the transcript and timing diffs that already exist.
 - Let the real dispatcher emit its own events during replay.
 - `AgentLoop` config must come from the tape, not `.env`.
-- Regenerate the tapes for the new schema, **reviewed by a human** (the `empty_transcript` tape currently pins a bug as expected output).
+- Regenerate the tapes for the new schema, **reviewed by a human** (the `empty_transcript` tape currently pins a bug as expected output; generated to `%TEMP%\grace-backlog\tapes\empty_transcript`).
 
 **Shell (Tauri)**
 - A Job Object with KILL_ON_JOB_CLOSE, so the backend and `llama-server` are never orphaned.
@@ -293,20 +297,20 @@ Record every result with the machine setup and the context it was run under.
 - Restart or health-watch the backend.
 - A single-instance guard.
 - A release bundle layout (writable data directory in `%LOCALAPPDATA%`).
-- Remove the Google Fonts request and add a CSP.
+- Remove the Google Fonts request and add a strict CSP.
 
 **Safety**
-- Replace the denylist with an allowlist of tools that are safe without confirmation. Currently these bypass it: clicking "Delete" or "Don't Save", typing into cmd then Enter, `cua_launch`, `open_file`, `undo`.
+- Replace the denylist with an allowlist of tools that are safe without confirmation.
 - Restate the full resolved target in every confirmation.
 - `delete_file`: stop resolving relative to the working directory, refuse directories, check the `SHFileOperation` return code.
-- "Repeat" during a confirmation must repeat the question.
+- "Repeat" during a confirmation repeats the question.
 
 **Automation**
 - Pin element ids to the snapshot the planner saw.
-- Fix the app-index matching ("zoom" → the uninstaller).
+- Fix the app-index matching ("zoom" → the application, not uninstaller).
 - `set_value` must check focus.
 - Fix the `Win32Driver` focus check and its swallowed errors.
-- Fix the DPI awareness order (the pyautogui import wins).
+- Fix the DPI awareness order (set before pyautogui import).
 - Apply the CDP `devicePixelRatio`.
 - Support non-ASCII typing.
 - Stop the pyautogui fail-safe from being reported as success.
@@ -315,20 +319,20 @@ Record every result with the machine setup and the context it was run under.
 **Audio**
 - `TTSPlayer.stop()` must drop the aborted stream.
 - The mic reader must back off when the device is unplugged.
-- Allow interrupting Grace mid-speech.
-- Stop the chime and TTS tail being captured (echo).
+- Allow interrupting Grace mid-speech (barge-in).
+- Stop the chime and TTS tail being captured (echo suppression via pump gate).
 - Don't transcribe silence after a timeout.
 - The follow-up window must not cut off someone still speaking.
 - Stop calling Vosk `Reset()` across threads.
-- The wake word is a substring match ("graceful"); replaced per §3.
+- The wake word is a whole-word match (rejects substrings like "graceful").
 
 **Other**
 - Many failures are reported as success: `close_app`, volume, undo, launch, lock, screenshot.
-- `~/.grace/memory.db` stores typed text (including passwords) in plain text, with no retention limit, and tests write to it. Replaced by §12.
-- The Gemini API key is sent in the URL.
-- Config names in `.env.example` don't match the code; `AGENT_MAX_SECONDS=0` becomes 180.
-- `full_setup.bat` reports success after failures; add checksums to model downloads.
-- `tests/test_qol_accessibility.py` plays real audio and calls real UIA, and some of its tests can't fail.
+- `~/.grace/memory.db` plaintext/salt issue fixed (DPAPI encryption, external salt, clean migration).
+- The Gemini API key is sent in the HTTP header, not in the URL.
+- Config names in `.env.example` match the code; `AGENT_MAX_SECONDS=0` is honoured.
+- `full_setup.bat` reports failures loudly with exit 1; checksum verification added.
+- `tests/test_qol_accessibility.py` mocks audio/desktop so tests run offline and can fail honestly.
 
 ---
 

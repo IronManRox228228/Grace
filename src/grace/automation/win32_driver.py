@@ -172,7 +172,9 @@ class Win32Driver:
                 # settle below can be shortened too.
                 already_foreground = cls._is_foreground(target_hwnd)
                 if not already_foreground:
-                    cls._ensure_foreground(target_hwnd)
+                    if not cls._ensure_foreground(target_hwnd):
+                        logger.warning(f"Win32Driver: failed to focus target window {target_hwnd}")
+                        return False
         except Exception as e:
             # pywin32 optional; focus activation is best-effort
             logger.debug(f"Win32Driver focus step skipped: {e}")
@@ -192,11 +194,12 @@ class Win32Driver:
             if i:
                 # Comfortably inside the default 500ms double-click interval.
                 time.sleep(0.05)
-            cls.send_input_click(x, y)
+            if not cls.send_input_click(x, y):
+                return False
         return True
 
     @classmethod
-    def send_input_click(cls, x: int, y: int):
+    def send_input_click(cls, x: int, y: int) -> bool:
         """Send absolute mouse click event via native Windows SendInput API with virtual screen metrics.
 
         A non-destructive MOVE event is dispatched before DOWN/UP so that web
@@ -244,6 +247,8 @@ class Win32Driver:
                 user32.mouse_event(flags_up, norm_x, norm_y, 0, 0)
 
             logger.info(f"Win32Driver: SendInput mouse click executed at absolute ({x}, {y})")
+            return True
 
         except Exception as e:
-            logger.debug(f"SendInput click error: {e}")
+            logger.warning(f"SendInput click error: {e}")
+            return False

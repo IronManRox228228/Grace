@@ -186,6 +186,7 @@ class UiaProvider:
         title: str = "",
         class_name: str = "",
         start_id: int = 1,
+        timeout: float = 3.0,
     ) -> list[ElementNode]:
         """Collect interactive elements from the given window."""
         uia = _get_uia()
@@ -207,8 +208,9 @@ class UiaProvider:
 
         elements: list[ElementNode] = []
         counter = [start_id]
+        deadline = time.monotonic() + timeout
         try:
-            self._walk(uia, root, elements, counter, 0, max_depth, cap, base_frame, "")
+            self._walk(uia, root, elements, counter, 0, max_depth, cap, base_frame, "", deadline)
         except Exception as e:
             logger.debug(f"UIA walk aborted: {e}")
 
@@ -225,8 +227,9 @@ class UiaProvider:
         cap: int,
         frame: str,
         container: str,
+        deadline: Optional[float] = None,
     ) -> None:
-        if len(elements) >= cap or depth > max_depth:
+        if len(elements) >= cap or depth > max_depth or (deadline and time.monotonic() > deadline):
             return
 
         try:
@@ -235,7 +238,7 @@ class UiaProvider:
             return
 
         while child is not None:
-            if len(elements) >= cap:
+            if len(elements) >= cap or (deadline and time.monotonic() > deadline):
                 return
 
             control_type = _cached(child, uia.props["control_type"], 0)
@@ -256,7 +259,7 @@ class UiaProvider:
                     child_container = name[:60]
                 self._walk(
                     uia, child, elements, counter, depth + 1, max_depth, cap,
-                    child_frame, child_container,
+                    child_frame, child_container, deadline,
                 )
 
             try:

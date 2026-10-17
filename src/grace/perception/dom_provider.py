@@ -172,6 +172,7 @@ class DomProvider:
             return []
 
         raw_elements = payload.get("elements") or []
+        dpr = float(payload.get("dpr") or 1.0)
         # Viewport -> screen. The page's own screenX/screenY plus the chrome
         # height (outer minus inner) gives the content origin.
         origin_x = payload.get("ox", 0)
@@ -182,9 +183,9 @@ class DomProvider:
         elements: list[ElementNode] = []
         for index, raw in enumerate(raw_elements, start=1):
             try:
-                left = int(origin_x + chrome_w // 2 + raw["x"])
-                top = int(origin_y + chrome_h + raw["y"])
-                width, height = int(raw["w"]), int(raw["h"])
+                left = int(origin_x + chrome_w // 2 + raw["x"] * dpr)
+                top = int(origin_y + chrome_h + raw["y"] * dpr)
+                width, height = int(raw["w"] * dpr), int(raw["h"] * dpr)
             except Exception:
                 continue
 

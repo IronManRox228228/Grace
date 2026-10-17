@@ -243,13 +243,19 @@ class UIInspector:
         max_depth: int,
         cap: int,
         start_index: int = 1,
+        deadline: Optional[float] = None,
     ) -> None:
         """Depth-limited recursive TreeWalker over the UIA tree.
 
         Prunes nameless container nodes (Group/Pane/Window) mid-traversal so
         deep media buttons surface without exploding the element count.
         """
-        if len(elements) >= cap or depth > max_depth:
+        import time
+
+        if deadline is None:
+            deadline = time.monotonic() + 3.0
+
+        if time.monotonic() > deadline or len(elements) >= cap or depth > max_depth:
             return
 
         try:
@@ -259,7 +265,7 @@ class UIInspector:
             return
 
         while child is not None:
-            if len(elements) >= cap:
+            if time.monotonic() > deadline or len(elements) >= cap:
                 return
 
             raw_ctl_type = None
@@ -279,10 +285,10 @@ class UIInspector:
                 except Exception:
                     cname = ""
                 if cname or depth < 3:
-                    self._walk_uia_tree(uia, child, elements, depth + 1, max_depth, cap)
+                    self._walk_uia_tree(uia, child, elements, depth + 1, max_depth, cap, start_index=start_index, deadline=deadline)
             else:
                 # Unknown / generic: descend to reach wrapped media controls.
-                self._walk_uia_tree(uia, child, elements, depth + 1, max_depth, cap)
+                self._walk_uia_tree(uia, child, elements, depth + 1, max_depth, cap, start_index=start_index, deadline=deadline)
 
             try:
                 child = walker.GetNextSiblingElement(child)

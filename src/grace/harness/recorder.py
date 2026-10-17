@@ -261,14 +261,8 @@ class Recorder:
             logger.warning(f"Recorder: failed to write {path}: {exc}")
 
 
-# The fields of an LLM request that determine what the model produces. The
-# digest covers exactly these, so a replay can find the recorded response.
-#
-# "backend" and "model" are recorded for diagnostics but deliberately excluded:
-# they say which endpoint served the request, not what was asked. Including
-# them would make every tape unreplayable the moment the request came from
-# somewhere else - which is precisely the situation the Rust port creates.
-LLM_REQUEST_KEY_FIELDS = ("messages", "temperature", "max_tokens", "stream")
+# LLM request fields that determine what the model produces, including the model name.
+LLM_REQUEST_KEY_FIELDS = ("messages", "temperature", "max_tokens", "stream", "model")
 
 
 def llm_request_digest(request: Any) -> str:

@@ -321,6 +321,9 @@ class ScriptedPump:
     def stop(self) -> None:
         return None
 
+    def gate(self, duration_seconds: float) -> None:
+        pass
+
     def drain(self) -> int:
         """Load the next turn's audio. Returns the number of chunks dropped."""
         dropped = len(self._active)
