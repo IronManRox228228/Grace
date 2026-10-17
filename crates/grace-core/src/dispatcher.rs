@@ -210,11 +210,21 @@ pub struct Dispatcher<'a> {
     /// (`grace-backend::WsEventServer` in the wired-up shell).
     pub emitted_labels: Vec<String>,
     last_search_results: Vec<String>,
+    tape_dispatches: Option<Vec<Value>>,
+    tape_index: usize,
 }
 
 impl<'a> Dispatcher<'a> {
     pub fn new(cua: Option<&'a mut dyn CuaBridge>, actions: &'a mut dyn SystemActions) -> Self {
-        Self { cua, actions, emitted_labels: Vec::new(), last_search_results: Vec::new() }
+        Self { cua, actions, emitted_labels: Vec::new(), last_search_results: Vec::new(), tape_dispatches: None, tape_index: 0 }
+    }
+
+    /// Replay mode: supply pre-recorded dispatch outcomes from a tape.
+    /// Matches Python's `TapeDispatcher` - executes no external commands,
+    /// emits the exact start/finished events, and returns the recorded result.
+    pub fn with_tape_dispatches(mut self, dispatches: Vec<Value>) -> Self {
+        self.tape_dispatches = Some(dispatches);
+        self
     }
 
     /// Execute a parsed intent, with no event emission - for callers (the
@@ -240,10 +250,30 @@ impl<'a> Dispatcher<'a> {
         if let Some(refusal) = confirmation_required(intent, confirmed) {
             return refusal;
         }
-        self.dispatch(intent, sink)
+        if let Some(records) = &self.tape_dispatches {
+            let tool = intent.tool.as_str();
+            let params = &intent.params;
+            let label = if let Some(action) = tool.strip_prefix("cua_") {
+                CUA_LABELS.get(action).map(|s| s.to_string()).unwrap_or_else(|| format!("{action}…"))
+            } else {
+                tool_started_label(tool, params)
+            };
+            self.emitted_labels.push(label.clone());
+            sink.emit(GraceEvent::ToolExecutionStarted { label, tool: None, step: None });
+            self.emitted_labels.push("<finished>".to_string());
+            sink.emit(GraceEvent::ToolExecutionFinished { tool: None, status: None });
+
+            if self.tape_index < records.len() {
+                let rec = &records[self.tape_index];
+                self.tape_index += 1;
+                return rec.get("result").cloned().unwrap_or(json!({"status": "ok"}));
+            }
+            return json!({"status": "ok"});
+        }
+        self.dispatch(intent, confirmed, sink)
     }
 
-    fn dispatch(&mut self, intent: &Intent, sink: &mut dyn EventSink) -> Value {
+    fn dispatch(&mut self, intent: &Intent, confirmed: bool, sink: &mut dyn EventSink) -> Value {
         let tool = intent.tool.as_str();
         let params = &intent.params;
 
@@ -260,8 +290,8 @@ impl<'a> Dispatcher<'a> {
             "close_app" => self.close_app(params),
             "search_files" => self.search_files(params),
             "open_file" => self.open_file(params),
-            "read_pdf" => json!({"status": "error", "error": "read_pdf is not implemented in this port yet"}),
-            "summarize_pdf" => json!({"status": "error", "error": "summarize_pdf is not implemented in this port yet"}),
+            "read_pdf" => self.read_pdf(params, confirmed),
+            "summarize_pdf" => self.summarize_pdf(params, confirmed),
             "adjust_volume" => self.adjust_volume(params),
             "lock_computer" => self.lock_computer(),
             "open_calculator" => self.open_calculator(),
@@ -411,6 +441,17 @@ impl<'a> Dispatcher<'a> {
             Ok(()) => json!({"status": "ok", "text": format!("I've opened {name}.")}),
             Err(e) => json!({"status": "error", "error": e, "text": format!("I couldn't open {name}. {e}")}),
         }
+    }
+
+    fn read_pdf(&mut self, params: &Value, confirmed: bool) -> Value {
+        let path = params.get("path").and_then(Value::as_str).unwrap_or("");
+        let query = params.get("query").and_then(Value::as_str);
+        crate::pdf::read_pdf_document(path, query, confirmed)
+    }
+
+    fn summarize_pdf(&mut self, params: &Value, confirmed: bool) -> Value {
+        let path = params.get("path").and_then(Value::as_str).unwrap_or("");
+        crate::pdf::summarize_pdf_document(path, confirmed)
     }
 
     fn adjust_volume(&mut self, params: &Value) -> Value {

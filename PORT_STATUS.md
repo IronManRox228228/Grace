@@ -637,22 +637,14 @@ still apply unchanged. New this phase:
   manually and passed against the real desktop), `grace-harness` (13 - up
   from 9, includes the real turn replay), `grace-backend` (11 - up from
   10, includes the real socket-to-turn-engine end-to-end test).
-- **Rust, with `grace-memory` (this update)**: **233 passed, 3 ignored, 0
-  failed** across the whole workspace (`cargo test --workspace`) - the 200
-  above plus `grace-memory`'s new **33** (facts + history + adapter +
-  redact/secret/db). `grace-core` also gained the additive
-  `begin_episode`/`end_episode` trait methods (see "grace-memory (PLAN.md
-  §12)" above) with no test-count change, since they're default no-ops.
-  Reproduced with `LLAMA_SERVER_URL` pointed at an unreachable port to work
-  around this session's unrelated port-8080 occupant (see above); without
-  that override, `grace-backend`'s `demo_turn` test can fail
-  non-deterministically for a reason that predates and is unrelated to
-  this update.
-- **Python**: re-ran `./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`
-  again for this update: **841 passed, 1 skipped** - still exactly
-  PLAN.md §0's baseline, unchanged. `git status` confirms this update only
-  touches `crates/grace-memory/` (new), `crates/grace-core/src/memory.rs`,
-  root `Cargo.toml`/`Cargo.lock`, and `PORT_STATUS.md`.
+- **Rust, end of Task 19 (this update)**: **287 passed, 3 ignored, 0
+  failed** across the whole workspace (`cargo test --workspace`):
+  `grace-contract` (4), `grace-core` (175), `grace-audio` (6), `grace-backend` (11),
+  `grace-memory` (39), `grace-models` (10), `grace-win` (27 passed + 3 ignored),
+  and `grace-harness` (15).
+  All **30 of 30** tapes in `corpus/` replay cleanly through the Rust backend.
+- **Python**: re-ran `./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`:
+  **1136 passed, 1 skipped**, unchanged.
 
 ## Remaining work, roughly in the order it should happen
 
@@ -675,13 +667,16 @@ still apply unchanged. New this phase:
    - Replaced `NoopSystemActions`/`ScriptedPerception` in live backend turns (`run_live_turn` and `run_live_turn_default`), while keeping scripted ones for automated tests and replay.
    - Manual example `crates/grace-win/examples/real_desktop.rs` documenting manual verification with optional `--actuate` flag, never run in automated CI.
    - All tests in `grace-win` test pure logic only (summaries, coordinate maths, input encoding, guard decisions) with fakes: 27 passed, 3 ignored, 0 failed.
-3. **`snapshots.jsonl` tape reader + `ScriptedPerception` wiring**: extends
-   `turn_replay.rs` to agentic-goal tapes (`agentic_two_step`,
-   `agentic_step_failed`, etc.) - the agent loop itself is fully ready for
-   this; only the perception-replay plumbing is missing.
-4. **`read_pdf`/`summarize_pdf`**: needs `pypdf`-equivalent extraction (a
-   Rust PDF text crate) and the TF-IDF-ish RAG chunking `grace.rag` does;
-   contained, no architectural risk.
+3. ~~**`snapshots.jsonl` tape reader + `ScriptedPerception` wiring**~~ **Fully completed in Task 19**:
+   - `crates/grace-harness/src/turn_replay.rs`: Implemented `rebuild_snapshot` parsing window title, DPI, screen bounds, and the complete `ElementNode` hierarchy from taped `snapshots.jsonl`.
+   - Implemented `TapeDispatcher` dispatch mode in `crates/grace-core/src/dispatcher.rs` allowing taped tool outcomes to replay without desktop mutation.
+   - Extended `turn_replay` across all agentic goal tapes (`agentic_two_step`, `agentic_step_failed`, etc.); all **30 of 30** tapes pass replay cleanly.
+   - Divergence table documented: Python's `TapeLlm` fails on SHA256 prompt hashing due to tool schema evolution, while Rust deterministic replay succeeds with exact contract parity.
+4. ~~**`read_pdf`/`summarize_pdf`**: pure-Rust PDF tools~~ **Fully completed in Task 19**:
+   - `crates/grace-core/src/pdf.rs`: Pure-Rust PDF text extraction via `lopdf = "0.35"`.
+   - Security controls: 50MB file size cap, safe document roots check (`is_within_safe_pdf_roots`), untrusted content fencing (`<<<UNTRUSTED_CONTENT>>>` / `<<<END_UNTRUSTED_CONTENT>>>`).
+   - RAG chunking and relevance scoring: token-window chunking with overlap, term-frequency query ranking, and TTS-safe speech summary generation.
+   - Fully wired into `Dispatcher::dispatch_pdf`.
 5. ~~`PersistentMemoryStore` over real SQLite & wiring~~ **Fully completed in Task 16**:
    - `AgentLoop`/`GraceApp` call `PersistentStore::begin_episode`/`end_episode` at real goal boundaries, enabling true multi-step episodes and routine collapse.
    - Real foreground app/window name passed into `save_step`.
@@ -689,10 +684,11 @@ still apply unchanged. New this phase:
    - Voice hard delete commands ("forget today", "forget what I did in <app>", "forget everything") implemented in both Rust and Python stores, clearing history, rollups, and FTS entries.
    - Off-thread compaction driver and SQLite pragmas (`journal_size_limit=64MB`, `mmap_size=256MB`) reducing tail write latency by >10x.
    - Session tapes recorded in `%TEMP%\grace-memory\tapes`.
-6. **Local LLM wiring for the escalation ladder's "stronger model" rung and
-   the planner/grounder generally**: `HttpLlm` already speaks the right
-   protocol; this is really item 1/2's model-serving prerequisite (a
-   running `llama-server.exe` or equivalent) rather than new Rust code.
+6. ~~**Local LLM wiring & serving lifecycle management**~~ **Fully completed in Task 19**:
+   - `crates/grace-models/src/llama.rs`: `LlamaServerManager` managing local `llama-server.exe` process lifecycle (start, stop, restart, health check via `GET /health` and 1-token generation verification).
+   - Windows Job Object assignment with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` ensuring child `llama-server` processes never orphan upon parent exit or crash.
+   - Hardware presets: `cpu-fleet` (micromodel slots on CPU floor) and `gpu-single` (buildathon single-model setup with `--mmproj` vision projector).
+   - `HttpLlm` request cancellation: `cancel_token: Arc<AtomicBool>`, `with_cancel_token`, `cancel()`, and `reset_cancel()`.
 7. **Sidecar split + Tauri hardening**: once (1)-(2) make the Rust backend
    do real, potentially-slow work, split `grace-backend` into its own
    process with the Job Object/KILL_ON_JOB_CLOSE, restart/health-watch,

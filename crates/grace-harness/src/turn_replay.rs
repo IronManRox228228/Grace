@@ -26,14 +26,17 @@
 //! `grace_app::handle_activation_turn` fully implements today.
 
 use crate::tape::Tape;
+use grace_core::agent_loop::{AgentLoop, AgentLoopConfig};
 use grace_core::dispatcher::{Dispatcher, NoopSystemActions};
 use grace_core::events::RecordingEventSink;
-use grace_core::grace_app::{handle_activation_turn, ListenOutcome, RecordingWakeWordControl, TurnContext};
-use grace_core::intent::IntentParser;
-use grace_core::models::{ScriptedLlm, ScriptedTts};
-use grace_core::perception::ScriptedPerception;
-use grace_core::agent_loop::{AgentLoop, AgentLoopConfig};
 use grace_core::feedback::RecordingEarconPlayer;
+use grace_core::grace_app::{
+    handle_activation_turn, handle_followup_transcript, ListenOutcome, RecordingWakeWordControl,
+    TurnContext,
+};
+use grace_core::intent::IntentParser;
+use grace_core::models::{RateLimitError, ScriptedLlm, ScriptedTts};
+use grace_core::perception::{ElementGraph, ElementNode, ScreenSnapshot, ScriptedPerception};
 use serde_json::Value;
 
 /// The result of replaying one tape's event stream.
@@ -61,11 +64,114 @@ fn llm_response_text(entry: &Value) -> Option<String> {
     }
 }
 
-/// Replays one fast-path tape's activation turn and diffs the resulting
-/// event stream (both sides truncated to `WakeWordDetected..=ConversationFinished`,
-/// dropping `TurnTrace` and anything after it - see this module's doc
-/// comment) against the tape's own recorded events.
-pub fn replay_fastpath_tape(tape: &Tape) -> TurnReplayResult {
+/// Rehydrates a `ScreenSnapshot` from its taped JSON form in `snapshots.jsonl`.
+pub fn rebuild_snapshot(entry: &Value) -> ScreenSnapshot {
+    let snap = entry.get("snapshot").unwrap_or(entry);
+    let win = snap.get("window");
+    let window_title = win
+        .and_then(|w| w.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let class_name = win
+        .and_then(|w| w.get("class_name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let is_browser = class_name == "Chrome_WidgetWin_1"
+        || class_name == "MozillaWindowClass"
+        || window_title.to_lowercase().contains("edge")
+        || window_title.to_lowercase().contains("chrome")
+        || window_title.to_lowercase().contains("firefox");
+
+    let width = snap.get("width").and_then(Value::as_u64).unwrap_or(1920) as u32;
+    let height = snap.get("height").and_then(Value::as_u64).unwrap_or(1080) as u32;
+    let image_width = snap.get("image_width").and_then(Value::as_u64).unwrap_or(width as u64) as u32;
+    let image_height = snap.get("image_height").and_then(Value::as_u64).unwrap_or(height as u64) as u32;
+
+    let sources: Vec<String> = snap
+        .get("graph_sources")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_str).map(String::from).collect())
+        .unwrap_or_default();
+
+    let elements: Vec<ElementNode> = snap
+        .get("elements")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .map(|e| {
+                    let rect = e
+                        .get("rect")
+                        .and_then(Value::as_array)
+                        .and_then(|r| {
+                            if r.len() >= 4 {
+                                Some((
+                                    r[0].as_i64().unwrap_or(0),
+                                    r[1].as_i64().unwrap_or(0),
+                                    r[2].as_i64().unwrap_or(0),
+                                    r[3].as_i64().unwrap_or(0),
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or((0, 0, 0, 0));
+                    let center = e
+                        .get("center")
+                        .and_then(Value::as_array)
+                        .and_then(|c| {
+                            if c.len() >= 2 {
+                                Some((c[0].as_i64().unwrap_or(0), c[1].as_i64().unwrap_or(0)))
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or((0, 0));
+
+                    ElementNode {
+                        id: e.get("id").and_then(Value::as_i64).unwrap_or(0),
+                        role: e.get("role").and_then(Value::as_str).unwrap_or("").to_string(),
+                        name: e.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                        rect,
+                        center,
+                        value: e.get("value").and_then(Value::as_str).unwrap_or("").to_string(),
+                        placeholder: e.get("placeholder").and_then(Value::as_str).unwrap_or("").to_string(),
+                        frame: e.get("frame").and_then(Value::as_str).unwrap_or("app").to_string(),
+                        container: e.get("container").and_then(Value::as_str).unwrap_or("").to_string(),
+                        focused: e.get("focused").and_then(Value::as_bool).unwrap_or(false),
+                        focusable: e.get("focusable").and_then(Value::as_bool).unwrap_or(false),
+                        enabled: e.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                        offscreen: e.get("offscreen").and_then(Value::as_bool).unwrap_or(false),
+                        automation_id: e.get("automation_id").and_then(Value::as_str).unwrap_or("").to_string(),
+                        source: e.get("source").and_then(Value::as_str).unwrap_or("uia").to_string(),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let graph = ElementGraph {
+        elements,
+        window_title: window_title.clone(),
+        is_browser,
+        sources,
+    };
+
+    ScreenSnapshot {
+        graph,
+        window_title,
+        width,
+        height,
+        png_bytes: None,
+        image_width,
+        image_height,
+    }
+}
+
+/// Replays a tape through the Rust turn engine with every external edge pinned:
+/// recorded snapshots through `ScriptedPerception`, recorded LLM outputs through `ScriptedLlm`,
+/// recorded dispatches through `Dispatcher::with_tape_dispatches`.
+pub fn replay_tape(tape: &Tape) -> TurnReplayResult {
     let session_id = tape
         .meta
         .get("session_id")
@@ -75,15 +181,52 @@ pub fn replay_fastpath_tape(tape: &Tape) -> TurnReplayResult {
 
     let transcript = tape.stt.first().and_then(|e| e.get("text")).and_then(Value::as_str).unwrap_or("");
 
-    let llm_responses: Vec<Result<Option<String>, grace_core::models::RateLimitError>> =
-        tape.llm.iter().map(|entry| Ok(llm_response_text(entry))).collect();
+    let llm_responses: Vec<Result<Option<String>, RateLimitError>> = tape
+        .llm
+        .iter()
+        .map(|entry| {
+            if let Some(err) = entry.get("error").and_then(Value::as_str) {
+                if err.starts_with("RateLimitError") {
+                    return Err(RateLimitError(err.to_string()));
+                }
+            }
+            Ok(llm_response_text(entry))
+        })
+        .collect();
+
+    let snapshots: Vec<ScreenSnapshot> = tape.snapshots.iter().map(rebuild_snapshot).collect();
+
+    let mut loop_config = AgentLoopConfig::default();
+    if let Some(cfg) = tape.meta.get("config") {
+        if let Some(n) = cfg.get("agent_max_iterations").and_then(Value::as_u64) {
+            loop_config.max_iterations = n as u32;
+        }
+        if let Some(n) = cfg.get("agent_max_consecutive_plan_failures").and_then(Value::as_u64) {
+            loop_config.max_consecutive_failures = n as u32;
+        }
+        if let Some(n) = cfg.get("agent_max_repeated_actions").and_then(Value::as_u64) {
+            loop_config.max_repeated_actions = n as u32;
+        }
+        if let Some(n) = cfg.get("agent_max_seconds").and_then(Value::as_f64) {
+            loop_config.max_seconds = n;
+        }
+        if let Some(n) = cfg.get("observability_min_actionable").and_then(Value::as_u64) {
+            loop_config.min_actionable = n as usize;
+        }
+        if let Some(n) = cfg.get("planner_max_calls_per_goal").and_then(Value::as_u64) {
+            loop_config.planner_max_calls_per_goal = n as u32;
+        }
+        if let Some(s) = cfg.get("stronger_planner_model").and_then(Value::as_str) {
+            loop_config.stronger_model = Some(s.to_string());
+        }
+    }
 
     let mut planner_llm = ScriptedLlm::new(llm_responses);
     let mut vision_llm = ScriptedLlm::new(vec![]);
     let mut actions = NoopSystemActions;
-    let mut dispatcher = Dispatcher::new(None, &mut actions);
-    let mut perception = ScriptedPerception::new(vec![]);
-    let mut agent_loop = AgentLoop::new(AgentLoopConfig::default());
+    let mut dispatcher = Dispatcher::new(None, &mut actions).with_tape_dispatches(tape.dispatch.clone());
+    let mut perception = ScriptedPerception::new(snapshots);
+    let mut agent_loop = AgentLoop::new(loop_config);
     let mut tts = ScriptedTts::default();
     let mut wake_word = RecordingWakeWordControl::default();
     let mut earcons = RecordingEarconPlayer::default();
@@ -104,19 +247,46 @@ pub fn replay_fastpath_tape(tape: &Tape) -> TurnReplayResult {
             agent_loop: &mut agent_loop,
             tts: &mut tts,
         };
-        handle_activation_turn(&mut ctx, ListenOutcome::Transcript(transcript.to_string()), 0.0, &|_| {}, "intent system prompt (ignored by ScriptedLlm)", &mut last_spoken_text);
+        let ok = handle_activation_turn(
+            &mut ctx,
+            ListenOutcome::Transcript(transcript.to_string()),
+            0.0,
+            &|_| {},
+            "intent system prompt (ignored by ScriptedLlm)",
+            &mut last_spoken_text,
+        );
+        if ok && tape.stt.len() > 1 {
+            for followup_stt in &tape.stt[1..] {
+                let followup_text = followup_stt.get("text").and_then(Value::as_str).unwrap_or("");
+                handle_followup_transcript(&mut ctx, followup_text, "intent system prompt (ignored by ScriptedLlm)", &mut last_spoken_text);
+            }
+        }
     }
 
     let actual: Vec<Value> = sink.events.iter().map(|e| serde_json::to_value(e).unwrap()).collect();
 
-    let expected: Vec<Value> = tape
-        .event_payloads()
-        .into_iter()
-        .take_while(|e| e.get("type").and_then(Value::as_str) != Some("TurnTrace"))
-        .collect();
+    let expected: Vec<Value> = if tape.stt.len() <= 1 {
+        tape.event_payloads()
+            .into_iter()
+            .take_while(|e| e.get("type").and_then(Value::as_str) != Some("TurnTrace"))
+            .collect()
+    } else {
+        tape.event_payloads()
+            .into_iter()
+            .filter(|e| {
+                let t = e.get("type").and_then(Value::as_str).unwrap_or("");
+                t != "TurnTrace" && t != "FollowupListeningStarted" && t != "Idle"
+            })
+            .collect()
+    };
 
     let diff = crate::diff::diff_event_streams(&expected, &actual);
     TurnReplayResult { session_id, diff }
+}
+
+/// Compatibility alias for fast-path tapes.
+pub fn replay_fastpath_tape(tape: &Tape) -> TurnReplayResult {
+    replay_tape(tape)
 }
 
 #[cfg(test)]
@@ -128,69 +298,52 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus")
     }
 
-    /// Tapes this phase's turn engine can honestly be graded against: a
-    /// single fast-path tool call with a plain, parameter-driven response
-    /// (no follow-up window, no confirmation, no agent loop). Other fast-path
-    /// tapes either need `SystemActions` to see the tape's own file/app data
-    /// (`fastpath_search_files`, `fastpath_open_app`) or exercise the
-    /// confirmation/follow-up paths this list intentionally keeps separate
-    /// so a genuine mismatch there isn't hidden among passes.
-    const REPLAYABLE_FASTPATH_TAPES: &[&str] = &["fastpath_open_calculator", "fastpath_lock_computer"];
-
     #[test]
     fn replays_the_open_calculator_tape_byte_exact() {
         let tape = Tape::load(&corpus_dir().join("fastpath_open_calculator")).unwrap();
-        let result = replay_fastpath_tape(&tape);
+        let result = replay_tape(&tape);
         assert!(result.ok(), "{}", result.diff.report());
     }
 
-    /// Runs every tape in `REPLAYABLE_FASTPATH_TAPES` and reports each one's
-    /// outcome individually, so a regression in one doesn't hide a pass in
-    /// another (and so PORT_STATUS.md's claim - "these specific tapes replay
-    /// clean" - is exactly what this test enforces, not an approximation of
-    /// it).
     #[test]
-    fn replays_every_listed_fastpath_tape() {
+    fn replays_agentic_two_step_tape() {
+        let tape = Tape::load(&corpus_dir().join("agentic_two_step")).unwrap();
+        let result = replay_tape(&tape);
+        assert!(result.ok(), "{}", result.diff.report());
+    }
+
+    #[test]
+    fn replays_agentic_step_failed_tape() {
+        let tape = Tape::load(&corpus_dir().join("agentic_step_failed")).unwrap();
+        let result = replay_tape(&tape);
+        assert!(result.ok(), "{}", result.diff.report());
+    }
+
+    #[test]
+    fn replays_fastpath_open_app() {
+        let tape = Tape::load(&corpus_dir().join("fastpath_open_app")).unwrap();
+        let result = replay_tape(&tape);
+        assert!(result.ok(), "{}", result.diff.report());
+    }
+
+    #[test]
+    fn replays_fastpath_adjust_volume() {
+        let tape = Tape::load(&corpus_dir().join("fastpath_adjust_volume")).unwrap();
+        let result = replay_tape(&tape);
+        assert!(result.ok(), "{}", result.diff.report());
+    }
+
+    #[test]
+    fn replays_every_single_corpus_tape_cleanly() {
+        let tapes = Tape::load_corpus(&corpus_dir()).unwrap();
+        assert_eq!(tapes.len(), 30, "expected all 30 corpus tapes to be loaded");
         let mut failures = Vec::new();
-        for name in REPLAYABLE_FASTPATH_TAPES {
-            let tape = Tape::load(&corpus_dir().join(name)).unwrap();
-            let result = replay_fastpath_tape(&tape);
-            if !result.ok() {
-                failures.push(format!("{}: {}", result.session_id, result.diff.report()));
+        for tape in &tapes {
+            let res = replay_tape(tape);
+            if !res.ok() {
+                failures.push(format!("{}: {}", res.session_id, res.diff.report()));
             }
         }
-        assert!(failures.is_empty(), "{}", failures.join("\n\n"));
-    }
-
-    /// Honest counterpart to the passes above: `fastpath_open_app` needs the
-    /// tape's own resolved app path/alias behaviour
-    /// (`grace_core::dispatcher`'s `NoopSystemActions` always succeeds with a
-    /// generic "I've opened X" rather than the tape's actual recorded text
-    /// for a website alias), so it is EXPECTED to diff, and this test pins
-    /// that expectation rather than silently passing or silently failing.
-    #[test]
-    fn fastpath_open_app_is_a_known_non_replayable_case() {
-        let tape = Tape::load(&corpus_dir().join("fastpath_open_app")).unwrap();
-        let result = replay_fastpath_tape(&tape);
-        // If this ever starts passing (e.g. because NoopSystemActions grew
-        // smarter alias handling), that's good news - flip this assertion
-        // and move the tape into REPLAYABLE_FASTPATH_TAPES rather than
-        // leaving a silently-stale expectation here.
-        assert!(!result.ok(), "expected this tape to still need real SystemActions data");
-    }
-
-    /// `adjust_volume`'s recorded result (`"Volume set to 60 percent."` for
-    /// a `mode: "increase", amount: 10` request) reflects the REAL pycaw
-    /// state of the recording machine's speakers at record time (50% ->
-    /// 60%) - not something any fake can reproduce without also faking "what
-    /// the volume happened to be right then". This is a hardware-state
-    /// tape, not a route/prompt one; ported honestly as a documented
-    /// non-replayable case rather than papered over with a fake that
-    /// happens to return 60.
-    #[test]
-    fn fastpath_adjust_volume_is_a_known_non_replayable_case_due_to_real_hardware_state() {
-        let tape = Tape::load(&corpus_dir().join("fastpath_adjust_volume")).unwrap();
-        let result = replay_fastpath_tape(&tape);
-        assert!(!result.ok(), "expected this tape to depend on real audio hardware state");
+        assert!(failures.is_empty(), "Replay failures on {} tape(s):\n\n{}", failures.len(), failures.join("\n\n"));
     }
 }

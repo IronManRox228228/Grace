@@ -34,7 +34,7 @@ use crate::dispatcher::Dispatcher;
 use crate::events::EventSink;
 use crate::feedback::{Earcon, EarconPlayer};
 use crate::intent::{Intent, IntentParser};
-use crate::models::{LargeLanguageModel, TextToSpeech};
+use crate::models::{LargeLanguageModel, RateLimitError, TextToSpeech};
 use crate::perception::PerceptionSource;
 use crate::response_generator::speak_text;
 use crate::router::{classify, ParsedIntentRef, TaskComplexity};
@@ -149,7 +149,7 @@ pub struct TurnContext<'a, 'b> {
 /// + `IntentParser.parse`'s error handling: any parse failure (or an empty
 /// LLM response) yields `None`, never propagated as an error - the caller
 /// falls through to the router's keyword-based default.
-fn generate_intent(transcript: &str, system_prompt: &str, llm: &mut dyn LargeLanguageModel, parser: &mut IntentParser) -> Option<Intent> {
+fn generate_intent(transcript: &str, system_prompt: &str, llm: &mut dyn LargeLanguageModel, parser: &mut IntentParser) -> Result<Option<Intent>, RateLimitError> {
     let request = crate::models::LlmRequest {
         prompt: transcript.to_string(),
         system_prompt: Some(system_prompt.to_string()),
@@ -157,8 +157,11 @@ fn generate_intent(transcript: &str, system_prompt: &str, llm: &mut dyn LargeLan
         max_tokens: 4096,
         ..Default::default()
     };
-    let raw = llm.generate_text(&request).ok()??;
-    parser.parse(&raw).ok()
+    match llm.generate_text(&request) {
+        Ok(Some(raw)) => Ok(parser.parse(&raw).ok()),
+        Ok(None) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 fn agent_response_text(agent_res: &Value) -> Option<String> {
@@ -395,8 +398,20 @@ pub fn handle_activation_turn(
     }
 
     ctx.sink.emit(GraceEvent::UnderstandingStarted { label: "Understanding request…".to_string() });
-    let intent = generate_intent(transcript, intent_system_prompt, ctx.planner_llm, ctx.intent_parser);
-    ctx.sink.emit(GraceEvent::UnderstandingFinished);
+    let intent = match generate_intent(transcript, intent_system_prompt, ctx.planner_llm, ctx.intent_parser) {
+        Ok(i) => {
+            ctx.sink.emit(GraceEvent::UnderstandingFinished);
+            i
+        }
+        Err(_e) => {
+            ctx.sink.emit(GraceEvent::UnderstandingFinished);
+            let msg = "I've hit my request limit for now. Please try again in a moment.";
+            *last_spoken_text = msg.to_string();
+            speak(ctx, msg);
+            ctx.sink.emit(GraceEvent::ConversationFinished);
+            return true;
+        }
+    };
 
     let complexity = classify(transcript, intent.as_ref().map(ParsedIntentRef::from));
 
@@ -478,7 +493,15 @@ pub fn handle_followup_transcript(ctx: &mut TurnContext, transcript: &str, inten
         return res;
     }
 
-    let intent = generate_intent(transcript, intent_system_prompt, ctx.planner_llm, ctx.intent_parser);
+    let intent = match generate_intent(transcript, intent_system_prompt, ctx.planner_llm, ctx.intent_parser) {
+        Ok(i) => i,
+        Err(_e) => {
+            let msg = "I've hit my request limit for now. Please try again in a moment.";
+            *last_spoken_text = msg.to_string();
+            speak(ctx, msg);
+            return true;
+        }
+    };
     let complexity = classify(transcript, intent.as_ref().map(ParsedIntentRef::from));
 
     if complexity == TaskComplexity::AgenticGoal {

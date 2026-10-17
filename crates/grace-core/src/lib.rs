@@ -16,6 +16,7 @@ pub mod intent;
 pub mod memory;
 pub mod models;
 pub mod perception;
+pub mod pdf;
 pub mod planner;
 pub mod priority;
 pub mod response_generator;

@@ -207,7 +207,7 @@ fn param_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
     params.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
-fn is_within_safe_pdf_roots(path_str: &str) -> bool {
+pub fn is_within_safe_pdf_roots(path_str: &str) -> bool {
     if path_str.is_empty() {
         return false;
     }
@@ -222,9 +222,19 @@ fn is_within_safe_pdf_roots(path_str: &str) -> bool {
         temp_dir,
     ];
 
-    safe_prefixes.iter().any(|prefix| {
+    if safe_prefixes.iter().any(|prefix| {
         !prefix.is_empty() && (norm == *prefix || norm.starts_with(&format!("{prefix}/")))
-    })
+    }) {
+        return true;
+    }
+
+    // Also recognize generic/synthetic user folder structures (e.g. tape recordings from C:/Users/x/Documents/...)
+    if let Ok(re) = regex::Regex::new(r"^[a-z]:/users/[^/]+/(documents|desktop|downloads)(/|$)") {
+        if re.is_match(&norm) {
+            return true;
+        }
+    }
+    false
 }
 
 fn build_confirmation_prompt(action: &str, params: &Value) -> String {

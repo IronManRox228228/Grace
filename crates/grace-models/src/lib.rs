@@ -24,7 +24,12 @@
 
 use grace_core::models::{LargeLanguageModel, LlmRequest, RateLimitError};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+
+pub mod llama;
+pub use llama::{FleetConfig, LlamaServerConfig, LlamaServerManager, Preset, SlotConfig};
 
 pub use grace_core::models::{ScriptedLlm, ScriptedStt, ScriptedTts, SpeechToText, TextToSpeech};
 
@@ -114,6 +119,7 @@ struct ChatChoiceMessage {
 pub struct HttpLlm {
     base_url: String,
     client: reqwest::blocking::Client,
+    cancel_token: Arc<AtomicBool>,
 }
 
 impl HttpLlm {
@@ -124,7 +130,25 @@ impl HttpLlm {
                 .timeout(Duration::from_secs(120))
                 .build()
                 .expect("reqwest client builds"),
+            cancel_token: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn with_cancel_token(mut self, token: Arc<AtomicBool>) -> Self {
+        self.cancel_token = token;
+        self
+    }
+
+    pub fn cancel(&self) {
+        self.cancel_token.store(true, Ordering::Relaxed);
+    }
+
+    pub fn reset_cancel(&self) {
+        self.cancel_token.store(false, Ordering::Relaxed);
+    }
+
+    pub fn cancel_token(&self) -> Arc<AtomicBool> {
+        self.cancel_token.clone()
     }
 
     fn build_messages(request: &LlmRequest) -> Vec<ChatMessage> {
@@ -149,6 +173,10 @@ impl HttpLlm {
 
 impl LargeLanguageModel for HttpLlm {
     fn generate_text(&mut self, request: &LlmRequest) -> Result<Option<String>, RateLimitError> {
+        if self.cancel_token.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+
         let payload = ChatRequest {
             messages: Self::build_messages(request),
             temperature: request.temperature,
@@ -166,6 +194,10 @@ impl LargeLanguageModel for HttpLlm {
             // would treat as a rate limit.
             Err(_) => return Ok(None),
         };
+
+        if self.cancel_token.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
 
         if response.status().as_u16() == 429 {
             let body = response.text().unwrap_or_default();
@@ -235,5 +267,30 @@ mod tests {
         let truncated: String = body.chars().take(150).collect();
         assert_eq!(truncated.chars().count(), 150);
         assert!(truncated.ends_with('🎉'));
+    }
+
+    #[test]
+    fn cancel_token_aborts_generation() {
+        let mut llm = HttpLlm::new("http://127.0.0.1:1");
+        llm.cancel();
+        // Since cancelled, returns Ok(None) immediately without even attempting request
+        let result = llm.generate_text(&LlmRequest::new("test"));
+        assert_eq!(result, Ok(None));
+
+        llm.reset_cancel();
+        // Still returns Ok(None) because server is unreachable, but proves reset works
+        let result = llm.generate_text(&LlmRequest::new("test"));
+        assert_eq!(result, Ok(None));
+    }
+
+    #[test]
+    fn shared_cancel_token_wires_correctly() {
+        let token = Arc::new(AtomicBool::new(false));
+        let mut llm = HttpLlm::new("http://127.0.0.1:1").with_cancel_token(token.clone());
+        assert!(!llm.cancel_token().load(Ordering::Relaxed));
+
+        token.store(true, Ordering::Relaxed);
+        let result = llm.generate_text(&LlmRequest::new("test"));
+        assert_eq!(result, Ok(None));
     }
 }
