@@ -1,0 +1,27 @@
+[package]
+name = "grace-floor"
+description = "Grace Floor-Machine Simulation and Throttle Kit (PLAN §1, §2, §9)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "grace_floor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bandwidth-hog"
+path = "src/bin/bandwidth_hog.rs"
+
+[[bin]]
+name = "clutter"
+path = "src/bin/clutter.rs"
+
+[[bin]]
+name = "fill-disk"
+path = "src/bin/fill_disk.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true

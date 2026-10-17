@@ -9,6 +9,7 @@ members = [
     "crates/grace-harness",
     "crates/grace-backend",
     "crates/grace-memory",
+    "tools/floor",
 ]
 resolver = "2"
 
