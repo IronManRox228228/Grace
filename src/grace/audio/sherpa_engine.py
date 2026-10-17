@@ -118,6 +118,10 @@ class SherpaASR:
             logger.error(f"Failed to initialize Sherpa-ONNX ASR: {e}")
             raise
 
+    def set_hotwords(self, hotwords: Optional[str]) -> None:
+        """Set hotwords list string for vocabulary boosting."""
+        self._hotwords = hotwords
+
     def transcribe_bytes(self, raw_pcm: bytes) -> str:
         """Transcribe 16-bit 16kHz mono PCM audio bytes into text."""
         if not raw_pcm:
@@ -126,10 +130,16 @@ class SherpaASR:
         import numpy as np
 
         samples = np.frombuffer(raw_pcm, dtype=np.int16).astype(np.float32) / 32768.0
-        stream = self._recognizer.create_stream()
+        hotwords = getattr(self, "_hotwords", None)
+        try:
+            stream = self._recognizer.create_stream(hotwords=hotwords) if hotwords else self._recognizer.create_stream()
+        except TypeError:
+            stream = self._recognizer.create_stream()
+
         stream.accept_waveform(self.sample_rate, samples)
         self._recognizer.decode_stream(stream)
         return stream.result.text.strip()
+
 
     def reset_buffer(self) -> None:
         pass

@@ -318,6 +318,30 @@ class GraceApp:
         self.agent_loop.set_cancel_hook(self.response_gen.stop_speaking)
         self._confirmation_prompt_finished_at: float = 0.0
 
+        # Task 10: Word biasing, personal corrections, switch input, Gameface coexistence
+        from grace.stt.word_biasing import WordBiaser
+        from grace.stt.corrections import PersonalCorrectionList
+        from grace.input.switch_input import SwitchInputHandler, SwitchAction, VoiceSwitchRaceResolver, MarkScanner
+        from grace.automation.gameface import GamefaceCoexistence
+
+        self.word_biaser = WordBiaser(max_words=getattr(self.config, "max_bias_words", 100))
+        corrections_path = getattr(self.config, "correction_list_path", None)
+        self.corrections = PersonalCorrectionList(filepath=corrections_path)
+        self._last_raw_transcript: Optional[str] = None
+        self.gameface = GamefaceCoexistence()
+        self._confirmation_race_resolver: Optional[VoiceSwitchRaceResolver] = None
+        self._choice_race_resolver: Optional[VoiceSwitchRaceResolver] = None
+        self._active_mark_scanner: Optional[MarkScanner] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+        self.switch_handler = SwitchInputHandler(
+            double_press_window_ms=getattr(self.config, "switch_double_press_ms", 400.0),
+            long_press_threshold_ms=getattr(self.config, "switch_long_press_ms", 800.0),
+            switch_key=getattr(self.config, "switch_key", "space"),
+            on_action=self._handle_switch_action,
+        )
+
+
     # An activation that hears nothing still holds the pill open this long,
     # counted from the wake word, so it never flashes open and shut.
     MIN_WAKE_TO_IDLE_SECONDS = 3.0
@@ -386,6 +410,21 @@ class GraceApp:
         if not text or not text.strip():
             return
         self._last_spoken_text = text.strip()
+
+        # Check if the spoken response asks a numbered marks disambiguation question ("4 or 7?")
+        m = re.search(r"(?:button|option|choice|number|#)?\s*(\d+)\s+or\s+(?:button|option|choice|number|#)?\s*(\d+)", text, re.IGNORECASE)
+        if m:
+            choices = [f"button {m.group(1)}", f"button {m.group(2)}"]
+            from grace.input.switch_input import MarkScanner, VoiceSwitchRaceResolver
+            scanner = getattr(self, "_active_mark_scanner", None)
+            if scanner is not None:
+                scanner.stop()
+            self._choice_race_resolver = VoiceSwitchRaceResolver()
+            self._active_mark_scanner = MarkScanner(
+                options=choices,
+                scan_rate_ms=getattr(self.config, "mark_scan_rate_ms", 1500.0),
+            )
+            self._active_mark_scanner.start()
 
         # Allow interrupting Grace mid-speech (barge-in)
         def _on_barge_in_stop():
@@ -588,7 +627,8 @@ class GraceApp:
         # Start audio capture
         log.info("Starting microphone...")
         self.capture.start()
-        self.pump.start(asyncio.get_running_loop())
+        self._loop = asyncio.get_running_loop()
+        self.pump.start(self._loop)
 
         # Start wake word detector with audio queue
         self._audio_queue = queue.Queue(maxsize=100)
@@ -732,6 +772,13 @@ class GraceApp:
             log.info("Ignoring confirmation answer received before question finished speaking.")
             return True
 
+        # Check voice/switch coexistence race resolver
+        if getattr(self, "_confirmation_race_resolver", None) is not None:
+            if not self._confirmation_race_resolver.resolve_voice(transcript):
+                log.info("Voice confirmation ignored: switch already resolved it")
+                return True
+            self._confirmation_race_resolver = None
+
         clean = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
         if clean in self._REPEAT_COMMANDS or clean in ("repeat", "repeat that", "what did you say", "what was that", "pardon", "say again"):
             prompt = self.agent_loop.pending_prompt or "Are you sure you want me to proceed?"
@@ -759,6 +806,8 @@ class GraceApp:
             # happened and drop the new pending step on the floor unasked.
             response_text = self._agent_response_text(result)
             self._confirmation_prompt_finished_at = time.monotonic()
+            from grace.input.switch_input import VoiceSwitchRaceResolver
+            self._confirmation_race_resolver = VoiceSwitchRaceResolver()
         else:
             response_text = result.get("final_response") or (
                 "Done." if answer else "Alright, I won't do that."
@@ -767,22 +816,153 @@ class GraceApp:
         return True
 
     async def _park_if_confirmation_required(self, intent, result: dict) -> bool:
-        """Ask the question a refused dispatch came back with. True if parked.
-
-        The fast path reaches `delete_file`, `close_app` and `lock_computer`
-        without going anywhere near `AgentLoop`, so before the guard moved to
-        the dispatcher those three ran unconfirmed whenever the router judged
-        the request simple - which, being one-tool requests, is always.
-        """
+        """Ask the question a refused dispatch came back with. True if parked."""
         if result.get("status") != "confirmation_required":
             return False
 
         prompt = result.get("confirmation_prompt") or "Should I go ahead?"
         log.warning(f"Fast-path '{intent.tool}' parked for confirmation: {prompt}")
         self.agent_loop.park_intent(intent, prompt)
+        from grace.input.switch_input import VoiceSwitchRaceResolver
+        self._confirmation_race_resolver = VoiceSwitchRaceResolver()
         await self._speak_response(prompt)
         self._confirmation_prompt_finished_at = time.monotonic()
         return True
+
+    async def _resolve_pending_confirmation_switch(self, approved: bool) -> None:
+        """Resolve a parked confirmation step via switch input."""
+        log.info(f"Switch resolving parked confirmation step: approved={approved}")
+        self._confirmation_race_resolver = None
+        result = await self.agent_loop.resume_pending(approved=approved)
+        if result.get("status") == "safety_confirmation_required":
+            response_text = self._agent_response_text(result)
+            self._confirmation_prompt_finished_at = time.monotonic()
+            from grace.input.switch_input import VoiceSwitchRaceResolver
+            self._confirmation_race_resolver = VoiceSwitchRaceResolver()
+        else:
+            response_text = result.get("final_response") or (
+                "Done." if approved else "Alright, I won't do that."
+            )
+        await self._speak_response(response_text)
+        await self.ws_server.emit({"type": "ConversationFinished"})
+        self._stop_followup = True
+
+    def _handle_switch_action(self, action) -> None:
+        """Handle incoming switch action (YES, NO, STOP) with voice coexistence."""
+        action_val = getattr(action, "value", str(action)).lower()
+        log.info(f"Switch action received: {action_val}")
+
+        def _dispatch_async(coro):
+            loop = getattr(self, "_loop", None)
+            if loop is None:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+            if loop is not None and loop.is_running():
+                try:
+                    if asyncio.get_running_loop() is loop:
+                        return asyncio.create_task(coro)
+                except RuntimeError:
+                    pass
+                asyncio.run_coroutine_threadsafe(coro, loop)
+            else:
+                try:
+                    t = threading.Thread(target=lambda: asyncio.run(coro), daemon=True)
+                    t.start()
+                except Exception as e:
+                    log.debug(f"Failed to run async switch action: {e}")
+
+        # STOP action: immediate reflex (long press >= threshold)
+        if action_val == "stop":
+            log.info("Switch emergency stop triggered")
+            if hasattr(self, "response_gen") and self.response_gen:
+                self.response_gen.stop_speaking()
+            scanner = getattr(self, "_active_mark_scanner", None)
+            if scanner is not None:
+                scanner.stop()
+                self._active_mark_scanner = None
+            if hasattr(self, "agent_loop") and self.agent_loop:
+                if self.agent_loop.has_pending_confirmation:
+                    self.agent_loop.cancel_pending()
+                self.agent_loop.request_cancel()
+            FeedbackSounds.play_cancel()
+            _dispatch_async(self.ws_server.emit({"type": "ConversationFinished"}))
+            _dispatch_async(self.ws_server.emit({"type": "Idle"}))
+            return
+
+        # MarkScanner active: cyclic scan choice ("4 or 7?")
+        scanner = getattr(self, "_active_mark_scanner", None)
+        if scanner is not None and getattr(scanner, "_running", False):
+            if action_val == "yes":
+                resolver = getattr(self, "_choice_race_resolver", None)
+                if resolver is not None:
+                    if not resolver.resolve_switch(action):
+                        log.info("Switch mark choice ignored (voice won race)")
+                        return
+                selected = scanner.select_current()
+                log.info(f"Switch selected scanned mark: '{selected}'")
+                self._active_mark_scanner = None
+                if selected:
+                    _dispatch_async(self._handle_followup_transcript(selected))
+                return
+            elif action_val == "no":
+                log.info("Switch rejected scanned mark choices")
+                scanner.stop()
+                self._active_mark_scanner = None
+                return
+
+        # Confirmation active (safety gate / parked step)
+        if hasattr(self, "agent_loop") and self.agent_loop and self.agent_loop.has_pending_confirmation:
+            if self._confirmation_race_resolver:
+                if not self._confirmation_race_resolver.resolve_switch(action):
+                    log.info("Switch confirmation ignored (voice won race)")
+                    return
+            approved = (action_val == "yes")
+            _dispatch_async(self._resolve_pending_confirmation_switch(approved))
+            return
+
+    def refresh_word_biasing(self) -> list[str]:
+        """Build and feed live word biasing to the active ASR engine."""
+        if not hasattr(self, "word_biaser") or self.word_biaser is None:
+            return []
+
+        app_indexer = getattr(getattr(self, "dispatcher", None), "_app_indexer", None)
+        window_titles: list[str] = []
+        try:
+            import win32gui
+            def _enum_cb(hwnd, titles):
+                if win32gui.IsWindowVisible(hwnd):
+                    txt = win32gui.GetWindowText(hwnd)
+                    if txt and txt.strip():
+                        titles.append(txt.strip())
+            win32gui.EnumWindows(_enum_cb, window_titles)
+        except Exception:
+            pass
+
+        contacts: list[str] = []
+        try:
+            store = getattr(self, "memory_store", None)
+            if store and hasattr(store, "get_all_facts"):
+                contacts = store.get_all_facts()
+        except Exception:
+            pass
+
+        words = self.word_biaser.build_bias_list(
+            app_indexer=app_indexer,
+            window_titles=window_titles,
+            confirmed_contacts=contacts,
+        )
+
+        whisper_prompt = self.word_biaser.to_whisper_initial_prompt(words)
+        if hasattr(self, "whisper") and hasattr(self.whisper, "set_initial_prompt"):
+            self.whisper.set_initial_prompt(whisper_prompt)
+
+        sherpa_hotwords = self.word_biaser.to_sherpa_hotwords(words)
+        if hasattr(self, "sherpa_asr") and hasattr(self.sherpa_asr, "set_hotwords"):
+            self.sherpa_asr.set_hotwords(sherpa_hotwords)
+
+        return words
 
     def _start_background_warmup(self) -> None:
         """Pay lazy initialisation costs up front, off the event loop.
@@ -801,6 +981,7 @@ class GraceApp:
                 from grace.automation.app_indexer import AppIndexer
 
                 self.dispatcher.set_app_indexer(AppIndexer())
+                self.refresh_word_biasing()
             except Exception as e:
                 log.warning(f"App index warmup failed (will build on first use): {e}")
 
@@ -907,6 +1088,7 @@ class GraceApp:
         self.wake_word.pause()
 
         # 2. Reset and listen for speech
+        self.refresh_word_biasing()
         self.vad.reset()
         self.whisper.reset_buffer()
 
@@ -1027,6 +1209,37 @@ class GraceApp:
         log.info(f"Transcribed: '{transcript}'")
         await self.ws_server.emit({"type": "FinalTranscript", "text": transcript})
         await self.ws_server.emit({"type": "ListeningStopped"})
+
+        # Personal correction list voice reversal and explicit learning
+        if hasattr(self, "corrections") and self.corrections:
+            forget_req = self.corrections.detect_forget_request(transcript)
+            if forget_req:
+                if forget_req == "*":
+                    removed = self.corrections.remove_last_correction()
+                    msg = f"I've forgotten the correction for {removed}." if removed else "There are no recent corrections to forget."
+                else:
+                    ok = self.corrections.remove_correction(forget_req)
+                    msg = f"I've forgotten the correction for {forget_req}." if ok else f"I couldn't find a correction for {forget_req}."
+                log.info(f"Voice correction reversal: {msg}")
+                await self._speak_response(msg)
+                await self.ws_server.emit({"type": "ConversationFinished"})
+                return True
+
+            explicit = self.corrections.detect_explicit_correction(
+                transcript, previous_transcript=self._last_raw_transcript
+            )
+            if explicit:
+                heard, meant = explicit
+                self.corrections.add_correction(heard, meant)
+                log.info(f"Learned personal voice correction: '{heard}' -> '{meant}'")
+                if self._last_raw_transcript:
+                    transcript = self.corrections.apply(self._last_raw_transcript)
+                else:
+                    transcript = meant
+
+            transcript = self.corrections.apply(transcript)
+
+        self._last_raw_transcript = transcript
 
         clean_transcript = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
 
@@ -1177,6 +1390,10 @@ class GraceApp:
             hard_max_seconds = 30.0
 
             while self._running:
+                if getattr(self, "_stop_followup", False):
+                    self._stop_followup = False
+                    handled = False
+                    break
                 now = time.time()
                 elapsed = now - start_time
                 if elapsed >= timeout_seconds:
@@ -1221,6 +1438,12 @@ class GraceApp:
                 break
 
         log.info("Follow-up listening window timed out. Returning to idle.")
+        scanner = getattr(self, "_active_mark_scanner", None)
+        if scanner is not None:
+            scanner.stop()
+            self._active_mark_scanner = None
+        self._choice_race_resolver = None
+        self._confirmation_race_resolver = None
         if self.agent_loop.has_pending_confirmation:
             # A parked delete or app-close that nobody answered must not still
             # be approvable once we're back to idle and a new "yes" could be
@@ -1238,6 +1461,47 @@ class GraceApp:
 
         # Cancel any ongoing TTS output if user barged in
         self.response_gen.stop_speaking()
+
+        # Check choice race resolver if mark scanning was active
+        if getattr(self, "_choice_race_resolver", None) is not None:
+            if not self._choice_race_resolver.resolve_voice(transcript):
+                log.info("Voice mark choice ignored: switch already resolved it")
+                return True
+            self._choice_race_resolver = None
+            scanner = getattr(self, "_active_mark_scanner", None)
+            if scanner is not None:
+                scanner.stop()
+                self._active_mark_scanner = None
+
+        # Personal correction list voice reversal and explicit learning
+        if hasattr(self, "corrections") and self.corrections:
+            forget_req = self.corrections.detect_forget_request(transcript)
+            if forget_req:
+                if forget_req == "*":
+                    removed = self.corrections.remove_last_correction()
+                    msg = f"I've forgotten the correction for {removed}." if removed else "There are no recent corrections to forget."
+                else:
+                    ok = self.corrections.remove_correction(forget_req)
+                    msg = f"I've forgotten the correction for {forget_req}." if ok else f"I couldn't find a correction for {forget_req}."
+                log.info(f"Voice correction reversal: {msg}")
+                await self._speak_response(msg)
+                return True
+
+            explicit = self.corrections.detect_explicit_correction(
+                transcript, previous_transcript=self._last_raw_transcript
+            )
+            if explicit:
+                heard, meant = explicit
+                self.corrections.add_correction(heard, meant)
+                log.info(f"Learned personal voice correction: '{heard}' -> '{meant}'")
+                if self._last_raw_transcript:
+                    transcript = self.corrections.apply(self._last_raw_transcript)
+                else:
+                    transcript = meant
+
+            transcript = self.corrections.apply(transcript)
+
+        self._last_raw_transcript = transcript
 
         clean_transcript = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
 

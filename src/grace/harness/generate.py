@@ -63,6 +63,7 @@ from unittest import mock
 
 from .clock import install_audio_clock_vad
 from ..agent.planner import wrap_untrusted
+from ..input.switch_input import SwitchAction
 
 logger = logging.getLogger("grace.harness.generate")
 
@@ -163,6 +164,9 @@ class Scenario:
     # is what a single-turn scenario wants; a multi-turn one needs long enough
     # for the next utterance's chunks to arrive.
     followup_timeout: int = 0
+
+    # Scheduled switch actions to simulate during execution: list of (delay_seconds, SwitchAction)
+    switch_actions: list[tuple[float, Any]] = field(default_factory=list)
 
 
 # -- scripted edges --------------------------------------------------------
@@ -570,6 +574,7 @@ async def _drive(
 
         app = main_mod.GraceApp()
         app._running = True
+        app._loop = asyncio.get_running_loop()
         # Silence is counted in audio, not wall time, so a turn ends on the same
         # chunk however loaded the machine is. See harness/clock.py.
         install_audio_clock_vad(app)
@@ -580,6 +585,25 @@ async def _drive(
             [t.transcript for t in scenario.turns], overruns
         )
         app.whisper._initialized = True
+
+        if getattr(scenario, "switch_actions", None):
+            import time
+            for trigger, action in scenario.switch_actions:
+                async def _watch(trig=trigger, act=action):
+                    if isinstance(trig, (int, float)):
+                        await asyncio.sleep(trig)
+                    elif trig == "on_confirmation":
+                        while not getattr(app.agent_loop, "has_pending_confirmation", False):
+                            await asyncio.sleep(0.05)
+                        while time.monotonic() < getattr(app, "_confirmation_prompt_finished_at", 0.0):
+                            await asyncio.sleep(0.05)
+                        await asyncio.sleep(0.05)
+                    elif trig == "on_mark_scanner":
+                        while not getattr(app, "_active_mark_scanner", None):
+                            await asyncio.sleep(0.05)
+                        await asyncio.sleep(0.05)
+                    app.switch_handler.trigger_action(act)
+                asyncio.create_task(_watch())
 
         await app._handle_activation()
 
@@ -1685,6 +1709,128 @@ def _catalogue() -> list[Scenario]:
             )],
             snapshots=[_BROWSER],
             cua_results=[{"ok": True, "message": "scrolled"}, {"ok": True, "message": "value set"}],
+        ),
+        # -- Task 10: Biasing, Corrections, Switch, and Mark Scanning ------
+        Scenario(
+            name="correction_learning",
+            covers=(
+                "Grace learns a personal voice correction (crow -> Chrome) from an explicit "
+                "correction utterance and immediately applies it to launch Chrome."
+            ),
+            turns=[
+                Turn(
+                    "open crow",
+                    [
+                        _intent("converse", response="I couldn't find an application called crow."),
+                    ],
+                ),
+                Turn(
+                    "no, Chrome",
+                    [
+                        _intent("open_app", app="Chrome"),
+                    ],
+                ),
+            ],
+            tool_results={"open_app": {"status": "ok", "app": "Chrome", "text": "Google Chrome opened."}},
+            followup_timeout=6,
+        ),
+        Scenario(
+            name="switch_yes",
+            covers=(
+                "SafetyGuard parks delete_file, and user confirms the dangerous step via accessibility "
+                "switch single press instead of voice."
+            ),
+            turns=[
+                Turn(
+                    "get rid of the draft file",
+                    [
+                        _intent("cua_click", element_id=0),
+                        _plan("delete_file", thought="Remove the draft.",
+                              expect="the file is in the recycle bin",
+                              user_update="Deleting…", name="draft.txt"),
+                        _plan("converse", thought="Done.", completed=True,
+                              user_update="Finishing up…",
+                              final="I've moved draft.txt to the Recycle Bin."),
+                    ],
+                ),
+            ],
+            snapshots=[_NOTEPAD],
+            tool_results={"delete_file": {
+                "status": "ok", "action": "delete_file",
+                "text": "I've moved 'draft.txt' to the Recycle Bin.",
+            }},
+            switch_actions=[("on_confirmation", SwitchAction.YES)],
+            followup_timeout=4,
+        ),
+        Scenario(
+            name="switch_no",
+            covers=(
+                "SafetyGuard parks delete_file, and user declines the action via accessibility "
+                "switch double press."
+            ),
+            turns=[
+                Turn(
+                    "get rid of the draft file",
+                    [
+                        _intent("cua_click", element_id=0),
+                        _plan("delete_file", thought="Remove the draft.",
+                              expect="the file is in the recycle bin",
+                              user_update="Deleting…", name="draft.txt"),
+                    ],
+                ),
+            ],
+            snapshots=[_NOTEPAD],
+            tool_results={"delete_file": {
+                "status": "ok", "action": "delete_file",
+                "text": "I've moved 'draft.txt' to the Recycle Bin.",
+            }},
+            switch_actions=[("on_confirmation", SwitchAction.NO)],
+            followup_timeout=4,
+        ),
+        Scenario(
+            name="switch_stop",
+            covers=(
+                "Accessibility switch long press triggers immediate emergency stop reflex, "
+                "halting speaking and cancelling goal execution."
+            ),
+            turns=[
+                Turn(
+                    "type the summary notes",
+                    [
+                        _intent("cua_type", text="Notes"),
+                        _plan("cua_type", thought="Type notes.",
+                              expect="notes typed", user_update="Typing…", text="Notes"),
+                    ],
+                ),
+            ],
+            snapshots=[_NOTEPAD],
+            switch_actions=[(0.05, SwitchAction.STOP)],
+            followup_timeout=0,
+        ),
+        Scenario(
+            name="mark_scanning",
+            covers=(
+                "Ambiguous target prompts a Set-of-Marks question; MarkScanner cyclically scans "
+                "visual choices and switch press selects button 4 to complete the click."
+            ),
+            turns=[
+                Turn(
+                    "download the report",
+                    [
+                        _intent("converse", response="Did you mean button 4 or button 7?"),
+                        _intent("cua_click", element_id=4),
+                        _plan("cua_click", thought="Click button 4.",
+                              expect="button 4 clicked", user_update="Clicking button 4…",
+                              element_id=4),
+                        _plan("converse", thought="Done.", completed=True,
+                              user_update="Finishing up…", final="I've clicked button 4."),
+                    ],
+                ),
+            ],
+            snapshots=[_CHOICE_SCREEN],
+            cua_results=[{"ok": True, "message": "clicked"}],
+            switch_actions=[("on_mark_scanner", SwitchAction.YES)],
+            followup_timeout=4,
         ),
     ]
 

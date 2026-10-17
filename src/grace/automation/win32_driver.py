@@ -180,11 +180,16 @@ class Win32Driver:
             logger.debug(f"Win32Driver focus step skipped: {e}")
 
         # Position the hardware cursor first so the OS tracks a real hover state.
-        # The settle exists because a freshly-activated Chromium window swallows
-        # a click that arrives before it has processed the activation; a window
-        # that was already in front needs no such grace period.
+        # Check Gameface coexistence: do not click while user is mid-gesture.
+        try:
+            from .gameface import GamefaceCoexistence
+            GamefaceCoexistence().wait_for_quiet_window(timeout_seconds=0.3)
+        except Exception:
+            pass
+
         try:
             ctypes.windll.user32.SetCursorPos(int(x), int(y))
+
             settle_ms = HOVER_SETTLE_FAST_MS if already_foreground else HOVER_SETTLE_MS
             time.sleep(settle_ms / 1000.0)
         except Exception as e:

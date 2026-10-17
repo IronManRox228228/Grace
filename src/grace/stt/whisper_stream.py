@@ -54,7 +54,9 @@ class WhisperStreaming:
         self._buffer = bytearray()
         self._last_transcript = ""
         self._initialized = False
+        self._initial_prompt: Optional[str] = None
         # Whisper always resamples to 16 kHz internally; used only to size the
+
         # one second of silence fed to warmup().
         self._sample_rate_hint = 16000
 
@@ -145,6 +147,11 @@ class WhisperStreaming:
         self._buffer.clear()
         self._last_transcript = ""
 
+    def set_initial_prompt(self, prompt: Optional[str]) -> None:
+        """Set initial prompt text for vocabulary biasing."""
+        self._initial_prompt = prompt
+
+
     def _transcribe_pcm(self, raw_bytes: bytes) -> str:
         """Convert int16 PCM bytes to float32 audio and run Whisper inference."""
         buf = raw_bytes
@@ -161,13 +168,20 @@ class WhisperStreaming:
             return ""
 
         started = time.perf_counter()
+        kwargs = {
+            "language": "en",
+            "beam_size": 2,
+            "vad_filter": False,
+        }
+        if getattr(self, "_initial_prompt", None):
+            kwargs["initial_prompt"] = self._initial_prompt
+
         segments, _info = self._model.transcribe(
             audio_array,
-            language="en",
-            beam_size=2,
-            vad_filter=False,
+            **kwargs,
         )
         text = "".join(segment.text for segment in segments).strip()
+
 
         # Tape the *unmodified* input bytes, not the trimmed buffer: whisper-rs
         # has to be fed exactly what faster-whisper was fed, odd trailing byte
