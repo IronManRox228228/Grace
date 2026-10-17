@@ -1,0 +1,61 @@
+{"sample_id": "corpus_agentic_completion_rejected_0", "utterance": "open the file menu in notepad", "expected_tool": "cua_click", "expected_args": {"element_id": 1}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_agentic_preexec_open_app_0", "utterance": "open notepad then type a note", "expected_tool": "open_app", "expected_args": {"name": "notepad"}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_agentic_preexec_open_app_1", "utterance": "run cua_type_text", "expected_tool": "cua_type_text", "expected_args": {"text": "a note"}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_agentic_read_pdf_0", "utterance": "read my report pdf to me", "expected_tool": "read_pdf", "expected_args": {"path": "C:\\Users\\x\\Documents\\report.pdf"}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_agentic_step_failed_0", "utterance": "click the submit button", "expected_tool": "cua_click", "expected_args": {"element_id": 3}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_agentic_step_failed_1", "utterance": "run cua_click", "expected_tool": "cua_click", "expected_args": {"element_id": 2}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_agentic_two_step_0", "utterance": "click the search box and type hello", "expected_tool": "cua_click", "expected_args": {"element_id": 2}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_agentic_two_step_1", "utterance": "run cua_type_text", "expected_tool": "cua_type_text", "expected_args": {"text": "hello"}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_agentic_unparseable_plan_0", "utterance": "click the refresh button", "expected_tool": "cua_click", "expected_args": {"element_id": 1}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_blind_app_vision_mode_0", "utterance": "open the chemistry group", "expected_tool": "cua_click", "expected_args": {"element_id": 1}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_fastpath_adjust_volume_0", "utterance": "turn the volume up a bit", "expected_tool": "adjust_volume", "expected_args": {"amount": 10, "mode": "increase"}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_fastpath_close_app_0", "utterance": "close notepad", "expected_tool": "close_app", "expected_args": {"name": "notepad"}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_fastpath_cua_list_windows_0", "utterance": "list my open windows", "expected_tool": "cua_list_windows", "expected_args": {}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_fastpath_delete_file_0", "utterance": "delete old notes", "expected_tool": "delete_file", "expected_args": {"name": "old notes.txt"}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_fastpath_lock_computer_0", "utterance": "lock my computer", "expected_tool": "lock_computer", "expected_args": {}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_fastpath_open_app_0", "utterance": "open notepad", "expected_tool": "open_app", "expected_args": {"name": "notepad"}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_fastpath_open_calculator_0", "utterance": "open the calculator", "expected_tool": "open_calculator", "expected_args": {}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_fastpath_open_file_0", "utterance": "open the budget spreadsheet", "expected_tool": "open_file", "expected_args": {"name": "budget.xlsx"}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_fastpath_search_files_0", "utterance": "find my tax return", "expected_tool": "search_files", "expected_args": {"query": "tax return"}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_fastpath_tool_error_0", "utterance": "open the budget spreadsheet", "expected_tool": "open_file", "expected_args": {"name": "budget.xlsx"}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_followup_agentic_0", "utterance": "hello grace", "expected_tool": "cua_click", "expected_args": {"element_id": 1}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_followup_chain_three_turns_0", "utterance": "open notepad", "expected_tool": "open_app", "expected_args": {"name": "notepad"}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_followup_chain_three_turns_1", "utterance": "now turn the volume up", "expected_tool": "adjust_volume", "expected_args": {"amount": 10, "mode": "increase"}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_repeated_action_escalates_0", "utterance": "click send", "expected_tool": "cua_click", "expected_args": {"element_id": 3}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_repeated_action_escalates_1", "utterance": "run cua_click", "expected_tool": "cua_click", "expected_args": {"element_id": 3}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_repeated_action_escalates_2", "utterance": "run cua_click", "expected_tool": "cua_click", "expected_args": {"element_id": 3}, "is_multi_turn": true, "source": "corpus"}
+{"sample_id": "corpus_safety_confirm_accepted_0", "utterance": "get rid of the draft file", "expected_tool": "delete_file", "expected_args": {"name": "draft.txt"}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "corpus_stale_field_replace_0", "utterance": "now search for coordination compounds", "expected_tool": "cua_type_text", "expected_args": {"text": "Coordination Compounds", "replace": true}, "is_multi_turn": false, "source": "corpus"}
+{"sample_id": "synthetic_028", "utterance": "open chrome", "expected_tool": "open_app", "expected_args": {"app_name": "chrome"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_029", "utterance": "launch calculator", "expected_tool": "open_app", "expected_args": {"app_name": "calculator"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_030", "utterance": "start edge browser", "expected_tool": "open_app", "expected_args": {"app_name": "edge"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_031", "utterance": "close notepad", "expected_tool": "close_app", "expected_args": {"app_name": "notepad"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_032", "utterance": "quit spotify", "expected_tool": "close_app", "expected_args": {"app_name": "spotify"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_033", "utterance": "turn the volume up", "expected_tool": "adjust_volume", "expected_args": {"direction": "up", "step": 10}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_034", "utterance": "mute the computer", "expected_tool": "adjust_volume", "expected_args": {"direction": "mute"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_035", "utterance": "set volume to 60 percent", "expected_tool": "adjust_volume", "expected_args": {"direction": "set", "level": 60}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_036", "utterance": "lock my screen", "expected_tool": "lock_computer", "expected_args": {}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_037", "utterance": "lock the pc", "expected_tool": "lock_computer", "expected_args": {}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_038", "utterance": "find resume docx", "expected_tool": "search_files", "expected_args": {"query": "resume.docx"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_039", "utterance": "search files for financial report", "expected_tool": "search_files", "expected_args": {"query": "financial report"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_040", "utterance": "open notes txt", "expected_tool": "open_file", "expected_args": {"path": "notes.txt"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_041", "utterance": "view invoice pdf", "expected_tool": "open_file", "expected_args": {"path": "invoice.pdf"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_042", "utterance": "delete old log file", "expected_tool": "delete_file", "expected_args": {"path": "old.log"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_043", "utterance": "read doc pdf", "expected_tool": "read_pdf", "expected_args": {"path": "doc.pdf"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_044", "utterance": "summarize document pdf", "expected_tool": "summarize_pdf", "expected_args": {"path": "document.pdf"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_045", "utterance": "undo that", "expected_tool": "undo", "expected_args": {}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_046", "utterance": "what is on my screen", "expected_tool": "describe_screen", "expected_args": {}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_047", "utterance": "speak faster", "expected_tool": "set_speech_rate", "expected_args": {"rate": 1.2}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_048", "utterance": "slow down your voice", "expected_tool": "set_speech_rate", "expected_args": {"rate": 0.8}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_049", "utterance": "click the submit button", "expected_tool": "cua_click", "expected_args": {"element_id": 3}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_050", "utterance": "click the search box", "expected_tool": "cua_click", "expected_args": {"element_id": 2}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_051", "utterance": "type hello world", "expected_tool": "cua_type_text", "expected_args": {"text": "hello world"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_052", "utterance": "type my email address test at example dot com", "expected_tool": "cua_type_text", "expected_args": {"text": "test@example.com"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_053", "utterance": "press enter", "expected_tool": "cua_press_key", "expected_args": {"key": "enter"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_054", "utterance": "press tab", "expected_tool": "cua_press_key", "expected_args": {"key": "tab"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_055", "utterance": "press alt f4", "expected_tool": "cua_press_key", "expected_args": {"key": "alt+f4"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_056", "utterance": "press escape", "expected_tool": "cua_press_key", "expected_args": {"key": "escape"}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_057", "utterance": "scroll down", "expected_tool": "cua_scroll", "expected_args": {"direction": "down", "amount": 3}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_058", "utterance": "scroll up to the top", "expected_tool": "cua_scroll", "expected_args": {"direction": "up", "amount": 5}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_059", "utterance": "drag from button to folder", "expected_tool": "cua_drag", "expected_args": {"from_id": 1, "to_id": 4}, "is_multi_turn": false, "source": "synthetic"}
+{"sample_id": "synthetic_060", "utterance": "set text value to 100", "expected_tool": "cua_set_value", "expected_args": {"element_id": 5, "value": "100"}, "is_multi_turn": false, "source": "synthetic"}

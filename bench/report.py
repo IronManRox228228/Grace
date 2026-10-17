@@ -41,16 +41,108 @@ def format_rtf(val: Optional[float]) -> str:
     return f"{val:.3f}x"
 
 
-def generate_markdown_report(records: List[Dict[str, Any]]) -> str:
+def generate_markdown_report(records: List[Dict[str, Any]], benchmark_name: str = "asr_torgo") -> str:
     """Generate Markdown report from benchmark execution records."""
     if not records:
         return (
-            "# Benchmark Report: ASR on TORGO\n\n"
-            "> [!NOTE]\n"
-            "> No benchmark records found. Run `python -m bench.run_asr_torgo` after "
-            "downloading the TORGO dataset to populate real metrics.\n"
+            f"# Benchmark Report: {benchmark_name}\n\n"
+            f"> [!NOTE]\n"
+            f"> No benchmark records found for '{benchmark_name}'. Run the benchmark suite to populate metrics.\n"
         )
 
+    # Detect benchmark type from first record if unspecified
+    if records and "benchmark_name" in records[0]:
+        benchmark_name = records[0]["benchmark_name"]
+
+    if benchmark_name == "decision_benchmark":
+        return _generate_decision_report(records)
+    elif benchmark_name == "tool_calling_benchmark":
+        return _generate_tool_calling_report(records)
+    else:
+        return _generate_asr_torgo_report(records)
+
+
+def _generate_decision_report(records: List[Dict[str, Any]]) -> str:
+    """Format element selection and yes/no decision benchmark report."""
+    lines: List[str] = [
+        "# Benchmark 2 Report: Element Selection & Yes/No Decisions (PLAN §3, §9)\n",
+        "## 1. Element Selection on UI Snapshots\n",
+        "| Model | Top-1 Acc | Top-3 Acc | Held-out App Acc | Abstain Prec | Abstain Recall | ECE | Latency p50 | Latency p95 |",
+        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+    ]
+
+    for r in records:
+        m = r.get("metrics", {}).get("element_selection", {})
+        lines.append(
+            f"| **{r['model_id']}** "
+            f"| {m.get('top_1_accuracy', 0.0) * 100:.1f}% "
+            f"| {m.get('top_3_accuracy', 0.0) * 100:.1f}% "
+            f"| {m.get('held_out_app_accuracy', 0.0) * 100:.1f}% "
+            f"| {m.get('abstain_precision', 0.0) * 100:.1f}% "
+            f"| {m.get('abstain_recall', 0.0) * 100:.1f}% "
+            f"| {m.get('ece', 0.0):.3f} "
+            f"| {format_ms(m.get('latency_p50_ms'))} "
+            f"| {format_ms(m.get('latency_p95_ms'))} |"
+        )
+    lines.append("")
+
+    lines.append("## 2. Yes/No & Confirmation Classification\n")
+    lines.append("| Model | Overall Acc | Mumbled/Hedged | Greeting-Prefixed | Repeat Reflex | Stop Reflex | ECE | Latency p50 |")
+    lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |")
+
+    for r in records:
+        yn = r.get("metrics", {}).get("yes_no", {})
+        cats = yn.get("categories", {})
+        mumbled = cats.get("hedged", {}).get("accuracy", 0.0)
+        greeting = (cats.get("greeting_yes", {}).get("accuracy", 0.0) + cats.get("greeting_no", {}).get("accuracy", 0.0)) / 2.0
+        repeat = cats.get("repeat", {}).get("accuracy", 0.0)
+        stop = cats.get("stop", {}).get("accuracy", 0.0)
+
+        lines.append(
+            f"| **{r['model_id']}** "
+            f"| {yn.get('overall_accuracy', 0.0) * 100:.1f}% "
+            f"| {mumbled * 100:.1f}% "
+            f"| {greeting * 100:.1f}% "
+            f"| {repeat * 100:.1f}% "
+            f"| {stop * 100:.1f}% "
+            f"| {yn.get('ece', 0.0):.3f} "
+            f"| {format_ms(yn.get('latency_p50_ms'))} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _generate_tool_calling_report(records: List[Dict[str, Any]]) -> str:
+    """Format tool calling benchmark report."""
+    lines: List[str] = [
+        "# Benchmark 3 Report: Tool Calling Bake-off (PLAN §3, §9)\n",
+        "## 1. Overall Tool Calling Accuracy & Syntactic Validity\n",
+        "| Model | Exact Tool Acc | Args Match Acc | JSON Validity Rate | Single-Turn Acc | Multi-Turn Acc | Latency p50 | Latency p95 |",
+        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+    ]
+
+    for r in records:
+        m = r.get("metrics", {})
+        overall = m.get("overall", {})
+        single = m.get("single_turn", {})
+        multi = m.get("multi_turn", {})
+        lat = m.get("latency_ms", {})
+
+        lines.append(
+            f"| **{r['model_id']}** "
+            f"| {overall.get('exact_tool_accuracy', 0.0) * 100:.1f}% "
+            f"| {overall.get('args_match_accuracy', 0.0) * 100:.1f}% "
+            f"| {overall.get('json_validity_rate', 0.0) * 100:.1f}% "
+            f"| {single.get('exact_tool_accuracy', 0.0) * 100:.1f}% "
+            f"| {multi.get('exact_tool_accuracy', 0.0) * 100:.1f}% "
+            f"| {format_ms(lat.get('p50'))} "
+            f"| {format_ms(lat.get('p95'))} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _generate_asr_torgo_report(records: List[Dict[str, Any]]) -> str:
     lines: List[str] = []
     lines.append("# Benchmark Report: ASR on TORGO (PLAN §8, §9)\n")
 
@@ -99,7 +191,6 @@ def generate_markdown_report(records: List[Dict[str, Any]]) -> str:
     lines.append("")
 
     # 3. Per-Speaker WER Breakdown Table
-    # Collect all unique speakers across records
     all_speakers: Dict[str, Dict[str, Any]] = {}
     for r in records:
         spk_data = r.get("metrics", {}).get("wer_by_speaker", {})

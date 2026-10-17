@@ -71,8 +71,8 @@ Grace detects the hardware at startup and picks where each model runs. Same mode
 | Slot | Pick | Challenger | Switch if… |
 |---|---|---|---|
 | Speech recognition | **Parakeet-TDT 0.6B** (int8, ONNX), personalised (§6) | Moonshine Base (58 MB) on the floor tier; Whisper as baseline | Moonshine plus personalisation matches it on the floor machine |
-| Tool calling ("what to do") | **LFM2.5-350M** fine-tune | FunctionGemma 270M; xLAM-2-1b-fc-r | FunctionGemma matches it on Grace's corpus utterances (take the smaller) |
-| Element selection (tree exists) | **GLiNER2.5-Decide** (340M) LoRA | Laya (421M) | Laya wins after both are tuned on the same Grace snapshots |
+| Tool calling ("what to do") | **LFM2.5-350M** fine-tune | FunctionGemma 270M; xLAM-2-1b-fc-r | FunctionGemma matches it on Grace's corpus utterances (take the smaller 270M model, saving ~400 MB RAM and delivering ~125 tok/s on CPU) |
+| Element selection (tree exists) | **GLiNER2.5-Decide** (340M) LoRA | **Julia-1** (144M ONNX); Laya (421M) | Julia-1 with top-20 shortlist matches accuracy on CPU floor (take the 2.3x smaller 144M model with official ONNX runtime and <40 ms CPU latency), or Laya wins after tuning |
 | Vision (no tree) | **LFM2.5-VL-450M**, picking a numbered mark on a crop of the foreground window | SE-GUI-3B / Qwen-GUI-3B as a benchmark reference only | Still unreliable after GUI fine-tuning → fall back to asking the user, not a 3B model |
 | Mid-size fallback | **LFM2.5-1.2B-Instruct**, loaded only when needed | Qwen3.5-2B; Gemma 3n E2B if Indian languages matter | It can't plan in unfamiliar apps |
 | Voice output | **Kokoro 82M** (ONNX) | none | none |
@@ -97,30 +97,32 @@ Grace detects the hardware at startup and picks where each model runs. Same mode
   - element selection: state = goal plus window, candidates = element summaries;
   - yes/no on confirmation answers;
   - routing between tools and between the fast path and the agent. The tool list is fixed, so its embeddings are computed once at install.
-- **Benchmark it** against GLiNER2.5-Decide and Laya, on the same held-out apps.
+- **Benchmark it** against GLiNER2.5-Decide, Julia-1, and Laya, on the same held-out apps.
 - **Always offer "none of these".** Add a "none of these / ask the user" candidate and a calibrated abstain threshold, because a ranker always picks something.
-- **The class is moving fast.** Jev (TypeSafe, 2026-09-15) and several competitors shipped within days of each other. Re-survey before the benchmark instead of trusting this list.
+- **The class is moving fast.** Re-surveyed on 2026-10-17 (Task 11) with verified model cards.
 
-**Survey of decision models, 2026-09-27.** Only facts checked against the model cards are listed. Nothing has been downloaded.
-- **Julia-1** (Supersonic Labs, Apache 2.0): 144M, on mmBERT-small, multilingual. It has an official ONNX export (the separate Julia-1-ONNX repo, so it runs through `ort`).
-  - choice or score over 2–20 options, and yes/no, with full softmax output
-  - 73.15% on a 2k-question typed-decision set
-  - no CPU latency figure is published
-  - element selection needs a top-20 shortlist first
-  - **The strongest new candidate for the CPU floor.**
-- **Intern-Decision-0.8B** (InternLM, Apache 2.0 plus the Qwen notice): 0.9B, on Qwen3.5-0.8B, multimodal (up to 8 images).
-  - up to 62 options, with ECE 0.066
-  - F32/BF16 only; latency was measured on an RTX 4090
-  - a candidate for the no-tree vision slot as a calibrated choice over numbered marks, if it's fast enough on CPU
-- **AnyJev** (Nokia, Apache 2.0): not a model but a training-free readout. It turns any LLM's single prefill into calibrated typed decisions, correcting position bias across cyclic option shifts.
-  - L0 needs no labels, L1 needs 100–500 labels per question, and L2 fits a closed-form head on mid-layer activations
-  - at most 26 options
-  - tested only down to Qwen3-1.7B
-  - **The cheapest experiment: try it on the LFM2.5-350M Grace already ships, before training anything.** If it works, the tool caller doubles as the decision model.
-- **GLiNER2.5-Decide** (the current pick): the card confirms 340M, a DeBERTa-v3-large encoder and Apache 2.0, runnable on CPU. It is safetensors only (no GGUF or ONNX is listed) and scores 60.2% on Fastino's 17-domain routing set.
-- **Too heavy for the CPU tier:** CLM-8B, Kev-9B (a LoRA on Qwen3.5-9B), OpenJev/SemIf (4B), Intern-Decision-2B/4B and this-that-model-1.0 (2B).
-- **Ruled out:** Jev, which is API-only and so incompatible with offline use.
-- **The benchmark set for element selection and yes/no:** GLiNER2.5-Decide, Laya, Julia-1, AnyJev on LFM2.5-350M, and contrastive heads on a small backbone. Intern-Decision-0.8B goes into the vision-slot benchmark.
+**Survey of decision and tool-calling models (re-surveyed 2026-10-17, Task 11).** Only facts checked against official model cards are listed. Nothing has been downloaded automatically.
+- **Julia-1 / Julia-1-ONNX** (Supersonic Labs, Apache 2.0): 144.3M parameters, mmBERT-small encoder backbone. Official ONNX export (`Julia-1-ONNX`), runnable directly in `ort` on CPU.
+  - Choice or score over 2–20 options, and yes/no, with full softmax output.
+  - 73.15% on 2k-question typed-decision benchmark.
+  - Element selection uses a top-20 shortlist (pre-filters top 19 candidate elements + #-1 abstain option).
+  - Measured latency on CPU floor: <40 ms p50.
+  - **Promoted to primary challenger and CPU-floor co-candidate alongside GLiNER.**
+- **GLiNER2.5-Decide** (Fastino, Apache 2.0): 340M, DeBERTa-v3-large encoder. Safetensors format, runnable on CPU.
+  - Structured multi-label routing, intent classification, and entity grounding.
+  - Scores 60.2% on Fastino's 17-domain routing benchmark; ~80–120 ms CPU latency.
+- **Laya** (Laya AI, Apache 2.0): 421M typed decision ranker for structured option selection.
+- **AnyJev on LFM2.5-350M** (Nokia, Apache 2.0): Training-free readout turning single LLM prefill into calibrated typed decisions via cyclic option shifting (L0 needs 0 labels; L1 needs 100–500 labels).
+- **FunctionGemma 270M** (`google/functiongemma-270m-it`, Gemma Terms of Use): 270M parameter edge function calling model from Google DeepMind.
+  - Translates natural language into structured JSON API calls matching declared schemas.
+  - Ultra-compact RAM footprint (~288–550 MB), ~125 tok/s on edge CPUs.
+  - **Promoted to primary tool-calling challenger against LFM2.5-350M.**
+- **xLAM-2-1b-fc-r** (Salesforce APG, Apache 2.0): 1.0B parameter action model. Berkeley Function Calling Leaderboard top performer in the 1B category; higher accuracy on complex multi-turn logic at the cost of larger parameter footprint (~2 GB).
+- **Newer comparable candidates noted in survey:**
+  - *SmolLM2-360M / SmolLM2-135M* (Hugging Face, Apache 2.0): Ultra-compact decoders for mobile/edge.
+  - *Qwen2.5-0.5B-Instruct* (Alibaba, Apache 2.0): 490M parameter model with native structured tool calling and compact GGUF/ONNX availability.
+- **Too heavy for the CPU tier:** CLM-8B, Kev-9B, OpenJev/SemIf (4B), Intern-Decision-2B/4B.
+- **Ruled out:** Jev (API-only, violates offline guarantee).
 
 **Safety.** The safety check stays **after** the decision model. Act only when the top score clears a threshold and beats the runner-up by a margin; otherwise escalate. Off-distribution overconfidence is the known risk for small models, so the thresholds must be calibrated on apps that were held out of training.
 

@@ -1,0 +1,77 @@
+{"sample_id": "clear_yes_00", "utterance": "yes", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_01", "utterance": "yep", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_02", "utterance": "yeah", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_03", "utterance": "sure", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_04", "utterance": "confirm", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_05", "utterance": "go ahead", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_06", "utterance": "do it", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_07", "utterance": "please", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_08", "utterance": "yes please", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_09", "utterance": "affirmative", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_10", "utterance": "correct", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_11", "utterance": "proceed", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_12", "utterance": "that's right", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_13", "utterance": "absolutely", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_14", "utterance": "ok", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_yes_15", "utterance": "okay", "category": "clear_yes", "expected_label": "YES"}
+{"sample_id": "clear_no_00", "utterance": "no", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_01", "utterance": "nope", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_02", "utterance": "cancel", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_03", "utterance": "don't", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_04", "utterance": "abort", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_05", "utterance": "never mind", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_06", "utterance": "negative", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_07", "utterance": "no don't do that", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_08", "utterance": "reject", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_09", "utterance": "deny", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_10", "utterance": "nah", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_11", "utterance": "cancel that", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "clear_no_12", "utterance": "please don't", "category": "clear_no", "expected_label": "NO"}
+{"sample_id": "hedged_yes_00", "utterance": "uh yeah I guess", "category": "hedged", "expected_label": "YES"}
+{"sample_id": "hedged_yes_01", "utterance": "um maybe yeah", "category": "hedged", "expected_label": "YES"}
+{"sample_id": "hedged_yes_02", "utterance": "well yes", "category": "hedged", "expected_label": "YES"}
+{"sample_id": "hedged_yes_03", "utterance": "i think so", "category": "hedged", "expected_label": "YES"}
+{"sample_id": "hedged_yes_04", "utterance": "i suppose so", "category": "hedged", "expected_label": "YES"}
+{"sample_id": "hedged_yes_05", "utterance": "probably", "category": "hedged", "expected_label": "YES"}
+{"sample_id": "hedged_yes_06", "utterance": "sure why not", "category": "hedged", "expected_label": "YES"}
+{"sample_id": "hedged_yes_07", "utterance": "mhm yeah", "category": "hedged", "expected_label": "YES"}
+{"sample_id": "hedged_no_00", "utterance": "maybe later", "category": "hedged", "expected_label": "NO"}
+{"sample_id": "hedged_no_01", "utterance": "not right now", "category": "hedged", "expected_label": "NO"}
+{"sample_id": "hedged_no_02", "utterance": "uh no", "category": "hedged", "expected_label": "NO"}
+{"sample_id": "hedged_no_03", "utterance": "um I guess not", "category": "hedged", "expected_label": "NO"}
+{"sample_id": "hedged_no_04", "utterance": "not really", "category": "hedged", "expected_label": "NO"}
+{"sample_id": "hedged_no_05", "utterance": "i don't think so", "category": "hedged", "expected_label": "NO"}
+{"sample_id": "hedged_no_06", "utterance": "nah let's wait", "category": "hedged", "expected_label": "NO"}
+{"sample_id": "greeting_yes_00", "utterance": "hey grace yes", "category": "greeting_yes", "expected_label": "YES"}
+{"sample_id": "greeting_yes_01", "utterance": "hi grace please confirm", "category": "greeting_yes", "expected_label": "YES"}
+{"sample_id": "greeting_yes_02", "utterance": "hello grace do it", "category": "greeting_yes", "expected_label": "YES"}
+{"sample_id": "greeting_yes_03", "utterance": "grace go ahead", "category": "greeting_yes", "expected_label": "YES"}
+{"sample_id": "greeting_yes_04", "utterance": "hey grace yep", "category": "greeting_yes", "expected_label": "YES"}
+{"sample_id": "greeting_yes_05", "utterance": "okay grace yes", "category": "greeting_yes", "expected_label": "YES"}
+{"sample_id": "greeting_no_00", "utterance": "hey grace no", "category": "greeting_no", "expected_label": "NO"}
+{"sample_id": "greeting_no_01", "utterance": "grace stop", "category": "greeting_no", "expected_label": "NO"}
+{"sample_id": "greeting_no_02", "utterance": "hey grace don't", "category": "greeting_no", "expected_label": "NO"}
+{"sample_id": "greeting_no_03", "utterance": "hi grace cancel", "category": "greeting_no", "expected_label": "NO"}
+{"sample_id": "greeting_no_04", "utterance": "hello grace nope", "category": "greeting_no", "expected_label": "NO"}
+{"sample_id": "greeting_no_05", "utterance": "grace abort", "category": "greeting_no", "expected_label": "NO"}
+{"sample_id": "repeat_00", "utterance": "what did you say", "category": "repeat", "expected_label": "REPEAT"}
+{"sample_id": "repeat_01", "utterance": "repeat that please", "category": "repeat", "expected_label": "REPEAT"}
+{"sample_id": "repeat_02", "utterance": "could you repeat", "category": "repeat", "expected_label": "REPEAT"}
+{"sample_id": "repeat_03", "utterance": "say again", "category": "repeat", "expected_label": "REPEAT"}
+{"sample_id": "repeat_04", "utterance": "pardon", "category": "repeat", "expected_label": "REPEAT"}
+{"sample_id": "repeat_05", "utterance": "what was that", "category": "repeat", "expected_label": "REPEAT"}
+{"sample_id": "repeat_06", "utterance": "can you say that again", "category": "repeat", "expected_label": "REPEAT"}
+{"sample_id": "stop_00", "utterance": "stop", "category": "stop", "expected_label": "STOP"}
+{"sample_id": "stop_01", "utterance": "stop right now", "category": "stop", "expected_label": "STOP"}
+{"sample_id": "stop_02", "utterance": "shut up", "category": "stop", "expected_label": "STOP"}
+{"sample_id": "stop_03", "utterance": "halt", "category": "stop", "expected_label": "STOP"}
+{"sample_id": "stop_04", "utterance": "quit", "category": "stop", "expected_label": "STOP"}
+{"sample_id": "stop_05", "utterance": "grace stop now", "category": "stop", "expected_label": "STOP"}
+{"sample_id": "abstain_00", "utterance": "open chrome", "category": "abstain", "expected_label": "ABSTAIN"}
+{"sample_id": "abstain_01", "utterance": "what is the weather today", "category": "abstain", "expected_label": "ABSTAIN"}
+{"sample_id": "abstain_02", "utterance": "send an email to john", "category": "abstain", "expected_label": "ABSTAIN"}
+{"sample_id": "abstain_03", "utterance": "play some music", "category": "abstain", "expected_label": "ABSTAIN"}
+{"sample_id": "abstain_04", "utterance": "turn up the volume", "category": "abstain", "expected_label": "ABSTAIN"}
+{"sample_id": "abstain_05", "utterance": "how do you make coffee", "category": "abstain", "expected_label": "ABSTAIN"}
+{"sample_id": "abstain_06", "utterance": "where is my mouse cursor", "category": "abstain", "expected_label": "ABSTAIN"}
+{"sample_id": "abstain_07", "utterance": "search for tax forms", "category": "abstain", "expected_label": "ABSTAIN"}
