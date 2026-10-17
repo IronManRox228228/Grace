@@ -88,6 +88,7 @@ STUB_METHOD_PAIRS = [
     (FeedbackSounds, _NullFeedbackSounds, "play_chime"),
     (FeedbackSounds, _NullFeedbackSounds, "play_success"),
     (FeedbackSounds, _NullFeedbackSounds, "play_cancel"),
+    (FeedbackSounds, _NullFeedbackSounds, "play_ack"),
     (AudioCapture, NullAudio, "get_chunk"),
     (AudioCapture, NullAudio, "get_rms"),
     (WakeWordDetector, NullWakeWord, "start"),

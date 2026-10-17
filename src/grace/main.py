@@ -77,6 +77,10 @@ def build_llama_server_args(cfg: Config) -> list[str]:
         "--port", str(cfg.llama_port),
         "--host", cfg.llama_host,
     ]
+    if cfg.llama_parallel_slots:
+        args.extend(["-np", str(cfg.llama_parallel_slots)])
+    if getattr(cfg, "llama_flash_attn", False):
+        args.append("-fa")
     if cfg.llama_mmproj_path:
         args.extend(["--mmproj", cfg.llama_mmproj_path])
     return args
@@ -322,13 +326,15 @@ class GraceApp:
         # Allow interrupting Grace mid-speech (barge-in)
         def _on_barge_in_stop():
             log.info("Barge-in voice interrupt triggered during speech")
-            self.response_gen.stop_speaking()
+            if hasattr(self, "response_gen") and self.response_gen:
+                self.response_gen.stop_speaking()
 
         if hasattr(self, "wake_word") and self.wake_word:
             self.wake_word.arm_cancel_watch(_on_barge_in_stop)
 
         try:
-            await self.response_gen.generate_and_speak_with_text(self._last_spoken_text)
+            if hasattr(self, "response_gen") and self.response_gen:
+                await self.response_gen.generate_and_speak_with_text(self._last_spoken_text)
         finally:
             if hasattr(self, "wake_word") and self.wake_word:
                 self.wake_word.disarm_cancel_watch()
@@ -423,6 +429,31 @@ class GraceApp:
                     data = await resp.json()
                     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                     log.info(f"Model ready (test response: '{content.strip()[:50]}')")
+
+                    # Multimodal 1-token warm-up with tiny 1x1 image
+                    if self.config.llama_mmproj_path and os.path.exists(self.config.llama_mmproj_path):
+                        img_payload = {
+                            "messages": [{
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "Hi"},
+                                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}}
+                                ]
+                            }],
+                            "max_tokens": 1,
+                            "temperature": 0.0,
+                            "stream": False,
+                        }
+                        try:
+                            async with session.post(
+                                f"{url}/v1/chat/completions",
+                                json=img_payload,
+                                timeout=aiohttp.ClientTimeout(total=10),
+                            ) as img_resp:
+                                log.info(f"Multimodal vision projector warmed up (status={img_resp.status})")
+                        except Exception as img_err:
+                            log.debug(f"Vision projector warm-up non-critical error: {img_err}")
+
                     return True
                 log.debug(f"Model not ready yet (status={resp.status})")
                 return False
@@ -726,10 +757,32 @@ class GraceApp:
         except Exception as e:
             log.error(f"Activation turn crashed: {e}", exc_info=True)
             FeedbackSounds.play_error()
-            # Best-effort: _handle_activation already resumes on most exit
-            # paths, but this catches whatever crashed outside that guard.
+            await self._check_watchdog_and_speak_recovery()
             self.wake_word.resume()
+            await self.ws_server.emit({"type": "ConversationFinished"})
             await self.ws_server.emit({"type": "Idle"})
+
+    async def _check_watchdog_and_speak_recovery(self) -> None:
+        """Watchdog: restart dead llama-server if it exited, and speak a short human sentence."""
+        restarted = False
+        config = getattr(self, "config", None)
+        llama_proc = getattr(self, "_llama_process", None)
+        if config and not getattr(config, "use_cloud_llm", False) and llama_proc is not None:
+            if llama_proc.poll() is not None:
+                log.warning("Watchdog: llama-server process died. Restarting...")
+                try:
+                    self._start_llama_server()
+                    if await self._wait_for_llama_server(timeout=30):
+                        log.info("Watchdog: llama-server restarted successfully.")
+                        restarted = True
+                        await self._speak_response("The language model had to restart. I'm ready again.")
+                    else:
+                        await self._speak_response("The local language model stopped and could not restart.")
+                except Exception as exc:
+                    log.error(f"Watchdog restart failed: {exc}")
+                    await self._speak_response("I encountered a problem with the local model.")
+        if not restarted:
+            await self._speak_response("Sorry, something went wrong. I'm ready for your next command.")
 
     async def _handle_activation(self):
         """Time one activation cycle end to end, then hand off to the follow-up window.
@@ -744,9 +797,12 @@ class GraceApp:
             finally:
                 log.info(trace.summary())
                 try:
+                    log_path = getattr(self.config, "latency_log_path", None)
+                    if isinstance(log_path, str):
+                        trace.write_jsonl(log_path)
                     await self.ws_server.emit({"type": "TurnTrace", "trace": trace.to_dict()})
                 except Exception as e:
-                    log.debug(f"Failed to emit TurnTrace: {e}")
+                    log.debug(f"Failed to emit TurnTrace / write latency: {e}")
                 # The follow-up window pauses/resumes the detector itself once it
                 # actually starts. Every other exit from this turn - an aborted
                 # False, or an exception below - must resume it here instead, or
@@ -759,6 +815,7 @@ class GraceApp:
 
     async def _handle_activation_turn(self, trace) -> bool:
         """Handle a wake word activation cycle. Returns False if aborted/silence, True on turn success."""
+        trace.mark_event("wake")
         # 1. Play activation chime
         with trace.stage("chime"):
             FeedbackSounds.play_chime()
@@ -835,6 +892,11 @@ class GraceApp:
                     break
             listen_stage.detail(f"{len(audio_buffer)} bytes")
 
+        trace.mark_event("speech_end")
+        if has_speech_started and len(audio_buffer) > 0 and not hit_hard_cutoff:
+            # Instant acknowledgement within 300ms of end of speech
+            FeedbackSounds.play_ack()
+
         if hit_hard_cutoff:
             log.warning("Listen window reached hard cutoff while user was speaking.")
             await self.ws_server.emit({"type": "ListeningStopped"})
@@ -865,10 +927,12 @@ class GraceApp:
             async with trace.stage("whisper"):
                 self.whisper.add_buffer(audio_buffer)
                 transcript = await asyncio.to_thread(self.whisper.transcribe)
+            trace.mark_event("asr_done")
         except Exception as e:
             log.error(f"Transcription failed: {e}", exc_info=True)
             self.whisper.reset_buffer()
             FeedbackSounds.play_error()
+            await self._speak_response("I couldn't hear that clearly. Could you say that again?")
             await self.ws_server.emit({"type": "ConversationFinished"})
             await self.ws_server.emit({"type": "Idle"})
             return False
@@ -929,6 +993,7 @@ class GraceApp:
                     user_message=transcript,
                     system_prompt=self.intent_prompt,
                 )
+            trace.mark_event("first_model_token")
         except RateLimitError as e:
             log.error(f"Intent generation rate limited: {e}")
             await self.ws_server.emit({"type": "UnderstandingFinished"})
@@ -966,6 +1031,7 @@ class GraceApp:
             async with trace.stage("agent_loop") as agent_stage:
                 agent_res = await self._run_agent_goal(transcript)
                 agent_stage.detail(f"{len(agent_res.get('steps') or [])} steps")
+            trace.mark_event("action_done")
 
             log.info(f"AgentLoop Result: {agent_res}")
 
@@ -973,16 +1039,19 @@ class GraceApp:
             if response_text:
                 async with trace.stage("speak"):
                     await self._speak_response(response_text)
+                trace.mark_event("spoken_reply_done")
         elif (intent is not None and intent.is_conversation) or complexity == TaskComplexity.CONVERSATION:
             # Use the response from intent generation directly (already generated by the intent LLM call)
             response_text = intent.response if intent and intent.response else "I'm here to help! What can I do for you today?"
             log.info(f"Speaking conversational response: '{response_text[:100]}...'")
             async with trace.stage("speak"):
                 await self._speak_response(response_text)
+            trace.mark_event("spoken_reply_done")
         else:
             log.info(f"Fast-path executing tool '{intent.tool}' with params={intent.params}")
             async with trace.stage("dispatch"):
                 result = await self.dispatcher.execute(intent)
+            trace.mark_event("action_done")
             log.info(f"Result: {result}")
 
             if await self._park_if_confirmation_required(intent, result):
@@ -999,6 +1068,7 @@ class GraceApp:
                 log.info(f"Speaking tool result: '{response_text[:100]}...' ({len(response_text)} chars)")
                 async with trace.stage("speak"):
                     await self._speak_response(response_text)
+                trace.mark_event("spoken_reply_done")
 
         await self.ws_server.emit({"type": "ConversationFinished"})
         return True

@@ -146,3 +146,17 @@ class FeedbackSounds:
                 sd.wait()
         except Exception as exc:
             logger.debug(f"play_listening failed: {exc}")
+
+    @staticmethod
+    def play_ack(duration: float = 0.08, volume: float = 0.22, blocking: bool = False) -> None:
+        """Instant soft acknowledgement tone played within 300ms of end of speech."""
+        try:
+            sample_rate = 24000
+            n = int(sample_rate * duration)
+            t = np.linspace(0, duration, n, endpoint=False)
+            audio = (np.sin(2 * np.pi * 784.0 * t) + 0.5 * np.sin(2 * np.pi * 1046.5 * t)) * np.exp(-12 * t) * volume
+            sd.play(audio, sample_rate)
+            if blocking:
+                sd.wait()
+        except Exception as exc:
+            logger.debug(f"play_ack failed: {exc}")

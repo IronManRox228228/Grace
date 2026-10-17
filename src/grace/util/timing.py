@@ -172,6 +172,42 @@ class TurnTrace:
             lines.append(f"  @{offset:7.1f}ms  {name}")
         return "\n".join(lines)
 
+    def write_jsonl(self, path: Optional[str] = None) -> None:
+        """Append this turn's metrics to the local JSONL latency log."""
+        import json
+        import os
+        from datetime import datetime
+
+        if not path:
+            path = os.getenv("GRACE_LATENCY_LOG") or os.path.join(
+                os.getenv("LOCALAPPDATA", "."), "Grace", "logs", "latency.jsonl"
+            )
+
+        try:
+            abs_path = os.path.abspath(path)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with self._lock:
+                stage_durations = {
+                    s.name: round(s.duration_ms, 2)
+                    for s in self.stages
+                    if s.duration_ms is not None
+                }
+                event_milestones = {
+                    k: round(v, 2)
+                    for k, v in self.events.items()
+                }
+                record = {
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "label": self.label,
+                    "total_ms": round(self.total_ms, 2),
+                    "stages": stage_durations,
+                    "events": event_milestones,
+                }
+            with open(abs_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as exc:
+            logger.debug(f"Latency record write to {path} skipped: {exc}")
+
 
 class _NullStage:
     """Zero-cost stand-in used when no turn is active."""

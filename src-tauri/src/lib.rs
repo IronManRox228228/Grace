@@ -47,6 +47,14 @@ fn get_ws_auth_token(state: State<'_, String>) -> String {
     state.inner().clone()
 }
 
+/// Returns whether Grace is running in strict offline mode (R19).
+#[tauri::command]
+fn get_offline_mode() -> bool {
+    std::env::var("USE_CLOUD_LLM")
+        .map(|v| v.to_lowercase() != "true" && v != "1")
+        .unwrap_or(true)
+}
+
 #[cfg(windows)]
 struct SingleInstanceGuard(windows::Win32::Foundation::HANDLE);
 
@@ -94,7 +102,7 @@ pub fn run() {
 
     let managed_token = auth_token.clone();
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![set_hover_region, get_ws_auth_token])
+        .invoke_handler(tauri::generate_handler![set_hover_region, get_ws_auth_token, get_offline_mode])
         .setup(move |app| {
             app.manage(managed_token);
             let window = app

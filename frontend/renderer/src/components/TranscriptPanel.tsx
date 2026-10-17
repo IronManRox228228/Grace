@@ -5,22 +5,32 @@ interface TranscriptPanelProps {
   visible: boolean;
 }
 
-// Live Whisper output, streamed word by word. We append rather than
-// replace the text node, so partial-transcript revisions stay smooth
-// instead of flashing the whole paragraph.
+/**
+ * Large live caption of what Grace heard.
+ * Displays user speech in high-contrast, bold, readable typography.
+ */
 export function TranscriptPanel({ userTranscript, visible }: TranscriptPanelProps) {
   return (
     <AnimatePresence>
       {visible && userTranscript && (
-        <motion.p
-          initial={{ opacity: 0, y: 8 }}
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -6 }}
-          transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-          className="w-full px-1 text-[15px] leading-relaxed text-olive/70"
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: 0.3 }}
+          className="w-full rounded-xl border border-stone-300/80 bg-white/90 px-3.5 py-2.5 shadow-xs"
+          role="region"
+          aria-label="User spoken transcript"
         >
-          {userTranscript}
-        </motion.p>
+          <div className="flex items-start gap-2">
+            <span className="shrink-0 text-xs font-black uppercase tracking-wider text-blue-700">
+              You:
+            </span>
+            <p className="text-base font-bold leading-snug text-stone-950">
+              {userTranscript}
+            </p>
+          </div>
+        </motion.div>
       )}
     </AnimatePresence>
   );

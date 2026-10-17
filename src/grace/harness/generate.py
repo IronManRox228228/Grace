@@ -394,6 +394,10 @@ class _NullFeedbackSounds:
     def play_listening() -> None:
         return None
 
+    @staticmethod
+    def play_ack(*args, **kwargs) -> None:
+        return None
+
 
 # Every Dispatcher leaf that touches the machine. All of them are replaced for
 # every scenario, whether or not the scenario expects to reach them: a script

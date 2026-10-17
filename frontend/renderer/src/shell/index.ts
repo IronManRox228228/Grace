@@ -90,3 +90,17 @@ export async function getWsAuthToken(): Promise<string | null> {
   return null;
 }
 
+/**
+ * Returns whether Grace is running in strict offline mode (R19).
+ */
+export async function getOfflineMode(): Promise<boolean> {
+  if (inShell) {
+    try {
+      return await invoke<boolean>('get_offline_mode');
+    } catch {
+      return true;
+    }
+  }
+  return true;
+}
+

@@ -604,6 +604,9 @@ class _NullFeedbackSounds:
     @staticmethod
     def play_listening(*args, **kwargs): return None
 
+    @staticmethod
+    def play_ack(*args, **kwargs): return None
+
 
 # -- driver ----------------------------------------------------------------
 

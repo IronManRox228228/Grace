@@ -77,6 +77,10 @@ pub struct Config {
     pub llama_port: i64,
     pub llama_context_window: i64,
     pub llama_ngl: i64,
+    pub llama_cache_type_k: String,
+    pub llama_cache_type_v: String,
+    pub llama_flash_attn: bool,
+    pub llama_parallel_slots: i64,
 
     // --- Agent loop / safety-relevant caps ---
     // Step cap stays 0 = unlimited on purpose (see config.py's comment):
@@ -140,6 +144,10 @@ impl Config {
             llama_port: env_int("LLAMA_PORT", 8080),
             llama_context_window: env_int("LLAMA_CONTEXT_WINDOW", 8192),
             llama_ngl: env_int("LLAMA_NGL", 999),
+            llama_cache_type_k: env_string("LLAMA_CACHE_TYPE_K", "f16"),
+            llama_cache_type_v: env_string("LLAMA_CACHE_TYPE_V", "f16"),
+            llama_flash_attn: env_bool("LLAMA_FLASH_ATTN", true),
+            llama_parallel_slots: env_int("LLAMA_PARALLEL_SLOTS", 1),
             agent_max_iterations: env_int("AGENT_MAX_ITERATIONS", 0),
             agent_max_seconds: env_int("AGENT_MAX_SECONDS", 180),
             stronger_planner_model: env_string("STRONGER_PLANNER_MODEL", "gemini-3.1-flash"),

@@ -39,3 +39,9 @@ body {
   background: rgba(59, 68, 48, 0.15);
   border-radius: 999px;
 }
+
+@media (forced-colors: active) {
+  button, [role="button"] {
+    outline: 2px solid ButtonText !important;
+  }
+}
