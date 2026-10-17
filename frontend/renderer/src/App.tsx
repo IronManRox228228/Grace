@@ -7,6 +7,7 @@ import { StatusCard } from './components/StatusCard';
 import { ActionIndicator } from './components/ActionIndicator';
 import { ResponseRenderer } from './components/ResponseRenderer';
 import { ChoiceOverlay } from './components/ChoiceOverlay';
+import { EnrollmentOverlay } from './components/EnrollmentOverlay';
 import { useHoverRegion } from './shell/useHoverRegion';
 import { getOfflineMode } from './shell';
 
@@ -54,6 +55,20 @@ export default function App() {
         <ChoiceOverlay
           responseText={snapshot.responseText}
           onSelectChoice={() => {
+            wake();
+          }}
+        />
+
+        {/* Speech enrollment listen-and-repeat overlay */}
+        <EnrollmentOverlay
+          responseText={snapshot.responseText}
+          onHearAgain={() => {
+            wake();
+          }}
+          onSkip={() => {
+            wake();
+          }}
+          onRedo={() => {
             wake();
           }}
         />
