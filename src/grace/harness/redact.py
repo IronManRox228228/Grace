@@ -18,13 +18,16 @@ _SECRET_PATTERNS = [
     re.compile(r"\b(?:sk-[a-zA-Z0-9_\-]{20,})\b", re.IGNORECASE),
     re.compile(r"\b(?:ghp_[a-zA-Z0-9]{30,}|github_pat_[a-zA-Z0-9_]{30,})\b", re.IGNORECASE),
     re.compile(r"\b(?:bearer\s+[a-zA-Z0-9_\-\.]{16,})\b", re.IGNORECASE),
-    # Credit/debit card numbers (13-19 digits, with optional spaces or dashes)
-    re.compile(r"\b(?:\d{4}[ -]?){3}\d{1,4}\b"),
+    # Credit/debit card numbers (13-19 digits, with optional spaces, dashes, commas, or dots - R25)
+    re.compile(r"\b(?:\d{4}[,\.\s-]+){3}\d{1,4}\b"),
+    # Delimiter-separated passphrases of length >= 14 (e.g. correct-horse-battery-staple - R25)
+    re.compile(r"\b(?=[a-zA-Z_\-\.]{14,})(?:[a-zA-Z]{3,}[-_.]){2,}[a-zA-Z]{3,}\b"),
 ]
+
 
 _PASSWORD_HINTS = (
     "password", "passwd", "pwd", "secret", "pin", "token", "api_key", "apikey",
-    "cvv", "cvc", "ssn", "credit_card",
+    "cvv", "cvc", "ssn", "credit_card", "passphrase",
 )
 
 
@@ -90,7 +93,7 @@ def redact_data(data: Any, username: str = "", home: str = "") -> Any:
 
     if isinstance(data, dict):
         new_dict = {}
-        is_type_tool = data.get("tool") in ("type_text", "cua_type")
+        is_type_tool = data.get("tool") in ("type_text", "cua_type", "cua_type_text")
 
         # Check if this object represents an element node with a password role
         role = data.get("role")
@@ -98,7 +101,13 @@ def redact_data(data: Any, username: str = "", home: str = "") -> Any:
         is_pwd_element = _is_password_field(role, name)
 
         for k, v in data.items():
+            # Tool names and contract event types are never user secrets
+            if k in ("tool", "type"):
+                new_dict[k] = v
+                continue
+
             k_lower = str(k).lower()
+
 
             # Redact password field values in element snapshots
             if is_pwd_element and k_lower in ("value", "text"):

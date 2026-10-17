@@ -623,7 +623,7 @@ class GraceApp:
             prompt = self.agent_loop.pending_prompt or "Are you sure you want me to proceed?"
             reask_text = f"I didn't quite catch that. {prompt}"
             log.info(f"Unclear or mumbled confirmation answer ({transcript!r}); re-asking: {reask_text}")
-            await self.response_gen.generate_and_speak_with_text(reask_text)
+            await self._speak_response(reask_text)
             self._confirmation_prompt_finished_at = time.monotonic()
             return True
 
@@ -640,7 +640,7 @@ class GraceApp:
             response_text = result.get("final_response") or (
                 "Done." if answer else "Alright, I won't do that."
             )
-        await self.response_gen.generate_and_speak_with_text(response_text)
+        await self._speak_response(response_text)
         return True
 
     async def _park_if_confirmation_required(self, intent, result: dict) -> bool:
@@ -657,7 +657,7 @@ class GraceApp:
         prompt = result.get("confirmation_prompt") or "Should I go ahead?"
         log.warning(f"Fast-path '{intent.tool}' parked for confirmation: {prompt}")
         self.agent_loop.park_intent(intent, prompt)
-        await self.response_gen.generate_and_speak_with_text(prompt)
+        await self._speak_response(prompt)
         self._confirmation_prompt_finished_at = time.monotonic()
         return True
 
@@ -754,8 +754,11 @@ class GraceApp:
         import time
         listen_start = time.time()
         max_listen_seconds = 30
+        hard_max_listen_seconds = 60
         initial_timeout = self.config.initial_listen_timeout_seconds
         has_speech_started = False
+        last_speech_time = listen_start
+        hit_hard_cutoff = False
 
         with trace.stage("listen") as listen_stage:
             while self._running:
@@ -767,14 +770,22 @@ class GraceApp:
                             log.info(f"Initial listen timeout reached ({initial_timeout}s without speech).")
                             break
                         if now - listen_start > max_listen_seconds:
-                            log.info("Listen timeout reached.")
-                            break
+                            if has_speech_started and (now - last_speech_time < 2.0) and (now - listen_start <= hard_max_listen_seconds):
+                                pass
+                            else:
+                                if has_speech_started and (now - last_speech_time < 2.0 or now - listen_start > hard_max_listen_seconds):
+                                    hit_hard_cutoff = True
+                                log.info("Listen timeout reached.")
+                                break
                         continue
                     audio_buffer.extend(chunk)
+                    rms = self.capture.get_rms(chunk)
+                    threshold = self.config.whisper_vad_threshold * 32767
                     if log.isEnabledFor(logging.DEBUG):
-                        log.debug(f"Audio chunk: {len(chunk)} bytes, RMS={self.capture.get_rms(chunk):.1f}")
-                    if self.capture.get_rms(chunk) > self.config.whisper_vad_threshold * 32767:
+                        log.debug(f"Audio chunk: {len(chunk)} bytes, RMS={rms:.1f}")
+                    if rms > threshold:
                         has_speech_started = True
+                        last_speech_time = now
                     if self.vad.process_chunk(chunk, self.capture):
                         log.info(f"VAD turn-end detected after {len(audio_buffer)} bytes")
                         break
@@ -782,12 +793,26 @@ class GraceApp:
                         log.info(f"Initial listen timeout reached ({initial_timeout}s without speech).")
                         break
                     if now - listen_start > max_listen_seconds:
-                        log.info("Listen timeout reached.")
-                        break
+                        if has_speech_started and (now - last_speech_time < 2.0) and (now - listen_start <= hard_max_listen_seconds):
+                            pass
+                        else:
+                            if has_speech_started and (now - last_speech_time < 2.0 or now - listen_start > hard_max_listen_seconds):
+                                hit_hard_cutoff = True
+                            log.info("Listen timeout reached.")
+                            break
                 except Exception as e:
                     log.error(f"Audio error: {e}")
                     break
             listen_stage.detail(f"{len(audio_buffer)} bytes")
+
+        if hit_hard_cutoff:
+            log.warning("Listen window reached hard cutoff while user was speaking.")
+            await self.ws_server.emit({"type": "ListeningStopped"})
+            await self._speak_response("I didn't catch all of that.")
+            await self.ws_server.emit({"type": "ConversationFinished"})
+            await self.ws_server.emit({"type": "Idle"})
+            return False
+
 
         # 3. Transcribe. GPU inference is seconds of blocking work, so it goes
         # to a worker thread rather than stalling the WebSocket server.

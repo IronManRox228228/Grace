@@ -64,3 +64,25 @@ class TestAudioCapture:
         capture = AudioCapture()
         capture.close()  # Should not raise
         assert capture._pyaudio is None
+
+    def test_r27_read_failure_surfaces_audio_device_error(self):
+        """AudioCapture surfaces AudioDeviceError on stream failure instead of swallowing (R27)."""
+        from unittest.mock import MagicMock
+        import pytest
+        from grace.audio.capture import AudioDeviceError
+
+        capture = AudioCapture()
+        capture._running = True
+        capture._stream = None
+
+        with pytest.raises(AudioDeviceError):
+            capture.get_chunk()
+
+        # When stream.read raises an error
+        mock_stream = MagicMock()
+        mock_stream.read.side_effect = OSError("Device disconnected")
+        capture._stream = mock_stream
+
+        with pytest.raises(AudioDeviceError) as exc_info:
+            capture.get_chunk()
+        assert "Device disconnected" in str(exc_info.value)

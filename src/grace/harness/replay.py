@@ -525,11 +525,11 @@ class NullTts(_Constructible):
 
     def initialize(self, *args, **kwargs): return True
     def shutdown(self, *args, **kwargs): return None
-    def synthesize(self, sentence, voice=None): return self._SILENCE
-    def play(self, wav): return None
-    def stop(self): return None
+    def synthesize(self, text, voice=None, speed=1.0, *args, **kwargs): return self._SILENCE
+    def play(self, wav_bytes, *args, **kwargs): return None
+    def stop(self, *args, **kwargs): return None
     def wait(self, *args, **kwargs): return None
-    def close(self): return None
+    def close(self, *args, **kwargs): return None
 
 
 class NullAudio(_Constructible):
@@ -576,22 +576,22 @@ class _NullFeedbackSounds:
     """Silences the chime. Not an edge under test - the tape has no audio out."""
 
     @staticmethod
-    def play_chime(): return None
+    def play_chime(*args, **kwargs): return None
 
     @staticmethod
-    def play_end(): return None
+    def play_end(*args, **kwargs): return None
 
     @staticmethod
-    def play_success(): return None
+    def play_success(*args, **kwargs): return None
 
     @staticmethod
-    def play_cancel(): return None
+    def play_cancel(*args, **kwargs): return None
 
     @staticmethod
-    def play_error(): return None
+    def play_error(*args, **kwargs): return None
 
     @staticmethod
-    def play_listening(): return None
+    def play_listening(*args, **kwargs): return None
 
 
 # -- driver ----------------------------------------------------------------

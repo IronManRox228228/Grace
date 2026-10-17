@@ -302,8 +302,11 @@ class GemmaClient:
         model = model or self._model_name
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
-            f":streamGenerateContent?key={self._api_key}&alt=sse"
+            f":streamGenerateContent?alt=sse"
         )
+        headers = {
+            "x-goog-api-key": self._api_key,
+        }
 
         last_error = None
         for attempt in range(RATE_LIMIT_RETRIES + 1):
@@ -312,7 +315,13 @@ class GemmaClient:
                 # call threw away the connection pool and paid a full TCP+TLS
                 # handshake on every single turn.
                 session = await self._get_http()
-                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as resp:
+
                     if resp.status == 429:
                         body = await resp.text()
                         last_error = RateLimitError(

@@ -8,6 +8,10 @@ import pyaudio
 logger = logging.getLogger("grace.audio")
 
 
+class AudioDeviceError(RuntimeError):
+    """Raised when an audio input device fails or is disconnected (R27)."""
+
+
 class AudioCapture:
     """Microphone capture using pyaudio.
 
@@ -118,18 +122,20 @@ class AudioCapture:
         if not self._running:
             raise RuntimeError("Audio capture is not running. Call start() first.")
         if not self._stream:
-            return b"\x00" * (self._chunk_size * self._width)
+            raise AudioDeviceError("Audio stream is not open")
         try:
             if hasattr(self._stream, "is_active") and not self._stream.is_active():
                 logger.warning("PyAudio stream is inactive, attempting restart...")
                 try:
                     self._stream.start_stream()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    raise AudioDeviceError(f"Failed to restart inactive audio stream: {exc}") from exc
             return self._stream.read(self._chunk_size, exception_on_overflow=False)  # type: ignore[arg-type]
+        except AudioDeviceError:
+            raise
         except Exception as e:
-            logger.warning(f"Audio read error ignored: {e}")
-            return b"\x00" * (self._chunk_size * self._width)
+            logger.warning(f"Audio read failure (device unavailable/lost): {e}")
+            raise AudioDeviceError(f"Audio read failure: {e}") from e
 
     def get_chunk_as_int16(self) -> list[int]:
         """Read one chunk and return as list of int16 values."""

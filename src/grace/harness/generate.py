@@ -368,19 +368,19 @@ class _NullFeedbackSounds:
     """The activation chime decodes an MP3 through pydub. Not during generation."""
 
     @staticmethod
-    def play_chime() -> None:
+    def play_chime(*args, **kwargs) -> None:
         return None
 
     @staticmethod
-    def play_end() -> None:
+    def play_end(*args, **kwargs) -> None:
         return None
 
     @staticmethod
-    def play_success() -> None:
+    def play_success(*args, **kwargs) -> None:
         return None
 
     @staticmethod
-    def play_cancel() -> None:
+    def play_cancel(*args, **kwargs) -> None:
         return None
 
     @staticmethod

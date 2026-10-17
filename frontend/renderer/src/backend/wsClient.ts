@@ -61,8 +61,12 @@ export function createWsClient(
 
     ws.onmessage = (event: MessageEvent) => {
       try {
-        const evt = JSON.parse(event.data) as GraceEvent;
-        dispatch(evt);
+        const evt = JSON.parse(event.data);
+        if (!evt || typeof evt !== 'object' || typeof evt.type !== 'string') {
+          console.warn('[Grace] Dropping malformed WebSocket frame (R28):', evt);
+          return;
+        }
+        dispatch(evt as GraceEvent);
       } catch (e) {
         console.error('[Grace] Invalid WebSocket message', e);
       }

@@ -243,3 +243,35 @@ def test_replay_does_not_write_a_tape_of_its_own(recorded_tape, tmp_path):
 
     reset_recorder_for_tests()
     assert sorted(os.listdir(os.path.dirname(tape.dir))) == before
+
+
+def test_every_committed_corpus_tape_fits_the_contract():
+    """Verify that every tape in corpus/ exists, loads, has events, and satisfies the frozen contract."""
+    from grace.harness.contract import validate_event
+    from grace.harness.tape import Tape
+    import glob
+
+    corpus_dir = os.path.join(os.path.dirname(__file__), "..", "corpus")
+    if not os.path.exists(corpus_dir):
+        pytest.skip(f"corpus/ not found at {corpus_dir}")
+
+    tape_dirs = sorted([d for d in glob.glob(os.path.join(corpus_dir, "*")) if os.path.isdir(d)])
+    assert tape_dirs, f"No tapes found in {corpus_dir}"
+
+    failing = []
+    for d in tape_dirs:
+        try:
+            tape = Tape.load(d)
+            if not tape.events:
+                failing.append(f"{os.path.basename(d)}: no events found")
+                continue
+            for idx, rec in enumerate(tape.events):
+                try:
+                    validate_event(rec["event"])
+                except Exception as e:
+                    failing.append(f"{os.path.basename(d)} event #{idx} ({rec['event'].get('type')}): {e}")
+        except Exception as e:
+            failing.append(f"{os.path.basename(d)}: load failed: {e}")
+
+    assert not failing, f"Corpus tape validation failures:\n" + "\n".join(failing)
+

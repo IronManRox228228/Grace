@@ -28,11 +28,10 @@ class SafetyGuard:
     }
 
     # Explicit allowlist of read-only or harmless actions that run without confirmation.
+    # Note: read_pdf and summarize_pdf are checked separately to enforce safe root paths (R26).
     SAFE_READ_ONLY_TOOLS = {
         "converse",
         "search_files",
-        "read_pdf",
-        "summarize_pdf",
         "adjust_volume",
         "open_calculator",
         "undo",
@@ -117,14 +116,39 @@ class SafetyGuard:
                 return False, "This action may overwrite an existing file. Should I proceed?"
             return True, None
 
-        # 7. Explicit read-only harmless tools on the allowlist
+        # 7. read_pdf and summarize_pdf: safe ONLY if within safe roots (R26)
+        if action in ("read_pdf", "summarize_pdf"):
+            path = params.get("path") or ""
+            if not cls.is_within_safe_pdf_roots(path):
+                prompt = f"Reading '{os.path.basename(path) or path}' from outside your documents folders requires confirmation. Should I proceed?"
+                logger.warning(f"Safety guard intercepted {action} outside safe roots: {prompt}")
+                return False, prompt
+            return True, None
+
+        # 8. Explicit read-only harmless tools on the allowlist
         if action in cls.SAFE_READ_ONLY_TOOLS:
             return True, None
 
-        # 8. Everything else (unallowed / unknown / destructive) requires confirmation
+        # 9. Everything else (unallowed / unknown / destructive) requires confirmation
         prompt = cls._build_confirmation_prompt(action, params)
         logger.warning(f"Safety guard intercepted unallowed action '{action}': {prompt}")
         return False, prompt
+
+    @classmethod
+    def is_within_safe_pdf_roots(cls, path_str: str) -> bool:
+        """True when path resolves inside Documents, Desktop, Downloads, or temp dir (R26)."""
+        if not path_str:
+            return False
+        import tempfile
+        user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+        safe_dirs = [
+            os.path.realpath(os.path.join(user_profile, "Documents")),
+            os.path.realpath(os.path.join(user_profile, "Desktop")),
+            os.path.realpath(os.path.join(user_profile, "Downloads")),
+            os.path.realpath(tempfile.gettempdir()),
+        ]
+        real = os.path.realpath(path_str)
+        return any(real == root or real.startswith(root + os.sep) for root in safe_dirs)
 
     @classmethod
     def has_dangerous_open_extension(cls, name_or_path: str) -> bool:
@@ -137,15 +161,16 @@ class SafetyGuard:
         """
         return os.path.splitext(name_or_path or "")[1].lower() in cls.DANGEROUS_OPEN_EXTENSIONS
 
-    # Hotkeys that close or discard work, in normalised form.
+    # Hotkeys and keys that close, delete, or discard work, in normalised form.
     CONFIRMATION_REQUIRED_KEYS = {
         "alt+f4",
         "ctrl+w",
         "ctrl+shift+w",
         "ctrl+q",
         "ctrl+f4",
-        "shift+delete",
-        "win+l",
+        "delete+shift",
+        "l+win",
+        "delete",
     }
 
     # X11-style keysyms and pyautogui's own native names, both mapped to their
@@ -165,15 +190,15 @@ class SafetyGuard:
 
     @classmethod
     def _normalise_key(cls, raw: Any) -> str:
-        """Lower-case, de-alias, and sort modifiers so orderings compare equal."""
+        """Lower-case, de-alias, and sort all keys so orderings compare equal (R38)."""
         if not raw or not isinstance(raw, str):
             return ""
         parts = [cls._KEY_ALIASES.get(p, p) for p in
                  (piece.strip().lower() for piece in raw.split("+")) if p]
         if not parts:
             return ""
-        modifiers = sorted(p for p in parts[:-1])
-        return "+".join(modifiers + [parts[-1]])
+        parts.sort()
+        return "+".join(parts)
 
     @classmethod
     def _build_confirmation_prompt(cls, action: str, params: dict[str, Any], keyword: str = "") -> str:

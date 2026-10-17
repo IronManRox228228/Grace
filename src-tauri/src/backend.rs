@@ -235,11 +235,17 @@ impl Backend {
         };
         if let Some(mut child) = guard.take() {
             println!("[Grace] Stopping Python backend...");
-            // Electron's `kill('SIGTERM')` is `TerminateProcess` on Windows, and
-            // so is this - the graceful-then-forceful pair in main.js only ever
-            // took the forceful branch. The backend's own cleanup of
-            // `llama-server.exe` is unaffected either way; it never ran under
-            // Electron.
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let pid = child.id();
+                // Terminate the entire process tree so child processes like
+                // llama-server.exe cannot survive Grace's termination (R29).
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                    .status();
+            }
             let _ = child.kill();
             let _ = child.wait();
         }

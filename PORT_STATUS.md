@@ -673,13 +673,20 @@ still apply unchanged. New this phase:
    single-instance guard, and CSP items from PLAN §10.2's "Shell (Tauri)" list.
    (Note: per-launch random WebSocket authentication token and 127.0.0.1
    binding are now implemented across Tauri shell and `grace-backend`).
-8. **Security features not yet mirrored in Rust**:
-   - DPAPI encryption at rest for `memory.db`: Rust's `grace-memory` uses
-     unencrypted SQLite files with salted hash redactions for typed text,
-     whereas Python encrypts the SQLite database via Windows DPAPI
-     (`CryptProtectData`).
-   - Window foreground guard re-checks: Python's `computer_use.py` verifies the
-     target window is still foreground right before physical mouse clicks,
-     keypresses, and text entry. In Rust, input injection (`DesktopActuator`)
-     and UIA walk remain trait boundaries awaiting `grace-win` SendInput
-     implementation.
+8. **Security features & red-team parity across Rust and Python**:
+   - **Mirrored in Rust**:
+     - R25 (`crates/grace-memory/src/secret.rs`): Strip ASR punctuation from card numbers, check delimiter-separated passphrases (length >= 14), and verify weak 2-class / multi-class password tokens.
+     - R26 (`crates/grace-core/src/safety.rs`): Safe document roots allowlist (`is_within_safe_pdf_roots`) for `read_pdf` and `summarize_pdf`.
+     - R29 (`src-tauri/src/backend.rs`): Process tree termination on Windows via `taskkill /F /T /PID` to clean up child `llama-server.exe` processes.
+     - R30 (`src-tauri/src/lib.rs`): Single-instance mutex guard (`Local\GraceOverlaySingleInstanceMutex`) via `CreateMutexW`.
+     - R31 (`crates/grace-models/src/lib.rs`): Truncate HTTP 429 response body on UTF-8 char boundaries to prevent multibyte panics.
+     - R37 & R38 (`crates/grace-core/src/safety.rs`): Dangerous key normalization (`normalise_key`) and explicit confirmation requirement for `delete` key.
+     - R42 (`src-tauri/tauri.conf.json`): Strict Content Security Policy (`security.csp`).
+   - **Python-only / Desktop-boundary items remaining for Rust**:
+     - DPAPI encryption at rest for `memory.db`: Rust's `grace-memory` uses unencrypted SQLite with salted hashes and external salt file (`.salt`).
+     - Foreground window verification guard right before input injection: Rust's `DesktopActuator` remains a trait boundary awaiting real `grace-win` Win32 implementation.
+     - Audio capture failure backoff (R27): Rust audio pump is a trait boundary.
+     - TTSPlayer thread/stream synchronization (R40): Rust TTS player is currently a sidecar/trait boundary.
+     - Cloud LLM fallback API key header (R41): Rust currently has no cloud Gemini fallback client.
+     - Listen window speech extension and apology on cutoff (R39): Python `main.py` activation turn specific.
+

@@ -18,14 +18,15 @@ pub const CONFIRMATION_REQUIRED_TOOLS: [&str; 3] = ["delete_file", "close_app", 
 /// `normalise_key`). Mirrors `SafetyGuard.CONFIRMATION_REQUIRED_KEYS`,
 /// including the three added in the 2026-09-26 review
 /// (`ctrl+f4`, `shift+delete`, `win+l`).
-pub const CONFIRMATION_REQUIRED_KEYS: [&str; 7] = [
+pub const CONFIRMATION_REQUIRED_KEYS: [&str; 8] = [
     "alt+f4",
     "ctrl+w",
     "ctrl+shift+w",
     "ctrl+q",
     "ctrl+f4",
-    "shift+delete",
-    "win+l",
+    "delete+shift",
+    "l+win",
+    "delete",
 ];
 
 /// X11-style keysyms and pyautogui's own native names, both mapped to their
@@ -44,15 +45,15 @@ fn key_alias(part: &str) -> &str {
     }
 }
 
-/// Lower-case, de-alias, and sort modifiers so orderings compare equal
-/// (`"Alt+F4"`, `"altleft+f4"` and `"Control_L+w"` all normalise the same
+/// Lower-case, de-alias, and sort all keys so orderings compare equal (R38)
+/// (`"Alt+F4"`, `"f4+alt"`, `"altleft+f4"` and `"Control_L+w"` all normalise the same
 /// way a hand-typed `"ctrl+w"` would).
 pub fn normalise_key(raw: Option<&str>) -> String {
     let raw = match raw {
         Some(r) if !r.is_empty() => r,
         _ => return String::new(),
     };
-    let parts: Vec<String> = raw
+    let mut parts: Vec<String> = raw
         .split('+')
         .map(|piece| piece.trim().to_lowercase())
         .filter(|p| !p.is_empty())
@@ -61,11 +62,8 @@ pub fn normalise_key(raw: Option<&str>) -> String {
     if parts.is_empty() {
         return String::new();
     }
-    let (last, modifiers) = parts.split_last().unwrap();
-    let mut modifiers: Vec<String> = modifiers.to_vec();
-    modifiers.sort();
-    modifiers.push(last.clone());
-    modifiers.join("+")
+    parts.sort();
+    parts.join("+")
 }
 
 /// Mirrors `(is_safe, confirmation_prompt)` from `SafetyGuard.evaluate`.
@@ -76,11 +74,10 @@ pub struct Evaluation {
 }
 
 /// Explicit allowlist of read-only or harmless actions that run without confirmation.
-pub const SAFE_READ_ONLY_TOOLS: [&str; 21] = [
+/// Note: read_pdf and summarize_pdf are checked separately for safe paths (R26).
+pub const SAFE_READ_ONLY_TOOLS: [&str; 19] = [
     "converse",
     "search_files",
-    "read_pdf",
-    "summarize_pdf",
     "adjust_volume",
     "open_calculator",
     "undo",
@@ -135,6 +132,26 @@ pub fn evaluate(action: &str, params: &Value) -> Evaluation {
         return Evaluation { is_safe: true, confirmation_prompt: None };
     }
 
+    if action == "read_pdf" || action == "summarize_pdf" {
+        let path = param_str(params, "path").unwrap_or("");
+        if !is_within_safe_pdf_roots(path) {
+            let file_name = std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path);
+            return Evaluation {
+                is_safe: false,
+                confirmation_prompt: Some(format!(
+                    "Reading '{file_name}' from outside your documents folders requires confirmation. Should I proceed?"
+                )),
+            };
+        }
+        return Evaluation {
+            is_safe: true,
+            confirmation_prompt: None,
+        };
+    }
+
     if action == "cua_press_key" {
         let key = normalise_key(params.get("key").and_then(Value::as_str));
         if CONFIRMATION_REQUIRED_KEYS.contains(&key.as_str()) {
@@ -186,6 +203,26 @@ pub fn evaluate(action: &str, params: &Value) -> Evaluation {
 
 fn param_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
     params.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
+}
+
+fn is_within_safe_pdf_roots(path_str: &str) -> bool {
+    if path_str.is_empty() {
+        return false;
+    }
+    let norm = path_str.replace('\\', "/").to_lowercase();
+    let user_profile = std::env::var("USERPROFILE").unwrap_or_default().replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let temp_dir = std::env::temp_dir().to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase();
+
+    let safe_prefixes = [
+        format!("{user_profile}/documents"),
+        format!("{user_profile}/desktop"),
+        format!("{user_profile}/downloads"),
+        temp_dir,
+    ];
+
+    safe_prefixes.iter().any(|prefix| {
+        !prefix.is_empty() && (norm == *prefix || norm.starts_with(&format!("{prefix}/")))
+    })
 }
 
 fn build_confirmation_prompt(action: &str, params: &Value) -> String {
@@ -287,15 +324,36 @@ mod tests {
     }
 
     #[test]
-    fn normalise_key_sorts_modifiers_and_deduplicates_casing() {
+    fn normalise_key_sorts_all_keys_and_deduplicates_casing() {
         assert_eq!(normalise_key(Some("Alt+F4")), "alt+f4");
-        // Only the leading tokens (all but the last) are sorted as
-        // "modifiers"; the last token is always kept as the trailing key, so
-        // reversing which token comes last changes the result rather than
-        // being normalised away. This is the Python behaviour, ported as-is.
-        assert_eq!(normalise_key(Some("F4+Alt")), "f4+alt");
+        // All tokens are sorted (R38) so "F4+Alt" normalises to "alt+f4"
+        // and cannot bypass the hotkey confirmation gate.
+        assert_eq!(normalise_key(Some("F4+Alt")), "alt+f4");
         assert_eq!(normalise_key(Some("altleft+f4")), "alt+f4");
         assert_eq!(normalise_key(None), "");
         assert_eq!(normalise_key(Some("")), "");
+
+        // R37: "delete" key requires confirmation
+        let eval = evaluate("cua_press_key", &json!({"key": "delete"}));
+        assert!(!eval.is_safe);
+
+        // R38: reversed hotkey requires confirmation
+        let eval = evaluate("cua_press_key", &json!({"key": "F4+Alt"}));
+        assert!(!eval.is_safe);
+    }
+
+    #[test]
+    fn r26_pdf_reading_requires_confirmation_outside_safe_roots() {
+        let eval = evaluate("read_pdf", &json!({"path": "C:/Windows/System32/secret.pdf"}));
+        assert!(!eval.is_safe);
+        assert!(eval.confirmation_prompt.unwrap().contains("outside your documents folders"));
+
+        let eval_sum = evaluate("summarize_pdf", &json!({"path": "C:/Windows/System32/secret.pdf"}));
+        assert!(!eval_sum.is_safe);
+
+        // Safe path under temp or documents
+        let temp_pdf = std::env::temp_dir().join("test.pdf").to_string_lossy().to_string();
+        let eval_safe = evaluate("read_pdf", &json!({"path": temp_pdf}));
+        assert!(eval_safe.is_safe);
     }
 }

@@ -169,7 +169,8 @@ impl LargeLanguageModel for HttpLlm {
 
         if response.status().as_u16() == 429 {
             let body = response.text().unwrap_or_default();
-            return Err(RateLimitError(format!("HTTP 429: {}", &body[..body.len().min(150)])));
+            let truncated: String = body.chars().take(150).collect();
+            return Err(RateLimitError(format!("HTTP 429: {truncated}")));
         }
         if !response.status().is_success() {
             return Ok(None);
@@ -225,5 +226,14 @@ mod tests {
         let mut llm = HttpLlm::new("http://127.0.0.1:1");
         let result = llm.generate_text(&LlmRequest::new("hi"));
         assert_eq!(result, Ok(None));
+    }
+
+    #[test]
+    fn r31_utf8_char_truncation_never_panics_on_multibyte_boundary() {
+        // String of 149 ASCII chars followed by a 4-byte emoji (occupies bytes 149..153)
+        let body = format!("{}🎉tail", "a".repeat(149));
+        let truncated: String = body.chars().take(150).collect();
+        assert_eq!(truncated.chars().count(), 150);
+        assert!(truncated.ends_with('🎉'));
     }
 }

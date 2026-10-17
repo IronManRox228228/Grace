@@ -47,8 +47,46 @@ fn get_ws_auth_token(state: State<'_, String>) -> String {
     state.inner().clone()
 }
 
+#[cfg(windows)]
+struct SingleInstanceGuard(windows::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn acquire_single_instance() -> Result<SingleInstanceGuard, ()> {
+    use windows::core::w;
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::System::Threading::CreateMutexW;
+
+    unsafe {
+        let handle = CreateMutexW(None, true, w!("Local\\GraceOverlaySingleInstanceMutex"))
+            .map_err(|_| ())?;
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            let _ = windows::Win32::Foundation::CloseHandle(handle);
+            return Err(());
+        }
+        Ok(SingleInstanceGuard(handle))
+    }
+}
+
 /// Builds and runs the overlay. Blocks until the app exits.
 pub fn run() {
+    #[cfg(windows)]
+    let _instance_guard = match acquire_single_instance() {
+        Ok(guard) => guard,
+        Err(_) => {
+            eprintln!("[Grace] Another instance of Grace is already running. Exiting.");
+            return;
+        }
+    };
+
     let auth_token = backend::generate_auth_token();
     // Started before the window so the backend's model loading overlaps with
     // the webview's, as it did under Electron.

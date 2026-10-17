@@ -56,10 +56,12 @@ if not exist ".env" (
 
 :: 3. Custom Llama CPP Setup (TurboQuant tqp-v0.3.0)
 echo.
+set FAILURES=0
 echo [3/6] Setting up custom Llama CPP (TurboQuant v0.3.0)...
 python scripts/setup_llama_cpp.py
 if errorlevel 1 (
     echo [WARNING] Llama CPP setup encountered an error. You can retry running: python scripts/setup_llama_cpp.py
+    set /a FAILURES+=1
 )
 
 :: 4. Speech and Audio Models Setup
@@ -68,6 +70,7 @@ echo [4/6] Downloading required speech/audio models (Vosk, Whisper)...
 python scripts/download_models.py
 if errorlevel 1 (
     echo [WARNING] Model download script encountered an error. You can retry running: python scripts/download_models.py
+    set /a FAILURES+=1
 )
 
 :: 5. OculiX Java Bridge & JARs Setup
@@ -76,6 +79,7 @@ echo [5/6] Downloading OculiX and OpenCV Java JARs (libs/*.jar)...
 python scripts/setup_oculix.py
 if errorlevel 1 (
     echo [WARNING] OculiX setup encountered an error. Pure OpenCV fallback will be used.
+    set /a FAILURES+=1
 )
 
 :: 6. Frontend Node.js Dependencies Setup
@@ -84,16 +88,29 @@ echo [6/6] Installing Frontend Node.js dependencies (node_modules)...
 if exist "frontend\package.json" (
     cd frontend
     call npm install
+    if errorlevel 1 (
+        echo [WARNING] npm install encountered an error.
+        set /a FAILURES+=1
+    )
     cd ..
 ) else (
     echo [SKIP] frontend\package.json not found, skipping npm install.
 )
 
 echo.
-echo ============================================================
-echo   [SUCCESS] Full setup complete!
-echo   All ignored dependencies and binaries (.env, venv, llama cpp, models, libs/*.jar, node_modules) are ready.
-echo   To activate the environment: call venv\Scripts\activate.bat
-echo   To launch Grace: python scripts/launch_grace.py or python -m grace
-echo ============================================================
+if !FAILURES! gtr 0 (
+    echo ============================================================
+    echo   [PARTIAL / WARNING] Setup finished with !FAILURES! warning(s) or failure(s).
+    echo   Some components were not set up successfully. Review logs above.
+    echo   To activate the environment: call venv\Scripts\activate.bat
+    echo   To launch Grace: python scripts/launch_grace.py or python -m grace
+    echo ============================================================
+) else (
+    echo ============================================================
+    echo   [SUCCESS] Full setup complete!
+    echo   All ignored dependencies and binaries (.env, venv, llama cpp, models, libs/*.jar, node_modules) are ready.
+    echo   To activate the environment: call venv\Scripts\activate.bat
+    echo   To launch Grace: python scripts/launch_grace.py or python -m grace
+    echo ============================================================
+)
 pause

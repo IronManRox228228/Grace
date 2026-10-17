@@ -18,52 +18,107 @@ import inspect
 
 import pytest
 
-from grace.harness.replay import TapeDispatcher, TapeLlm
+from grace.agent.perception import PerceptionEngine
+from grace.audio.capture import AudioCapture
+from grace.audio.pump import AudioPump
+from grace.audio.wake_word import WakeWordDetector
+from grace.automation.computer_use import ComputerUse
+from grace.stt.whisper_stream import WhisperStreaming
+from grace.harness.generate import (
+    ScriptedComputerUse,
+    ScriptedPerception,
+    ScriptedPump,
+    _scripted_gemini,
+)
+from grace.harness.replay import (
+    CapturingWsServer,
+    NullAudio,
+    NullComputerUse,
+    NullTts,
+    NullWakeWord,
+    TapeDispatcher,
+    TapeLlm,
+    TapePerception,
+    TapePump,
+    TapeWhisper,
+    _NullFeedbackSounds,
+)
 from grace.llm.gemma_client import GemmaClient
+from grace.response.feedback import FeedbackSounds
 from grace.tools.dispatcher import Dispatcher
+from grace.tts.kokoro_engine import KokoroEngine
+from grace.ws_server import WsEventServer
 
 pytestmark = pytest.mark.integration
 
 
-def keyword_names(func) -> set[str]:
-    return {
-        name for name, param in inspect.signature(func).parameters.items()
+def missing_keywords(real_func, stub_func) -> set[str]:
+    stub_sig = inspect.signature(stub_func)
+    for param in stub_sig.parameters.values():
+        if param.kind == param.VAR_KEYWORD:
+            return set()
+    real_sig = inspect.signature(real_func)
+    real = {
+        name for name, param in real_sig.parameters.items()
         if name not in ("self", "cls")
         and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
     }
+    stub = {
+        name for name, param in stub_sig.parameters.items()
+        if name not in ("self", "cls")
+        and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
+    }
+    return real - stub
 
 
-@pytest.mark.parametrize("method", ["chat", "generate_text", "generate_intent"])
-def test_the_replay_llm_accepts_what_the_real_one_does(method):
-    real = keyword_names(getattr(GemmaClient, method))
-    stub = keyword_names(getattr(TapeLlm, method))
-    missing = real - stub
+from grace.tts.player import TTSPlayer
+
+STUB_METHOD_PAIRS = [
+    # (RealClass, StubClass, method_name)
+    (GemmaClient, TapeLlm, "chat"),
+    (GemmaClient, TapeLlm, "generate_text"),
+    (GemmaClient, TapeLlm, "generate_intent"),
+    (Dispatcher, TapeDispatcher, "execute"),
+    (PerceptionEngine, TapePerception, "capture_snapshot"),
+    (PerceptionEngine, ScriptedPerception, "capture_snapshot"),
+    (AudioPump, TapePump, "get"),
+    (AudioPump, ScriptedPump, "get"),
+    (WhisperStreaming, TapeWhisper, "transcribe"),
+    (WsEventServer, CapturingWsServer, "emit"),
+    (FeedbackSounds, _NullFeedbackSounds, "play_chime"),
+    (FeedbackSounds, _NullFeedbackSounds, "play_success"),
+    (FeedbackSounds, _NullFeedbackSounds, "play_cancel"),
+    (AudioCapture, NullAudio, "get_chunk"),
+    (AudioCapture, NullAudio, "get_rms"),
+    (WakeWordDetector, NullWakeWord, "start"),
+    (WakeWordDetector, NullWakeWord, "stop"),
+    (KokoroEngine, NullTts, "synthesize"),
+    (TTSPlayer, NullTts, "play"),
+    (TTSPlayer, NullTts, "stop"),
+    (ComputerUse, NullComputerUse, "perform"),
+    (ComputerUse, ScriptedComputerUse, "perform"),
+]
+
+
+@pytest.mark.parametrize("real_cls,stub_cls,method", STUB_METHOD_PAIRS)
+def test_all_harness_stubs_accept_what_real_classes_do(real_cls, stub_cls, method):
+    real_fn = getattr(real_cls, method)
+    stub_fn = getattr(stub_cls, method)
+    missing = missing_keywords(real_fn, stub_fn)
     assert missing == set(), (
-        f"TapeLlm.{method} does not accept {sorted(missing)}, which "
-        f"GemmaClient.{method} does. Every replay that passes one will get a "
-        f"TypeError swallowed as an empty response."
-    )
-
-
-def test_the_replay_dispatcher_accepts_what_the_real_one_does():
-    missing = keyword_names(Dispatcher.execute) - keyword_names(TapeDispatcher.execute)
-    assert missing == set(), (
-        f"TapeDispatcher.execute does not accept {sorted(missing)}"
+        f"{stub_cls.__name__}.{method} does not accept {sorted(missing)}, which "
+        f"{real_cls.__name__}.{method} requires."
     )
 
 
 def test_the_scripted_generator_stub_accepts_the_real_stream_signature():
-    # The generator patches `_stream_gemini_response` itself, so its stub has to
-    # match that method rather than `chat`.
-    from grace.harness.generate import _scripted_gemini
-
     class _Overruns:
         def note(self, _message):
             pass
 
     stub = _scripted_gemini([], _Overruns())
-    real = keyword_names(GemmaClient._stream_gemini_response)
-    missing = real - keyword_names(stub)
+    real_fn = GemmaClient._stream_gemini_response
+    missing = missing_keywords(real_fn, stub)
     assert missing == set(), (
         f"the scripted Gemini stub does not accept {sorted(missing)}; every "
         f"call passing one is recorded as an empty model response"

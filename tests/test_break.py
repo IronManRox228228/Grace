@@ -592,12 +592,19 @@ class TestDispatcherBreak:
     def test_read_pdf_missing_path(self):
         intent = Intent(tool="read_pdf", params={})
         result = asyncio.run(self.dispatcher.execute(intent))
-        assert result["status"] == "error"
+        assert result["status"] in ("error", "confirmation_required")
+        if result["status"] == "confirmation_required":
+            result_confirmed = asyncio.run(self.dispatcher.execute(intent, confirmed=True))
+            assert result_confirmed["status"] == "error"
 
     def test_summarize_pdf_missing_path(self):
         intent = Intent(tool="summarize_pdf", params={})
         result = asyncio.run(self.dispatcher.execute(intent))
-        assert result["status"] == "error"
+        assert result["status"] in ("error", "confirmation_required")
+        if result["status"] == "confirmation_required":
+            result_confirmed = asyncio.run(self.dispatcher.execute(intent, confirmed=True))
+            assert result_confirmed["status"] == "error"
+
 
     def test_adjust_volume_missing_params(self):
         intent = Intent(tool="adjust_volume", params={})

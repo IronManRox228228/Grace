@@ -17,7 +17,11 @@
     "frontendDist": "../frontend/renderer/dist"
   },
   "app": {
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*"
+    },
     "windows": [
+
       {
         "label": "grace",
         "title": "Grace",

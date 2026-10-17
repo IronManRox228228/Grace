@@ -62,7 +62,7 @@ class TestAgenticMultiStep:
 
 class TestSafetyConfirmation:
     @pytest.mark.parametrize("safe_tool", [
-        "converse", "search_files", "read_pdf", "summarize_pdf",
+        "converse", "search_files",
         "adjust_volume", "open_calculator", "undo", "describe_screen",
         "set_speech_rate", "cua_list_windows", "cua_get_window",
         "cua_screenshot", "cua_get_cursor_position", "cua_scroll",
@@ -92,6 +92,16 @@ class TestSafetyConfirmation:
 
     def test_dangerous_key_press_requires_confirmation(self):
         is_safe, prompt = SafetyGuard.evaluate("cua_press_key", {"key": "alt+f4"})
+        assert is_safe is False
+        assert "unsaved work" in prompt
+
+    def test_r37_delete_key_requires_confirmation(self):
+        is_safe, prompt = SafetyGuard.evaluate("cua_press_key", {"key": "delete"})
+        assert is_safe is False
+        assert prompt is not None
+
+    def test_r38_reversed_hotkey_requires_confirmation(self):
+        is_safe, prompt = SafetyGuard.evaluate("cua_press_key", {"key": "f4+alt"})
         assert is_safe is False
         assert "unsaved work" in prompt
 
@@ -225,3 +235,189 @@ class TestPdfHandling:
         assert "*" not in clean
         assert "`" not in clean
         assert len(clean) > 0
+
+
+class TestR25SecretShapeHeuristics:
+    def test_redact_punctuated_cards_and_passphrases(self):
+        from grace.harness.redact import redact_string, redact_data
+
+        # Punctuated card numbers
+        assert "<redacted>" in redact_string("Card: 4111, 1111, 1111, 1111")
+        assert "<redacted>" in redact_string("Card: 4111.1111.1111.1111")
+
+        # Delimiter-separated passphrases
+        assert "<redacted>" in redact_string("Key: correct-horse-battery-staple")
+        assert "<redacted>" in redact_string("Key: blue_sky_morning_coffee")
+
+        # Passphrase key in dict
+        data = {"passphrase": "any value here"}
+        redacted = redact_data(data)
+        assert redacted["passphrase"] == "<redacted>"
+
+
+class TestR26PdfPathAllowlist:
+    def test_pdf_outside_safe_roots_requires_confirmation(self):
+        from grace.agent.safety import SafetyGuard
+        from grace.tools.dispatcher import Dispatcher
+
+        unsafe_path = "C:\\Windows\\System32\\test.pdf"
+        safe, prompt = SafetyGuard.evaluate("read_pdf", {"path": unsafe_path})
+        assert not safe
+        assert prompt is not None
+        assert "outside your documents folders" in prompt
+
+        safe_sum, prompt_sum = SafetyGuard.evaluate("summarize_pdf", {"path": unsafe_path})
+        assert not safe_sum
+        assert prompt_sum is not None
+
+        # Dispatcher refuses without confirmation
+        dispatcher = Dispatcher()
+        res_read = asyncio.run(dispatcher._read_pdf({"path": unsafe_path}, confirmed=False))
+        assert res_read["status"] == "error"
+        assert "outside Documents, Desktop, and Downloads" in res_read["error"]
+
+        res_sum = asyncio.run(dispatcher._summarize_pdf({"path": unsafe_path}, confirmed=False))
+        assert res_sum["status"] == "error"
+        assert "outside Documents, Desktop, and Downloads" in res_sum["error"]
+
+    def test_pdf_inside_safe_roots_is_allowed(self):
+        from grace.agent.safety import SafetyGuard
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"%PDF-1.4 dummy")
+            tmp_path = f.name
+        try:
+            safe, prompt = SafetyGuard.evaluate("read_pdf", {"path": tmp_path})
+            assert safe
+            assert prompt is None
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+
+class TestR39ListenCutoff:
+    def test_listen_cutoff_speaks_apology(self):
+        from grace.main import GraceApp
+        from grace.config import Config
+        from grace.util.timing import start_turn
+        app = GraceApp.__new__(GraceApp)
+        app._running = True
+        app.config = Config(whisper_vad_threshold=0.01)
+        app.ws_server = MagicMock()
+        app.ws_server.emit = AsyncMock()
+        app.wake_word = MagicMock()
+        app.vad = MagicMock()
+        app.vad.process_chunk = MagicMock(return_value=False)
+        app.whisper = MagicMock()
+        app.capture = MagicMock()
+        app.capture.get_rms = MagicMock(return_value=1000.0)
+        app._speak_response = AsyncMock()
+
+
+        chunk = b"\x00" * 1024
+        app.pump = MagicMock()
+        app.pump.get = AsyncMock(return_value=chunk)
+        app.pump.drain = MagicMock()
+
+        fake_times = [0.0, 0.1, 35.0, 65.0, 70.0]
+        time_iter = iter(fake_times)
+        with start_turn("wake") as trace:
+            with patch("time.time", side_effect=lambda: next(time_iter, 100.0)):
+                res = asyncio.run(app._handle_activation_turn(trace))
+
+
+        assert res is False
+        app._speak_response.assert_awaited_with("I didn't catch all of that.")
+        app.ws_server.emit.assert_any_await({"type": "ListeningStopped"})
+        app.ws_server.emit.assert_any_await({"type": "ConversationFinished"})
+        app.ws_server.emit.assert_any_await({"type": "Idle"})
+
+
+class TestR40TTSPlayerLockAndGeneration:
+    def test_stop_closes_stream_under_lock_and_aborts(self):
+        from grace.tts.player import TTSPlayer
+        player = TTSPlayer()
+        mock_stream = MagicMock()
+        player._stream = mock_stream
+        player._stream_params = (24000, 1, 2)
+
+        player.stop()
+
+        assert player._stream is None
+        assert player._stream_params is None
+        mock_stream.abort.assert_called_once()
+        mock_stream.stop.assert_called_once()
+        mock_stream.close.assert_called_once()
+
+    def test_write_stream_drops_stale_generation(self):
+        from grace.tts.player import TTSPlayer
+        player = TTSPlayer()
+        mock_stream = MagicMock()
+        player._stream = mock_stream
+        player._stream_params = (24000, 1, 2)
+
+        with patch("grace.tts.player.decode_wav", return_value=(b"\x00\x00" * 100, 24000, 1, 2)):
+            player._generation = 1
+            res = player._write_stream(b"dummy_wav", generation=0)
+            assert res is True
+            mock_stream.write.assert_not_called()
+
+
+class TestR41GeminiApiKeyHeader:
+    def test_stream_gemini_response_sends_key_in_header_not_query(self):
+        from grace.llm.gemma_client import GemmaClient
+        client = GemmaClient(api_key="secret-api-key-12345")
+
+        posted_calls = []
+
+        class FakeResponse:
+            status = 200
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                pass
+            class _FakeContent:
+                def __aiter__(self):
+                    return self
+                async def __anext__(self):
+                    raise StopAsyncIteration
+            content = _FakeContent()
+
+
+        class FakeSession:
+            closed = False
+            def post(self, url, json=None, headers=None, timeout=None):
+                posted_calls.append({"url": url, "headers": headers, "json": json})
+                return FakeResponse()
+
+        client._http = FakeSession()
+
+        async def run_stream():
+            tokens = []
+            async for tok in client._stream_gemini_response([{"role": "user", "content": "hi"}]):
+                tokens.append(tok)
+            return tokens
+
+        asyncio.run(run_stream())
+        assert len(posted_calls) == 1
+        call = posted_calls[0]
+        assert "key=secret-api-key-12345" not in call["url"]
+        assert "key=" not in call["url"]
+        assert call["headers"].get("x-goog-api-key") == "secret-api-key-12345"
+
+
+
+class TestR42TauriStrictCsp:
+    def test_tauri_conf_has_strict_csp(self):
+        import json
+        conf_path = os.path.join(os.path.dirname(__file__), "..", "src-tauri", "tauri.conf.json")
+        with open(conf_path, "r", encoding="utf-8") as f:
+            conf = json.load(f)
+        csp = conf.get("app", {}).get("security", {}).get("csp", "")
+        assert "default-src 'self'" in csp
+        assert "script-src 'self'" in csp
+        assert "connect-src" in csp
+
+
+

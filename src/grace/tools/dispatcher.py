@@ -260,8 +260,8 @@ class Dispatcher:
             "close_app": self._close_app,
             "search_files": self._search_files,
             "open_file": lambda p: self._open_file(p, confirmed=confirmed),
-            "read_pdf": self._read_pdf,
-            "summarize_pdf": self._summarize_pdf,
+            "read_pdf": lambda p: self._read_pdf(p, confirmed=confirmed),
+            "summarize_pdf": lambda p: self._summarize_pdf(p, confirmed=confirmed),
             "adjust_volume": self._adjust_volume,
             "lock_computer": self._lock_computer,
             "open_calculator": self._open_calculator,
@@ -581,11 +581,19 @@ class Dispatcher:
         except Exception as e:
             return {"status": "error", "error": str(e), "text": f"I couldn't open {name}. {e}"}
 
-    async def _read_pdf(self, params: dict) -> dict:
+    async def _read_pdf(self, params: dict, confirmed: bool = False) -> dict:
         path = params.get("path", "")
         query = params.get("query", "")
         if not path:
             return {"status": "error", "error": "Missing 'path' parameter"}
+
+        from grace.agent.safety import SafetyGuard
+        if not SafetyGuard.is_within_safe_pdf_roots(path) and not confirmed:
+            return {
+                "status": "error",
+                "error": f"Refusing to read '{path}' without confirmation: path is outside Documents, Desktop, and Downloads.",
+                "text": f"Reading {os.path.basename(path) or path} from outside your normal documents folders requires confirmation.",
+            }
 
         if not os.path.isfile(path):
             return {"status": "error", "error": f"File not found: {path}", "text": "I couldn't find that PDF."}
@@ -653,10 +661,18 @@ class Dispatcher:
         except Exception as e:
             return {"status": "error", "error": str(e), "text": f"Error reading PDF: {e}"}
 
-    async def _summarize_pdf(self, params: dict) -> dict:
+    async def _summarize_pdf(self, params: dict, confirmed: bool = False) -> dict:
         path = params.get("path", "")
         if not path:
             return {"status": "error", "error": "Missing 'path' parameter"}
+
+        from grace.agent.safety import SafetyGuard
+        if not SafetyGuard.is_within_safe_pdf_roots(path) and not confirmed:
+            return {
+                "status": "error",
+                "error": f"Refusing to summarize '{path}' without confirmation: path is outside Documents, Desktop, and Downloads.",
+                "text": f"Summarizing {os.path.basename(path) or path} from outside your normal documents folders requires confirmation.",
+            }
 
         if not os.path.isfile(path):
             return {"status": "error", "error": f"File not found: {path}", "text": "I couldn't find that PDF."}

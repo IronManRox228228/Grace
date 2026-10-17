@@ -110,14 +110,16 @@ class TTSPlayer:
             self._queue.clear()
             self._generation += 1
             self._active = False
+            stream, self._stream = self._stream, None
+            self._stream_params = None
+            if stream is not None:
+                try:
+                    stream.abort()
+                    stream.stop()
+                    stream.close()
+                except Exception as e:
+                    logger.debug(f"Output stream abort/close exception: {e}")
             self._cv.notify_all()
-
-        stream = self._stream
-        if stream is not None:
-            try:
-                stream.abort()
-            except Exception as e:
-                logger.debug(f"Output stream abort exception: {e}")
 
         if winsound is not None:
             try:
@@ -126,6 +128,7 @@ class TTSPlayer:
                 logger.debug(f"winsound stop purge exception: {e}")
 
         logger.info("TTSPlayer playback cancelled via Barge-In stop()")
+
 
     def play_sync(self, wav_bytes: bytes):
         """Play WAV bytes synchronously (blocking)."""
@@ -240,9 +243,11 @@ class TTSPlayer:
             stream = self._ensure_stream(rate, channels, width)
             if stream is None:
                 return False
-            # Barge-in may have fired while the stream was being opened.
-            if generation != self._generation:
-                return True
+            # Barge-in may have fired while the stream was being opened or right before write
+            with self._cv:
+                if generation != self._generation or self._stream is None:
+                    return True
+                stream = self._stream
             stream.write(pcm)
             return True
         except Exception as e:
@@ -253,8 +258,9 @@ class TTSPlayer:
 
     def _ensure_stream(self, rate: int, channels: int, width: int):
         params = (rate, channels, width)
-        if self._stream is not None and self._stream_params == params:
-            return self._stream
+        with self._cv:
+            if self._stream is not None and self._stream_params == params:
+                return self._stream
 
         self._close_stream()
 
@@ -267,14 +273,16 @@ class TTSPlayer:
 
         stream = sd.RawOutputStream(samplerate=rate, channels=channels, dtype=dtype)
         stream.start()
-        self._stream = stream
-        self._stream_params = params
+        with self._cv:
+            self._stream = stream
+            self._stream_params = params
         logger.debug(f"Opened output stream {rate}Hz {channels}ch {dtype}")
         return stream
 
     def _close_stream(self):
-        stream, self._stream = self._stream, None
-        self._stream_params = None
+        with self._cv:
+            stream, self._stream = self._stream, None
+            self._stream_params = None
         if stream is None:
             return
         try:
@@ -282,6 +290,7 @@ class TTSPlayer:
             stream.close()
         except Exception as e:
             logger.debug(f"Output stream close exception: {e}")
+
 
     def _write_winsound(self, wav_bytes: bytes):
         if winsound is None:

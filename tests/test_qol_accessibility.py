@@ -19,23 +19,49 @@ from grace.main import GraceApp
 
 
 class TestSyntheticEarcons:
-    """Verify synthetic earcons execute safely without throwing exceptions."""
+    """Verify synthetic earcons execute safely with mocked sound output (R43)."""
 
-    def test_play_chime_runs_safely(self):
-        # Sound playback should complete or degrade gracefully without uncaught exceptions
+    @patch("sounddevice.wait")
+    @patch("sounddevice.play")
+    def test_play_chime_runs_safely(self, mock_play, mock_wait):
         FeedbackSounds.play_chime()
+        assert mock_play.called
+        args, kwargs = mock_play.call_args
+        assert len(args[0]) > 0
+        samplerate = kwargs.get("samplerate") or (args[1] if len(args) > 1 else None)
+        assert samplerate is not None and samplerate > 0
 
-    def test_play_success_runs_safely(self):
+    @patch("sounddevice.wait")
+    @patch("sounddevice.play")
+    def test_play_success_runs_safely(self, mock_play, mock_wait):
         FeedbackSounds.play_success()
+        assert mock_play.called
+        args, kwargs = mock_play.call_args
+        assert len(args[0]) > 0
 
-    def test_play_cancel_runs_safely(self):
+    @patch("sounddevice.wait")
+    @patch("sounddevice.play")
+    def test_play_cancel_runs_safely(self, mock_play, mock_wait):
         FeedbackSounds.play_cancel()
+        assert mock_play.called
+        args, kwargs = mock_play.call_args
+        assert len(args[0]) > 0
 
-    def test_play_error_runs_safely(self):
+    @patch("sounddevice.wait")
+    @patch("sounddevice.play")
+    def test_play_error_runs_safely(self, mock_play, mock_wait):
         FeedbackSounds.play_error()
+        assert mock_play.called
+        args, kwargs = mock_play.call_args
+        assert len(args[0]) > 0
 
-    def test_play_listening_runs_safely(self):
+    @patch("sounddevice.wait")
+    @patch("sounddevice.play")
+    def test_play_listening_runs_safely(self, mock_play, mock_wait):
         FeedbackSounds.play_listening()
+        assert mock_play.called
+        args, kwargs = mock_play.call_args
+        assert len(args[0]) > 0
 
     @patch("sounddevice.play", side_effect=Exception("Audio device busy"))
     def test_sounddevice_error_degrades_gracefully(self, mock_play):
@@ -267,3 +293,23 @@ class TestVoiceReflexes:
         res = await app._handle_activation_turn(trace_mock)
         assert res is True
         app._speak_response.assert_called_once_with("The quick brown fox jumps over the lazy dog.")
+
+    @pytest.mark.asyncio
+    async def test_r24_repeat_during_parked_confirmation_replays_question(self):
+        app = GraceApp.__new__(GraceApp)
+        app._last_spoken_text = "Previous conversation text."
+        app.response_gen = MagicMock()
+        app.response_gen.generate_and_speak_with_text = AsyncMock()
+        app.agent_loop = MagicMock()
+        app.agent_loop.has_pending_confirmation = True
+        app.agent_loop.pending_prompt = "Are you sure you want to delete file.txt?"
+        app.ws_server = AsyncMock()
+
+        # Parked confirmation is asked
+        intent = Intent(tool="delete_file", params={"name": "file.txt"})
+        await app._park_if_confirmation_required(intent, {
+            "status": "confirmation_required",
+            "confirmation_prompt": "Are you sure you want to delete file.txt?",
+        })
+
+        assert app._last_spoken_text == "Are you sure you want to delete file.txt?"
