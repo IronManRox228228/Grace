@@ -33,8 +33,19 @@ class TestCuaEnhancements:
         res2 = self.cua.perform("activate", {"app": "NonExistentAppTitle"})
         assert "ok" in res2
 
-    def test_click_window_extraction(self):
-        """Verify click extracts x/y and click_count properly."""
+    def test_click_window_extraction(self, monkeypatch):
+        """Verify click extracts x/y and click_count properly.
+
+        Win32Driver.click_at is stubbed so the test never moves the real cursor
+        or depends on foreground-window focus: that shared real-display state
+        cannot be relied on under pytest-xdist (workers share one desktop), so
+        the physical dispatch is orthogonal to what this test asserts -- the
+        click message contract (x / y / click_count).
+        """
+        monkeypatch.setattr(
+            "grace.automation.win32_driver.Win32Driver.click_at",
+            lambda x, y, hwnd=None, clicks=1: True,
+        )
         res = self.cua.perform("click", {"window": {"x": 10, "y": 10}, "click_count": 2})
         assert res.get("ok") is True
         assert "2 time(s)" in res.get("message", "")

@@ -8,3 +8,4 @@
 # suite, so a silently-degraded baseline is the worst thing it could have.
 pytest>=8.0
 pytest-asyncio>=1.0
+pytest-xdist>=3.0

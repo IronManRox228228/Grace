@@ -69,13 +69,34 @@ impl EarconPlayer for SilentEarcons {
     fn play(&mut self, _earcon: Earcon) {}
 }
 
+/// Binds an ephemeral HTTP listener on port 0 and serves a single minimal
+/// response, returning the bound port. An `HttpLlm` pointed at it receives an
+/// empty `200 OK` body that fails JSON parsing, so it yields `Ok(None)` and
+/// callers fall back to scripted responses - deterministically, regardless of
+/// what (if anything) occupies a fixed port such as 8080. This is what ends
+/// the port-8080 flake: `run_demo_turn` no longer talks to `127.0.0.1:8080`.
+fn ephemeral_http_port() -> u16 {
+    use std::io::Write as _;
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral http port");
+    let port = listener.local_addr().expect("ephemeral socket address").port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    port
+}
+
 /// Runs one activation turn with the fixed transcript `"open the
 /// calculator"` and emits its real event sequence to every client connected
 /// to `server`. See this module's doc comment for exactly what "real" means
 /// here.
 pub fn run_demo_turn(server: &Arc<WsEventServer>) {
-    let llama_url =
-        std::env::var("LLAMA_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+    let llama_url = std::env::var("LLAMA_SERVER_URL")
+        .unwrap_or_else(|_| format!("http://127.0.0.1:{}", ephemeral_http_port()));
 
     let mut planner_llm = DemoLlm {
         http: HttpLlm::new(llama_url.clone()),
