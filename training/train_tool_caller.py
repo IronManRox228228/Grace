@@ -109,7 +109,7 @@ def export_to_gguf(checkpoint_dir: Path, output_gguf_path: Path) -> Path:
 def run_training(config: TrainingConfig) -> Dict[str, Any]:
     """Execute training run for the tool calling model."""
     logger.info("Starting tool caller training with config: %s", config)
-    governor = ResourceGovernor()
+    governor = ResourceGovernor(allow_on_battery=config.allow_on_battery or config.smoke_run)
     governor.apply_training_priority()
 
     # Determine device

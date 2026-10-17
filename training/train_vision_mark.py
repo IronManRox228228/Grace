@@ -96,7 +96,7 @@ def generate_synthetic_som_samples(count: int = 20) -> List[Dict[str, Any]]:
 def run_training(config: TrainingConfig) -> Dict[str, Any]:
     """Execute fine-tuning on vision mark selection."""
     logger.info("Starting vision mark training with config: %s", config)
-    governor = ResourceGovernor()
+    governor = ResourceGovernor(allow_on_battery=config.allow_on_battery or config.smoke_run)
     governor.apply_training_priority()
 
     device = "cuda" if torch.cuda.is_available() and config.device == "cuda" else "cpu"

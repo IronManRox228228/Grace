@@ -75,7 +75,7 @@ pub struct Evaluation {
 
 /// Explicit allowlist of read-only or harmless actions that run without confirmation.
 /// Note: read_pdf and summarize_pdf are checked separately for safe paths (R26).
-pub const SAFE_READ_ONLY_TOOLS: [&str; 19] = [
+pub const SAFE_READ_ONLY_TOOLS: [&str; 21] = [
     "converse",
     "search_files",
     "adjust_volume",
@@ -83,6 +83,8 @@ pub const SAFE_READ_ONLY_TOOLS: [&str; 19] = [
     "undo",
     "describe_screen",
     "set_speech_rate",
+    "voice_training_status",
+    "rollback_voice_model",
     "cua_list_windows",
     "cua_get_window",
     "cua_screenshot",

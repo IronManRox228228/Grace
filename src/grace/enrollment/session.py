@@ -176,7 +176,14 @@ class EnrollmentSession:
                 is_held_out=phrase.is_held_out,
             )
 
-        # 4. Check session time expiration
+        # 4. Advance to next phrase
+        self.current_index += 1
+        if self.current_index >= len(self.phrases):
+            self._finish_round()
+            if self.state == SessionState.COMPLETED:
+                return (True, f"Enrollment complete! {self.headline_accuracy_report}", val)
+
+        # 5. Check session time expiration
         if self.is_time_expired():
             self.pause()
             self.suggested_next_session = self.compute_suggested_next_session()
@@ -188,13 +195,6 @@ class EnrollmentSession:
             )
             self._save_state()
             return (True, msg, val)
-
-        # 5. Advance to next phrase
-        self.current_index += 1
-        if self.current_index >= len(self.phrases):
-            self._finish_round()
-            if self.state == SessionState.COMPLETED:
-                return (True, f"Enrollment complete! {self.headline_accuracy_report}", val)
 
         self._save_state()
         self._notify_phrase()

@@ -347,6 +347,20 @@ class GraceApp:
         self.fleet_config = get_fleet_config(getattr(self.config, "preset", None), self.config)
         self.decision_ladder = DecisionLadder(fleet_config=self.fleet_config)
 
+        # Task 14 & 15: Enrollment, Ongoing tracking & Opportunistic Training Scheduler (PLAN §6)
+        from grace.enrollment.storage import EnrollmentStorage
+        from grace.enrollment.ongoing import OngoingTracker
+        from grace.training.scheduler import TrainingScheduler
+        self.enrollment_storage = EnrollmentStorage()
+        self.ongoing_tracker = OngoingTracker(storage=self.enrollment_storage)
+        self.training_scheduler = TrainingScheduler(
+            ongoing_tracker=self.ongoing_tracker,
+            enrollment_storage=self.enrollment_storage,
+            ws_server=self.ws_server,
+        )
+        self.dispatcher.set_training_scheduler(self.training_scheduler)
+
+
 
     # An activation that hears nothing still holds the pill open this long,
     # counted from the wake word, so it never flashes open and shut.

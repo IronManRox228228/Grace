@@ -123,7 +123,7 @@ def export_to_onnx_int8(model: nn.Module, output_onnx_path: Path) -> Path:
 def run_training(config: TrainingConfig) -> Dict[str, Any]:
     """Execute fine-tuning on element selection snapshots."""
     logger.info("Starting element selection fine-tune with config: %s", config)
-    governor = ResourceGovernor()
+    governor = ResourceGovernor(allow_on_battery=config.allow_on_battery or config.smoke_run)
     governor.apply_training_priority()
 
     device = "cuda" if torch.cuda.is_available() and config.device == "cuda" else "cpu"

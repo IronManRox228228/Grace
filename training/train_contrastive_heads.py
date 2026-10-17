@@ -119,7 +119,7 @@ def export_contrastive_head_onnx(model: DualProjectionContrastiveModel, output_p
 def run_training(config: TrainingConfig) -> Dict[str, Any]:
     """Train dual projection heads on agent trajectories and UI snapshots."""
     logger.info("Starting contrastive heads training with config: %s", config)
-    governor = ResourceGovernor()
+    governor = ResourceGovernor(allow_on_battery=config.allow_on_battery or config.smoke_run)
     governor.apply_training_priority()
 
     device = "cuda" if torch.cuda.is_available() and config.device == "cuda" else "cpu"

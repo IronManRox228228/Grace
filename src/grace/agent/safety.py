@@ -37,6 +37,8 @@ class SafetyGuard:
         "undo",
         "describe_screen",
         "set_speech_rate",
+        "voice_training_status",
+        "rollback_voice_model",
         "cua_list_windows",
         "cua_get_window",
         "cua_screenshot",

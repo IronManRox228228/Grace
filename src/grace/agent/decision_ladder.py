@@ -127,7 +127,25 @@ class DecisionLadder:
                 rationale="Matched scroll up pattern",
             )
 
-        # 5. App launching via AppIndexer / Corrections
+        # 5. Voice training status query ("How's my voice training going?")
+        if re.search(r"\b(?:how(?:'s|\s+is)\s+(?:my\s+)?voice\s+training(?:\s+going)?|voice\s+training\s+status)\b", lower):
+            return LadderResolution(
+                rung=DecisionRung.RUNG_1_PATTERN,
+                tool="voice_training_status",
+                params={},
+                rationale="Matched voice training status query",
+            )
+
+        # 6. Voice model rollback ("Grace, go back to the old voice model")
+        if re.search(r"\b(?:grace\s*,?\s*)?(?:go\s+back\s+to\s+(?:the\s+)?old\s+voice\s+model|rollback\s+voice\s+model|restore\s+previous\s+voice\s+model)\b", lower):
+            return LadderResolution(
+                rung=DecisionRung.RUNG_1_PATTERN,
+                tool="rollback_voice_model",
+                params={},
+                rationale="Matched rollback voice model pattern",
+            )
+
+        # 7. App launching via AppIndexer / Corrections
         open_match = re.match(r"^(?:open|launch|start)\s+([a-zA-Z0-9_\-\.\s]+)$", lower)
         if open_match:
             raw_target = open_match.group(1).strip()

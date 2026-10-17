@@ -46,6 +46,7 @@ class TrainingConfig:
     max_steps: Optional[int] = None
     device: str = "cuda"  # Auto-falls back to cpu if cuda unavailable
     seed: int = 42
+    allow_on_battery: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -54,13 +55,77 @@ class TrainingConfig:
         return d
 
 
+def get_windows_idle_seconds() -> float:
+    """Get system idle time in seconds on Windows."""
+    if sys.platform != "win32":
+        return 0.0
+    try:
+        import ctypes
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+            return max(0.0, millis / 1000.0)
+    except Exception:
+        pass
+    return 0.0
+
+
+def get_windows_thermal_status() -> Tuple[float, bool]:
+    """Get CPU/GPU temperature and throttling status.
+    Returns (temperature_celsius, is_throttling).
+    """
+    temp = 45.0
+    throttling = False
+    try:
+        if hasattr(psutil, "sensors_temperatures"):
+            temps = psutil.sensors_temperatures()
+            if temps:
+                all_current = [
+                    entry.current for entries in temps.values()
+                    for entry in entries if hasattr(entry, "current") and entry.current is not None
+                ]
+                if all_current:
+                    temp = max(all_current)
+        freq = psutil.cpu_freq()
+        if freq and freq.max > 0:
+            if freq.current < (freq.max * 0.50):
+                throttling = True
+    except Exception:
+        pass
+    return temp, throttling
+
+
 class ResourceGovernor:
     """Monitors system power, battery, and thermals to safely pause opportunistic training."""
 
-    def __init__(self, allow_on_battery: bool = False, max_cpu_percent: float = 85.0) -> None:
+    def __init__(
+        self,
+        allow_on_battery: bool = False,
+        max_cpu_percent: float = 85.0,
+        idle_threshold_seconds: Optional[float] = None,
+        max_temp_celsius: float = 80.0,
+        power_provider: Optional[Callable[[], Tuple[bool, int]]] = None,
+        idle_provider: Optional[Callable[[], float]] = None,
+        thermal_provider: Optional[Callable[[], Tuple[float, bool]]] = None,
+        turn_active_provider: Optional[Callable[[], bool]] = None,
+        clock_provider: Optional[Callable[[], float]] = None,
+        cpu_percent_provider: Optional[Callable[[], float]] = None,
+    ) -> None:
         self.allow_on_battery = allow_on_battery
         self.max_cpu_percent = max_cpu_percent
+        self.idle_threshold_seconds = idle_threshold_seconds
+        self.max_temp_celsius = max_temp_celsius
         self._user_active_hook: Optional[Callable[[], bool]] = None
+        self.power_provider = power_provider
+        self.idle_provider = idle_provider
+        self.thermal_provider = thermal_provider
+        self.turn_active_provider = turn_active_provider
+        self.clock_provider = clock_provider or time.time
+        self.cpu_percent_provider = cpu_percent_provider
 
     def register_user_active_hook(self, hook: Callable[[], bool]) -> None:
         """Register hook for Task 15 scheduler to detect user keyboard/mouse activity."""
@@ -73,18 +138,61 @@ class ResourceGovernor:
             Tuple of (should_pause: bool, reason: str)
         """
         # 1. Check battery status
-        battery = psutil.sensors_battery()
-        if battery is not None and not battery.power_plugged and not self.allow_on_battery:
-            return True, f"Machine running on battery ({battery.percent}% remaining)"
+        if self.power_provider:
+            plugged, pct = self.power_provider()
+            if not plugged and not self.allow_on_battery:
+                return True, f"Machine running on battery ({pct}% remaining)"
+        else:
+            try:
+                battery = psutil.sensors_battery()
+                if battery is not None and not battery.power_plugged and not self.allow_on_battery:
+                    return True, f"Machine running on battery ({battery.percent}% remaining)"
+            except Exception:
+                pass
 
-        # 2. Check user activity hook
+        # 2. Check Grace active turn
+        if self.turn_active_provider and self.turn_active_provider():
+            return True, "Grace turn active"
+
+        # 3. Check user activity hook
         if self._user_active_hook and self._user_active_hook():
             return True, "User activity detected"
 
-        # 3. Check system CPU saturation
-        cpu_pct = psutil.cpu_percent(interval=None)
-        if cpu_pct > self.max_cpu_percent:
-            return True, f"System CPU utilization high ({cpu_pct:.1f}%)"
+        # 4. Check user idle time if configured
+        if self.idle_threshold_seconds is not None:
+            if self.idle_provider:
+                idle_secs = self.idle_provider()
+                if idle_secs < self.idle_threshold_seconds:
+                    return True, f"User active recently ({idle_secs:.1f}s ago < {self.idle_threshold_seconds}s threshold)"
+            elif sys.platform == "win32":
+                idle_secs = get_windows_idle_seconds()
+                if 0.0 <= idle_secs < self.idle_threshold_seconds:
+                    return True, f"User active recently ({idle_secs:.1f}s ago < {self.idle_threshold_seconds}s threshold)"
+
+        # 5. Check thermals and throttling
+        if self.thermal_provider:
+            temp, throttled = self.thermal_provider()
+            if temp > self.max_temp_celsius:
+                return True, f"System temperature high ({temp:.1f}°C > {self.max_temp_celsius:.1f}°C)"
+            if throttled:
+                return True, "System thermal throttling detected"
+        else:
+            temp, throttled = get_windows_thermal_status()
+            if temp > self.max_temp_celsius:
+                return True, f"System temperature high ({temp:.1f}°C > {self.max_temp_celsius:.1f}°C)"
+            if throttled:
+                return True, "System thermal throttling detected"
+
+        # 6. Check system CPU saturation
+        try:
+            if self.cpu_percent_provider is not None:
+                cpu_pct = self.cpu_percent_provider()
+            else:
+                cpu_pct = psutil.cpu_percent(interval=None)
+            if cpu_pct > self.max_cpu_percent:
+                return True, f"System CPU utilization high ({cpu_pct:.1f}%)"
+        except Exception:
+            pass
 
         return False, "ok"
 
@@ -124,13 +232,21 @@ class CheckpointManager:
         ckpt_folder.mkdir(parents=True, exist_ok=True)
 
         meta_file = ckpt_folder / "meta.json"
-        with open(meta_file, "w", encoding="utf-8") as f:
+        tmp_meta = meta_file.with_suffix(".tmp")
+        with open(tmp_meta, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
+        tmp_meta.replace(meta_file)
 
-        # Record state summary
+        # Record state contents or serialized representation
         state_file = ckpt_folder / "state.json"
-        with open(state_file, "w", encoding="utf-8") as f:
-            json.dump({k: str(type(v)) for k, v in state_dict.items()}, f, indent=2)
+        tmp_state = state_file.with_suffix(".tmp")
+        try:
+            with open(tmp_state, "w", encoding="utf-8") as f:
+                json.dump(state_dict, f, indent=2)
+        except (TypeError, ValueError):
+            with open(tmp_state, "w", encoding="utf-8") as f:
+                json.dump({k: str(v) for k, v in state_dict.items()}, f, indent=2)
+        tmp_state.replace(state_file)
 
         self.last_save_time = time.time()
         logger.info("Saved checkpoint at step %d to %s", step, ckpt_folder)
@@ -154,6 +270,16 @@ class CheckpointManager:
             return None
         meta_file = latest / "meta.json"
         with open(meta_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def load_latest_checkpoint_state(self) -> Optional[Dict[str, Any]]:
+        latest = self.find_latest_checkpoint()
+        if not latest:
+            return None
+        state_file = latest / "state.json"
+        if not state_file.is_file():
+            return None
+        with open(state_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
 

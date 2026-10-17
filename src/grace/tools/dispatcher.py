@@ -38,6 +38,8 @@ _TOOL_LABELS: dict[str, str] = {
     "undo": "Undoing action\u2026",
     "describe_screen": "Inspecting screen\u2026",
     "set_speech_rate": "Adjusting speech rate\u2026",
+    "voice_training_status": "Checking voice training status\u2026",
+    "rollback_voice_model": "Rolling back voice model\u2026",
 }
 
 # One entry per handler ComputerUse actually implements. The removed keys
@@ -166,6 +168,7 @@ class Dispatcher:
         self._last_search_results: list[str] = []
         self._app_indexer = None
         self._app_indexer_lock = asyncio.Lock()
+        self._training_scheduler = None
 
     def set_kokoro_engine(self, engine: Any) -> None:
         """Install Kokoro engine for runtime speech parameter adjustments."""
@@ -174,6 +177,10 @@ class Dispatcher:
     def set_app_indexer(self, indexer) -> None:
         """Install a pre-built index (main.py builds one during startup warmup)."""
         self._app_indexer = indexer
+
+    def set_training_scheduler(self, scheduler: Any) -> None:
+        """Install the opportunistic training scheduler (PLAN §6, Task 15)."""
+        self._training_scheduler = scheduler
 
     async def execute(self, intent: Intent, confirmed: bool = False) -> dict[str, Any]:
         """Execute a parsed intent, taping the call when recording is on.
@@ -209,7 +216,7 @@ class Dispatcher:
         "converse", "open_app", "close_app", "search_files", "open_file",
         "read_pdf", "summarize_pdf", "adjust_volume", "lock_computer",
         "open_calculator", "delete_file", "undo", "describe_screen",
-        "set_speech_rate",
+        "set_speech_rate", "voice_training_status", "rollback_voice_model",
     }
 
     @staticmethod
@@ -253,6 +260,18 @@ class Dispatcher:
 
         if tool.startswith("cua_"):
             return await self._execute_cua(tool, params)
+
+        if tool == "voice_training_status":
+            await self._emit_tool_started(tool, params)
+            result = await self._voice_training_status(params)
+            await self._emit_tool_finished()
+            return result
+
+        if tool == "rollback_voice_model":
+            await self._emit_tool_started(tool, params)
+            result = await self._rollback_voice_model(params)
+            await self._emit_tool_finished()
+            return result
 
         handler_map = {
             "converse": self._converse,
@@ -983,3 +1002,31 @@ class Dispatcher:
             logger.error(f"Set speech rate failed: {e}")
             FeedbackSounds.play_error()
             return {"status": "error", "error": str(e), "text": f"Could not adjust speech rate: {e}"}
+
+    async def _voice_training_status(self, params: dict) -> dict:
+        """Report on-device voice training progress and accuracy."""
+        if self._training_scheduler:
+            msg = self._training_scheduler.get_voice_status_summary()
+            status_data = self._training_scheduler.get_status_dict()
+        else:
+            msg = "Your voice model is up to date and active."
+            status_data = {"state": "idle"}
+        return {
+            "status": "ok",
+            "action": "voice_training_status",
+            "text": msg,
+            "data": status_data,
+        }
+
+    async def _rollback_voice_model(self, params: dict) -> dict:
+        """One-step rollback to previous voice adapter ("Grace, go back to the old voice model")."""
+        if self._training_scheduler:
+            ok, msg = self._training_scheduler.rollback_adapter()
+        else:
+            ok, msg = False, "No previous voice model available to roll back to."
+        return {
+            "status": "ok" if ok else "error",
+            "action": "rollback_voice_model",
+            "text": msg,
+        }
+
