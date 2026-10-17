@@ -253,7 +253,11 @@ fn assign_to_job_object(_child: &Child) {}
                 .set_on_wake(Arc::new(move || {
                     let server = Arc::clone(&wake_server);
                     std::thread::spawn(move || {
-                        grace_backend::run_demo_turn(&server);
+                        if std::env::var("GRACE_LIVE").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false) {
+                            grace_backend::run_live_turn_default(&server);
+                        } else {
+                            grace_backend::run_demo_turn(&server);
+                        }
                     });
                 }))
                 .await;

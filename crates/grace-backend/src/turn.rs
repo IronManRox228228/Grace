@@ -143,6 +143,70 @@ pub fn run_demo_turn(server: &Arc<WsEventServer>) {
     run_turn_with_source(server, source);
 }
 
+/// Runs a live activation turn using real Windows perception, actuation, and system actions.
+///
+/// Under `#[cfg(windows)]`, this wires:
+/// - `WindowsSystemActions` as the system actions executor
+/// - `Win32Actuator` behind `WindowsCuaBridge` as the CUA computer-use actuator
+/// - `WindowsPerceptionSource` as the live perception source (UIA tree walk + screenshot capture)
+///
+/// On non-Windows platforms, falls back to the scripted/noop turn.
+pub fn run_live_turn(server: &Arc<WsEventServer>, mut source: Box<dyn TranscriptSource>) {
+    #[cfg(windows)]
+    {
+        let llama_url = std::env::var("LLAMA_SERVER_URL")
+            .unwrap_or_else(|_| format!("http://127.0.0.1:{}", ephemeral_http_port()));
+
+        let mut planner_llm = DemoLlm {
+            http: HttpLlm::new(llama_url.clone()),
+            fallback: vec![r#"{"tool": "open_calculator", "params": {}}"#.to_string()],
+            fallback_index: 0,
+        };
+        let mut vision_llm = DemoLlm { http: HttpLlm::new(llama_url), fallback: vec![], fallback_index: 0 };
+        let mut actions = grace_win::WindowsSystemActions::new();
+        let actuator = grace_win::Win32Actuator::new();
+        let mut cua_bridge = grace_win::WindowsCuaBridge::new(actuator);
+        let mut dispatcher = Dispatcher::new(Some(&mut cua_bridge), &mut actions);
+        let mut perception = grace_win::WindowsPerceptionSource::new();
+        let mut agent_loop = AgentLoop::new(AgentLoopConfig::default());
+        let mut tts = ScriptedTts::default();
+        let mut wake_word = RecordingWakeWordControl::default();
+        let mut earcons = SilentEarcons;
+        let mut sink = WsSink(Arc::clone(server));
+        let mut intent_parser = IntentParser::new();
+        let mut last_spoken_text = String::new();
+
+        let mut ctx = TurnContext {
+            wake_word: &mut wake_word,
+            earcons: &mut earcons,
+            sink: &mut sink,
+            intent_parser: &mut intent_parser,
+            planner_llm: &mut planner_llm,
+            vision_llm: &mut vision_llm,
+            dispatcher: &mut dispatcher,
+            perception: &mut perception,
+            agent_loop: &mut agent_loop,
+            tts: &mut tts,
+        };
+
+        let (outcome, elapsed) = source.capture_and_transcribe();
+        handle_activation_turn(&mut ctx, outcome, elapsed, &|_| {}, INTENT_SYSTEM_PROMPT, &mut last_spoken_text);
+    }
+    #[cfg(not(windows))]
+    {
+        run_turn_with_source(server, source);
+    }
+}
+
+/// Runs a live activation turn using default transcript (from `GRACE_TRANSCRIPT` or fallback).
+pub fn run_live_turn_default(server: &Arc<WsEventServer>) {
+    let transcript = std::env::var("GRACE_TRANSCRIPT")
+        .unwrap_or_else(|_| "open the calculator".to_string());
+    let source: Box<dyn TranscriptSource> =
+        Box::new(ScriptedTranscriptSource::from_transcripts(vec![&transcript]));
+    run_live_turn(server, source);
+}
+
 /// A minimal intent-parsing instruction. Not the full prompt
 /// `intent/prompt.py` builds (that lives in `src/grace/`, which this port
 /// cannot import and does not duplicate here) - close enough for a demo

@@ -8,9 +8,23 @@
 //! DPI awareness ordering and the pyautogui-backed computer-use actions are
 //! trait boundaries only, not yet implemented against the real Windows API.
 
+pub mod actuator;
 pub mod app_indexer;
 pub mod dpi;
+pub mod perception_source;
+pub mod screenshot;
+pub mod system_actions;
+pub mod uia;
 pub mod win32;
+
+pub use actuator::Win32Actuator;
+pub use perception_source::WindowsPerceptionSource;
+pub use screenshot::encode_rgba_to_png;
+#[cfg(windows)]
+pub use screenshot::real::capture_foreground_window;
+pub use system_actions::{WindowsCuaBridge, WindowsSystemActions};
+#[cfg(windows)]
+pub use uia::real::WindowsElementGraphSource;
 
 /// A rectangle in screen pixels, as the element graph and computer-use
 /// actions exchange coordinates.
@@ -28,17 +42,97 @@ impl Rect {
     }
 }
 
+impl Default for Rect {
+    fn default() -> Self {
+        Self {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        }
+    }
+}
+
 /// One element in the accessibility/element graph
 /// (`src/grace/agent/perception.py`'s graph builder output). Deliberately a
 /// short summary, never the whole subtree - PLAN.md §3's "the decision model
 /// scores each candidate element as a short summary... never the whole tree
 /// per element."
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ElementSnapshot {
     pub id: String,
     pub name: String,
     pub role: String,
     pub rect: Rect,
+    pub parent_path: String,
+    pub window_title: String,
+    pub neighbouring_labels: Vec<String>,
+    pub value: String,
+    pub placeholder: String,
+    pub container: String,
+    pub frame: String,
+    pub focused: bool,
+    pub focusable: bool,
+    pub enabled: bool,
+    pub offscreen: bool,
+    pub automation_id: String,
+}
+
+impl ElementSnapshot {
+    pub fn new(id: impl Into<String>, name: impl Into<String>, role: impl Into<String>, rect: Rect) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            role: role.into(),
+            rect,
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    /// Generates a concise summary: "name, control type, parent path, window title, neighbouring labels"
+    /// matching PLAN.md §3 / §5 for candidate element scoring.
+    pub fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.name.is_empty() {
+            parts.push(format!("name: {:?}", self.name));
+        } else if !self.placeholder.is_empty() {
+            parts.push(format!("placeholder: {:?}", self.placeholder));
+        }
+        parts.push(format!("role: {}", self.role));
+        if !self.parent_path.is_empty() {
+            parts.push(format!("parent: {:?}", self.parent_path));
+        }
+        if !self.window_title.is_empty() {
+            parts.push(format!("window: {:?}", self.window_title));
+        }
+        if !self.neighbouring_labels.is_empty() {
+            parts.push(format!("near: {:?}", self.neighbouring_labels.join(", ")));
+        }
+        parts.join(", ")
+    }
+
+    pub fn to_element_node(&self) -> grace_core::perception::ElementNode {
+        let id = self.id.parse::<i64>().unwrap_or(0);
+        let (cx, cy) = self.rect.center();
+        grace_core::perception::ElementNode {
+            id,
+            role: self.role.clone(),
+            name: self.name.clone(),
+            rect: (self.rect.left as i64, self.rect.top as i64, self.rect.right as i64, self.rect.bottom as i64),
+            center: (cx as i64, cy as i64),
+            value: self.value.clone(),
+            placeholder: self.placeholder.clone(),
+            frame: if self.frame.is_empty() { grace_core::perception::FRAME_APP.to_string() } else { self.frame.clone() },
+            container: self.container.clone(),
+            focused: self.focused,
+            focusable: self.focusable,
+            enabled: self.enabled,
+            offscreen: self.offscreen,
+            automation_id: self.automation_id.clone(),
+            source: grace_core::perception::SOURCE_UIA.to_string(),
+        }
+    }
 }
 
 /// What `PerceptionEngine`'s UIA walk exposes: the current foreground
@@ -75,6 +169,8 @@ pub trait DesktopActuator: Send {
     /// shell, no re-parsing (ship-blocker #6). Implementations must not fall
     /// back to a shell for an unresolved target.
     fn start(&mut self, target: &str) -> anyhow::Result<()>;
+    /// Sets expected window title for foreground re-check (R11/R12/R22 semantics).
+    fn set_target_window(&mut self, _title: Option<&str>) {}
 }
 
 /// A `DesktopActuator` that records every call instead of touching the

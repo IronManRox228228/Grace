@@ -11,6 +11,7 @@ grace-audio.workspace = true
 grace-contract.workspace = true
 grace-core.workspace = true
 grace-models.workspace = true
+grace-win.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

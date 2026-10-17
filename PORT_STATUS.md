@@ -210,32 +210,67 @@ cargo test -p grace-win --lib -- --ignored --test-threads=1
     already-past-the-floor no-op case, and the transcription-failure path
     never holding regardless of elapsed time.
 
-## Real Windows implementations (`grace-win`, new this phase)
+## Real Windows implementations (`grace-win`, expanded in Task 18)
 
-Two real `windows`-crate calls, chosen because they're safe (no COM, no
-input injection) and self-contained:
+Full real desktop perception, actuation, screenshot capture, and system actions:
 
 - `dpi::real::get_dpi_scale`/`ensure_dpi_aware`: `GetDpiForWindow` with the
   `GetDeviceCaps(LOGPIXELSX)` fallback, matching `DPIHelper.get_dpi_scale`'s
   exact fallback chain.
 - `win32::real::foreground_window`: `GetForegroundWindow` +
   `GetWindowTextW`/`GetClassNameW`/`GetWindowRect`, matching
-  `ElementGraphBuilder.active_window()`'s Win32 half (not the UIA tree walk
-  that follows it).
-
-Both are `unsafe` FFI and cannot be part of the automated suite (the task's
-hard constraint), so each has a documented `#[ignore]`d placeholder test.
-**Both were run manually against this session's real desktop** (`cargo test
--p grace-win --lib -- --ignored --test-threads=1`) and returned real,
-sane values (a DPI scale > 0, a non-`None` foreground window) - this is
-working code, verified once, not merely code that compiles under `cfg(windows)`.
-
-The full UIA tree walk (`IUIAutomation` COM interop), the win32 input driver
-(`SendInput`), and DPI-awareness-at-process-startup ordering remain trait
-boundaries only - COM interop in particular is enough additional surface
-area (apartment threading, interface lifetimes) that attempting it in the
-time remaining this phase risked a half-working implementation, which is
-worse than an honest stub.
+  `ElementGraphBuilder.active_window()`'s Win32 half.
+- **UIA element tree walk (`uia::real::WindowsElementGraphSource`)**: Full COM
+  interop with `IUIAutomation`, using cached tree walker (`ControlViewWalker`,
+  `CreateCacheRequest`), bulk property retrieval (`Name`, `ControlType`,
+  `BoundingRectangle`, `AriaRole`, `AriaProperties`, `Value`, `IsEnabled`,
+  `HasKeyboardFocus`, `IsKeyboardFocusable`, `IsOffscreen`, `AutomationId`),
+  deadline checks on every node (default 3.0 s timeout), breadcrumb parent
+  paths, neighbouring static text label capture for unlabeled inputs, and
+  stable pinned element IDs matching snapshot indices.
+- **Win32 input driver & actuator (`actuator::real::Win32Actuator`)**: Real
+  `SendInput` for:
+  - `click(x, y)`: Foreground window focus check, per-monitor v2 DPI scaling,
+    virtual screen coordinate normalization (`MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK`),
+    `SetCursorPos`, hover settle delay (50 ms), and mouse down/up injection.
+  - `type_text(text)`: UTF-16 code unit decomposition with `KEYEVENTF_UNICODE`
+    flag, fully supporting arbitrary Unicode and non-ASCII text without clipboard
+    side-effects.
+  - `press_key(key)` / `parse_hotkey`: Keyboard shortcut parsing with
+    modifier tracking (Ctrl, Alt, Shift, Win), sequential key-down, main key
+    pulse, and modifier release.
+  - `scroll(amount)`: `MOUSEEVENTF_WHEEL` mouse wheel events.
+  - `start(target)`: http/https web URLs strictly validated and launched via
+    `ShellExecuteW`; desktop applications resolved via `app_indexer::plan_launch`
+    and spawned directly using `std::process::Command` without shell execution.
+  - **Foreground verification guard (R11/R12/R22)**: Re-checks foreground window
+    title before every physical click, type, and key press (`check_window_focus`),
+    refusing execution with an explicit error on window switch/mismatch.
+- **Screenshot capture (`screenshot::real::capture_foreground_window`)**: Queries
+  foreground window bounds, captures window DC using GDI `BitBlt`, extracts
+  32-bit BGRA pixels via `GetDIBits`, converts to RGBA, and encodes to valid PNG
+  bytes using the `png` crate (verified magic bytes `\x89PNG\r\n\x1a\n`).
+- **Perception source integration (`perception_source::real::WindowsPerceptionSource`)**:
+  Implements `grace_core::perception::PerceptionSource`, assembling `ScreenSnapshot`
+  from UIA snapshots, active window metadata, screen resolution, and optional
+  foreground PNG bytes when requested by the vision rung.
+- **System actions executor (`system_actions::real::WindowsSystemActions`)**:
+  Implements `grace_core::dispatcher::SystemActions` across all 13 system tools:
+  `open_url` (`ShellExecuteW`), `launch_app` (`plan_launch` direct spawn),
+  `close_app` (`taskkill /F /IM` without wildcards), `search_files` (safe Documents
+  traversal), `open_file` (safe roots traversal and launch), `adjust_volume`
+  (`VK_VOLUME_UP` / `VK_VOLUME_DOWN`), `lock_computer` (`LockWorkStation`),
+  `open_calculator` (`calc.exe`), `delete_file` (Recycle Bin deletion via
+  `SHFileOperationW` with `FOF_ALLOWUNDO`), `press_undo` (Ctrl+Z), `describe_screen`
+  (active window title + top interactive elements), `set_speech_rate`, and
+  earcons (`MessageBeep`).
+- **CUA bridge (`system_actions::real::WindowsCuaBridge`)**: Implements
+  `grace_core::dispatcher::CuaBridge`, bridging `click`, `type_text`, `press_key`,
+  `scroll`, and `launch` directly to `DesktopActuator`.
+- **Manual verification example**: `crates/grace-win/examples/real_desktop.rs`
+  provides a comprehensive interactive verification script (`cargo run -p grace-win --example real_desktop [-- --actuate]`),
+  never run in automated CI. Pure logic tests in `grace-win` (coordinate maths,
+  summaries, hotkey parsing, input sanitization) pass 27/27 without touching live hardware.
 
 ## Harness parity
 
@@ -630,11 +665,16 @@ still apply unchanged. New this phase:
    - `CpalTtsPlayer` output player with atomic barge-in stop flag and 200 ms echo suppression (`pump.gate(0.20)`).
    - `TranscriptSource` trait unifying scripted replay (`ScriptedTranscriptSource`) and real mic+VAD+ASR pipeline (`RealTranscriptSource`, `OwnedRealTranscriptSource`), wired into `grace_backend::turn::run_turn_with_source`.
    - Manual example `crates/grace-audio/examples/real_audio.rs` demonstrating physical mic capture, VAD, ASR, and TTS playback without touching automated test suites.
-2. **`grace-win` real dispatch**: `ElementGraphSource` (the UIA tree walk -
-   COM interop, `IUIAutomation`) and `DesktopActuator` (`SendInput` for
-   click/type/key/scroll, plus the app-launch call `app_indexer::plan_launch`
-   already decides on). This unblocks `NoopSystemActions`/`ScriptedPerception`
-   being replaced with real ones in both the demo turn and the harness.
+2. ~~**`grace-win` real dispatch**: `ElementGraphSource` and `DesktopActuator`~~ **Fully completed in Task 18**:
+   - `crates/grace-win`: UIA element tree walk via COM `IUIAutomation`, cached tree walker (`ControlViewWalker`, `CreateCacheRequest`), timeout checking on every node walk (default 3.0 s deadline), element summaries (`name`, `role`, `parent_path`, `window_title`, `neighbouring_labels`), and element IDs pinned to snapshots.
+   - `Win32Actuator`: `SendInput` click, type (including Unicode/non-ASCII via `KEYEVENTF_UNICODE`), key/hotkey press (`parse_hotkey` with modifiers), mouse wheel scroll; app launch via `app_indexer::plan_launch` (http/https only for web, direct executable spawn without shell); foreground window re-check before every physical action (`check_window_focus`, R11/R12/R22 semantics); DPI-aware coordinates (per-monitor v2 via `dpi::real::get_dpi_scale`).
+   - Screenshot capture of foreground window (`BitBlt`), converted to RGBA and encoded as PNG bytes via `png` crate.
+   - `WindowsPerceptionSource` implementing `grace_core::perception::PerceptionSource`, assembling `ScreenSnapshot` from UIA snapshots, active window metadata, screen resolution, and optional foreground PNG bytes when requested by the vision rung.
+   - `WindowsSystemActions` implementing `grace_core::dispatcher::SystemActions` across all 13 system tools (`open_url`, `launch_app`, `close_app`, `search_files`, `open_file`, `adjust_volume`, `lock_computer`, `open_calculator`, `delete_file`, `press_undo`, `describe_screen`, `set_speech_rate`, and `MessageBeep` earcons). Note `read_pdf`/`summarize_pdf` status (not yet in Rust; needs pypdf/RAG index).
+   - `WindowsCuaBridge` implementing `grace_core::dispatcher::CuaBridge`, bridging `click`, `type_text`, `press_key`, `scroll`, and `launch` directly to `DesktopActuator`.
+   - Replaced `NoopSystemActions`/`ScriptedPerception` in live backend turns (`run_live_turn` and `run_live_turn_default`), while keeping scripted ones for automated tests and replay.
+   - Manual example `crates/grace-win/examples/real_desktop.rs` documenting manual verification with optional `--actuate` flag, never run in automated CI.
+   - All tests in `grace-win` test pure logic only (summaries, coordinate maths, input encoding, guard decisions) with fakes: 27 passed, 3 ignored, 0 failed.
 3. **`snapshots.jsonl` tape reader + `ScriptedPerception` wiring**: extends
    `turn_replay.rs` to agentic-goal tapes (`agentic_two_step`,
    `agentic_step_failed`, etc.) - the agent loop itself is fully ready for
@@ -661,6 +701,7 @@ still apply unchanged. New this phase:
    binding are now implemented across Tauri shell and `grace-backend`).
 8. **Security features & red-team parity across Rust and Python**:
    - **Mirrored in Rust**:
+     - R11, R12, R22 (`crates/grace-win/src/actuator.rs`): Foreground window verification guard (`check_window_focus`) re-checked immediately before physical clicks, typing, and key presses, refusing execution on window focus mismatch.
      - R25 (`crates/grace-memory/src/secret.rs`): Strip ASR punctuation from card numbers, check delimiter-separated passphrases (length >= 14), and verify weak 2-class / multi-class password tokens.
      - R26 (`crates/grace-core/src/safety.rs`): Safe document roots allowlist (`is_within_safe_pdf_roots`) for `read_pdf` and `summarize_pdf`.
      - R29 (`src-tauri/src/backend.rs`): Process tree termination on Windows via `taskkill /F /T /PID` to clean up child `llama-server.exe` processes.
@@ -670,7 +711,6 @@ still apply unchanged. New this phase:
      - R42 (`src-tauri/tauri.conf.json`): Strict Content Security Policy (`security.csp`).
    - **Python-only / Desktop-boundary items remaining for Rust**:
      - DPAPI encryption at rest for `memory.db`: Rust's `grace-memory` uses unencrypted SQLite with salted hashes and external salt file (`.salt`).
-     - Foreground window verification guard right before input injection: Rust's `DesktopActuator` remains a trait boundary awaiting real `grace-win` Win32 implementation.
      - Audio capture failure backoff (R27): Rust audio pump is a trait boundary.
      - TTSPlayer thread/stream synchronization (R40): Rust TTS player is currently a sidecar/trait boundary.
      - Cloud LLM fallback API key header (R41): Rust currently has no cloud Gemini fallback client.

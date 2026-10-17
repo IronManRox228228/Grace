@@ -1576,6 +1576,7 @@ dependencies = [
  "grace-contract",
  "grace-core",
  "grace-models",
+ "grace-win",
  "serde",
  "serde_json",
  "tokio",
@@ -1659,6 +1660,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "grace-core",
+ "png 0.17.16",
+ "serde_json",
  "thiserror 2.0.20",
  "windows 0.62.2",
 ]
