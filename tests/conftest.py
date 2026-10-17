@@ -110,3 +110,7 @@ class _GuardedPopen(_real_popen):
 
 _subprocess.run = _guarded_run
 _subprocess.Popen = _GuardedPopen
+
+# os.startfile opens real apps, files and URLs on the user's desktop.
+if hasattr(os, "startfile"):
+    os.startfile = _blocked("os.startfile", None)
