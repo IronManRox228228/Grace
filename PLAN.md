@@ -8,7 +8,7 @@ Agreed on 2026-09-26. This file is the handoff between sessions: read it before 
 
 - **Current phase:** Final consistency audit and migration complete (Task 21 & Task 22). The Rust backend (`grace-backend`) is the default runtime (`GRACE_BACKEND=rust`), running as a supervised sidecar in a Windows Job Object with automated health recovery. Floor-machine hardware simulation kit (`tools/floor/`) and floor latency benchmarks (`docs/benchmarks/floor.md`) validate all PLAN §9 latency budgets. Python serving is deprecated and scheduled for retirement in v0.2.0; offline training, dysarthria adaptation, and benchmarks remain in Python permanently.
 - **Branch:** `migration/phase-0-contract-and-harness`.
-- **Tests:** Python **1136 passed, 1 skipped** (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`). Rust **295 passed, 3 ignored, 0 failed** across all 10 crates/packages (`cargo test --workspace`).
+- **Tests:** Python **1143 passed, 1 skipped** (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`, 2026-10-22). Rust **311 passed, 3 ignored, 0 failed** across all 10 crates/packages, 28 test suites including doc-tests (`cargo test --workspace`, 2026-10-22).
 - **Corpus:** All **30 of 30** tapes in `corpus/` replay cleanly through the Rust backend with 100% exact event parity (`cargo test -p grace-harness turn_replay`). Parity gate script verified at `scripts/parity.ps1`.
 
 ---
@@ -222,6 +222,7 @@ Like Apple's Personal Voice, but larger and spread out:
 1. **Switch input for confirmations** (about a day, no ML): one key, or a USB accessibility switch that acts as a key. Press once for yes, twice for no.
 2. **Coexist with Google Project Gameface** (open source; head pointing and facial-gesture clicks on Windows). Make sure the two never fight over input.
 3. **Later, only if users ask:** MediaPipe Face Landmarker gestures inside Grace ("raise eyebrows = yes"). Pretrained, runs on CPU, no fine-tuning.
+4. **Typed commands (done 2026-10-22):** `grace --text "<command>" [--no-tts]` feeds one exact string through the same final-transcript routing a heard string takes (`main.py` `_route_transcript`), answers a parked safety confirmation from typed yes/no on stdin, then exits. No network listener, no bypass; `--no-tts` only swaps the audio engines for silent stand-ins.
 
 ---
 

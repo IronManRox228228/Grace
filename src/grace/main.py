@@ -105,7 +105,7 @@ class GraceApp:
     Wires all components together and runs the main event loop.
     """
 
-    def __init__(self):
+    def __init__(self, tts_off: bool = False):
         self.config = Config()
         self._running = False
         self._llama_process: Optional[subprocess.Popen] = None
@@ -283,8 +283,15 @@ class GraceApp:
         from grace.agent.memory import PersistentMemoryStore
         self.memory_store = PersistentMemoryStore()
 
-        # TTS
-        if getattr(self.config, "tts_engine", "kokoro") == "sherpa":
+        # TTS. A --no-tts session (typed-command users) swaps both engines
+        # for the harness's silent stand-in, so the same speech paths run and
+        # simply make no sound.
+        if tts_off:
+            from grace.harness.replay import NullTts
+
+            self.kokoro = NullTts()
+            self.tts_player = NullTts()
+        elif getattr(self.config, "tts_engine", "kokoro") == "sherpa":
             from grace.audio.sherpa_engine import SherpaTTS
             self.kokoro = SherpaTTS(
                 model_path=self.config.sherpa_kokoro_model_path,
@@ -304,7 +311,8 @@ class GraceApp:
             )
         self.dispatcher.set_kokoro_engine(self.kokoro)
 
-        self.tts_player = TTSPlayer()
+        if not tts_off:
+            self.tts_player = TTSPlayer()
 
         # Response generator
         self.response_gen = ResponseGenerator(
@@ -600,8 +608,14 @@ class GraceApp:
             log.debug(f"Model not ready yet ({e})")
             return False
 
-    async def start(self):
-        """Start Grace and enter the main event loop."""
+    async def start(self, initial_text: Optional[str] = None) -> None:
+        """Start Grace and enter the main event loop.
+
+        ``initial_text`` runs the typed-command entrypoint instead: that one
+        string is handled exactly as if it had been heard, a parked safety
+        confirmation is answered by typed yes/no on stdin, and the process
+        shuts down when the turn is done.
+        """
         self._running = True
         log.info("=" * 60)
         log.info("Grace v0.0.1 - Offline Voice Accessibility Assistant")
@@ -672,6 +686,17 @@ class GraceApp:
         self._start_background_warmup()
 
         log.info("Microphone active. Listening for 'Grace'...")
+
+        if initial_text is not None:
+            log.info("Text mode: feeding the typed command through the activation path...")
+            try:
+                await self._run_typed_session(initial_text)
+            except Exception as e:
+                log.error(f"Typed activation crashed: {e}", exc_info=True)
+                await self._speak_response("Sorry, something went wrong. I'm ready for your next command.")
+            finally:
+                await self.shutdown()
+            return
 
         # Enter main loop
         try:
@@ -1302,6 +1327,16 @@ class GraceApp:
 
             transcript = self.corrections.apply(transcript)
 
+        return await self._route_transcript(trace, transcript)
+
+    async def _route_transcript(self, trace, transcript: str) -> bool:
+        """Everything after a final transcript exists, identical for a
+        heard string and a typed one: the stop/repeat reflexes, answers to
+        a parked safety confirmation, memory commands, the ladder fast
+        path, intent generation, the CapabilityRouter and the three
+        execution paths. The wake-word turn applies personal voice
+        corrections before calling this; typed input needs none. There is
+        no other gate: whatever route this takes, it is the only route."""
         self._last_raw_transcript = transcript
 
         clean_transcript = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
@@ -1462,6 +1497,40 @@ class GraceApp:
 
         await self.ws_server.emit({"type": "ConversationFinished"})
         return True
+
+    async def _handle_text_activation(self, transcript: str) -> bool:
+        """Route one typed string through the exact heard-string path."""
+        with start_turn("text") as trace:
+            try:
+                return await self._route_transcript(trace, transcript)
+            finally:
+                log.info(trace.summary())
+                try:
+                    await self.ws_server.emit(
+                        {"type": "TurnTrace", "trace": trace.to_dict()})
+                except Exception as e:
+                    log.debug(f"Failed to emit typed TurnTrace: {e}")
+
+    async def _run_typed_session(self, text: str) -> None:
+        """Feed one typed command, then typed yes/no for anything the
+        safety gate parks. The answer re-enters the identical routing
+        (stop reflex, repeat reflex, then _resolve_pending_confirmation),
+        so a typed word can approve no more than a spoken word could."""
+        await self._handle_text_activation(text)
+        while self.agent_loop.has_pending_confirmation:
+            prompt = (self.agent_loop.pending_prompt
+                      or "Are you sure you want me to proceed?")
+            try:
+                answer = input(f"\n(parked confirmation) {prompt}\nType yes or no: ")
+            except (EOFError, KeyboardInterrupt):
+                log.info("Typed session got no confirmation answer; cancelling the parked step.")
+                self.agent_loop.cancel_pending()
+                break
+            if not answer.strip():
+                log.info("Typed session got an empty confirmation answer; cancelling the parked step.")
+                self.agent_loop.cancel_pending()
+                break
+            await self._handle_text_activation(answer)
 
     async def _run_followup_window(self, timeout_seconds: int = 10):
         """Keep listening without a wake word, restarting the window after each turn.
@@ -1742,9 +1811,23 @@ class GraceApp:
 
 def main():
     """Entry point for Grace."""
-    app = GraceApp()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Grace - offline voice accessibility assistant")
+    parser.add_argument(
+        "--text", default=None, metavar="COMMAND",
+        help="Handle this exact string as if it had been heard, answer a parked "
+             "safety confirmation with typed yes/no on stdin, then exit.",
+    )
+    parser.add_argument(
+        "--no-tts", action="store_true",
+        help="Run without speech output (same behavior, silent).",
+    )
+    args = parser.parse_args()
+
+    app = GraceApp(tts_off=args.no_tts)
     try:
-        asyncio.run(app.start())
+        asyncio.run(app.start(initial_text=args.text))
     except KeyboardInterrupt:
         log.info("Interrupted.")
 
