@@ -15,9 +15,17 @@ from grace.automation.ui_inspector import UIElement
 class TestWin32Driver:
     """Test suite for Win32Driver background message dispatcher."""
 
+    @patch("win32gui.GetForegroundWindow", return_value=0x1234)
+    @patch("win32gui.IsWindowVisible", return_value=True)
+    @patch("win32gui.WindowFromPoint", return_value=0x1234)
     @patch("ctypes.windll.user32.SetCursorPos", return_value=1)
     @patch("ctypes.windll.user32.SendInput", return_value=3)
-    def test_win32_driver_click_at_does_not_raise(self, mock_send_input, mock_set_cursor):
+    def test_win32_driver_click_at_does_not_raise(
+        self, mock_send_input, mock_set_cursor, mock_from_point, mock_visible, mock_fg
+    ):
+        # WindowFromPoint must not read the real desktop: a fake hwnd that
+        # GetForegroundWindow matches keeps the focus step hermetic (the test
+        # passed or failed depending on whichever real window sat at (100, 100)).
         res = Win32Driver.click_at(100, 100)
         assert res is True
         assert mock_send_input.called
