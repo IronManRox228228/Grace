@@ -1,0 +1,33 @@
+{"text": "open youtube music in my browser, search for the song signal by home, and play it", "expected": "agent"}
+{"text": "switch to notepad, copy my notes, then paste them into a new email in the browser", "expected": "agent"}
+{"text": "open edge, go to youtube and search lofi", "expected": "agent"}
+{"text": "open spotify and play my playlist", "expected": "agent"}
+{"text": "open notepad, write my grocery list, then save the file", "expected": "agent"}
+{"text": "search for the report pdf, open it, and summarize it", "expected": "agent"}
+{"text": "read my report pdf and tell me what it says", "expected": "agent"}
+{"text": "open my report pdf and summarize it for me", "expected": "agent"}
+{"text": "click the search box, type signal by home, and press enter", "expected": "agent"}
+{"text": "take a screenshot and paste it into paint", "expected": "agent"}
+{"text": "open my documents folder, find the tax file, and email it to me", "expected": "agent"}
+{"text": "switch to chrome and download the attachment", "expected": "agent"}
+{"text": "click the search box and type hello", "expected": "agent"}
+{"text": "read my report pdf to me", "expected": "agent"}
+{"text": "summarize the pdf called electrochemistry and save the summary to notepad", "expected": "agent"}
+{"text": "turn the volume up", "expected": "fast_path"}
+{"text": "set the volume to 40 percent", "expected": "fast_path"}
+{"text": "open notepad", "expected": "fast_path"}
+{"text": "open chrome", "expected": "fast_path"}
+{"text": "open the calculator", "expected": "fast_path"}
+{"text": "lock my computer", "expected": "fast_path"}
+{"text": "open my resume file", "expected": "fast_path"}
+{"text": "open the file budget.xlsx", "expected": "fast_path"}
+{"text": "find my tax documents", "expected": "fast_path"}
+{"text": "undo that", "expected": "fast_path"}
+{"text": "mute the volume", "expected": "fast_path"}
+{"text": "hello grace", "expected": "converse"}
+{"text": "hey, how are you?", "expected": "converse"}
+{"text": "what can you do?", "expected": "converse"}
+{"text": "tell me a joke", "expected": "converse"}
+{"text": "thank you", "expected": "converse"}
+{"text": "goodbye", "expected": "converse"}
+{"text": "can you hear me okay?", "expected": "converse"}
