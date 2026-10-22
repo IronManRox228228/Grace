@@ -99,7 +99,82 @@ class TestFastPathIsOptIn:
         assert route(text, Intent(tool=tool, params={})) == TaskComplexity.FAST_PATH
 
 
-class TestConversationShortCircuit:
+class TestMultiStepBackstop:
+    """The intent model folds two-action sentences into one JSON object.
+
+    On the live Holo model (recorded in PROGRESS.md), "click the search box
+    and type hello" was answered with `converse` ("I'll click the search box
+    and then type hello...") and the turn went to chat, stranding the second
+    action. "read my report pdf to me" was answered with `search_files` and
+    the turn went down the fast path, truncating the request. The backstop
+    counts action clauses: two or more of them beat a `converse` label, and
+    beat the fast path even when the chain is comma-joined.
+    """
+
+    # The recorded agentic_read_pdf tape utterance, with the intent the live
+    # model actually produced for it.
+    def test_a_search_intent_with_no_search_ask_goes_agentic(self):
+        intent = Intent(tool="search_files", params={"query": "report.pdf"})
+        assert route(
+            "read my report pdf to me", intent,
+        ) == TaskComplexity.AGENTIC_GOAL
+
+    def test_a_search_intent_that_matches_the_ask_keeps_the_fast_path(self):
+        intent = Intent(tool="search_files", params={"query": "tax documents"})
+        assert route("find my tax documents", intent) == TaskComplexity.FAST_PATH
+        assert route("search for my tax documents", intent) == TaskComplexity.FAST_PATH
+
+    # The recorded agentic_two_step tape utterance, with the intent the live
+    # model actually produced for it.
+    def test_converse_intent_on_the_tape_utterance_goes_agentic(self):
+        intent = Intent(tool="converse", params={},
+                        response="I'll click on a search box and type 'hello'.")
+        assert route(
+            "click the search box and type hello", intent,
+        ) == TaskComplexity.AGENTIC_GOAL
+
+    def test_comma_joined_actions_escalate_a_fast_path_intent(self):
+        # No separator word this time: commas alone have to count.
+        intent = Intent(tool="open_app", params={"name": "Notepad"})
+        assert route(
+            "open notepad, type hello", intent,
+        ) == TaskComplexity.AGENTIC_GOAL
+
+    def test_the_demo_multi_app_command_goes_agentic(self):
+        intent = Intent(tool="open_app", params={"name": "Edge"})
+        assert route(
+            "open edge, go to youtube and search lofi", intent,
+        ) == TaskComplexity.AGENTIC_GOAL
+
+    def test_greeting_before_two_actions_still_goes_agentic(self):
+        # No intent parsed; the greeting keyword would have eaten it.
+        assert route(
+            "hey grace, open notepad and reply to my email",
+        ) == TaskComplexity.AGENTIC_GOAL
+
+    def test_one_action_clause_interrupts_nothing(self):
+        # The boundary: exactly two action clauses trigger the backstop. A
+        # single action is what the fast path and conversation are for.
+        intent = Intent(tool="converse", params={}, response="Sure.")
+        assert route("thanks grace, open notepad", intent) == TaskComplexity.CONVERSATION
+
+    @pytest.mark.parametrize("text", [
+        "thanks and goodbye",
+        "tell me a haiku and then say goodnight",
+        "what can you do and how do you work",
+        "i feel great today, how about you?",
+    ])
+    def test_chit_chat_with_conjunctive_bits_stays_conversational(self, text):
+        intent = Intent(tool="converse", params={}, response="Hi!")
+        assert route(text, intent) == TaskComplexity.CONVERSATION
+
+    def test_no_intent_greetings_are_untouched_by_the_backstop(self):
+        # A keyword greeting with no parsed intent is still conversation;
+        # the backstop only fires on action clauses it can find.
+        assert route("what can you do") == TaskComplexity.CONVERSATION
+
+
+
     @pytest.mark.parametrize("text", ["hello", "hi there", "hey Grace", "thanks", "goodbye"])
     def test_greetings_do_not_take_the_agentic_path(self, text):
         assert route(text) == TaskComplexity.CONVERSATION
