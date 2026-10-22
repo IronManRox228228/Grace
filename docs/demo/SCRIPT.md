@@ -12,9 +12,9 @@ This script provides a shot-by-shot, timed guide for recording the 2.5 to 3 minu
 | **Scene 2: Airgap Proof** | 0:15 – 0:35 | Unplugging network cable / toggling Airplane mode | Hardware camera cut: Ethernet cable pulled / Wi-Fi off |
 | **Scene 3: Multi-App Task** | 0:35 – 1:15 | Multi-step reasoning with auto-retry | Notepad to Edge flow with fallback verification |
 | **Scene 4: Safety Gate** | 1:15 – 1:45 | Human-in-the-loop voice confirmation | Attempting file deletion → confirmation dialog & voice consent |
-| **Scene 5: Voice Stop Reflex** | 1:45 – 2:05 | Sub-300ms interruption mid-typing | Interrupting Grace mid-execution with "Stop" |
+| **Scene 5: Voice Stop Reflex** | 1:45 – 2:05 | Instant interruption mid-typing | Interrupting Grace mid-execution with "Stop" |
 | **Scene 6: Set-of-Marks ("4 or 7?")** | 2:05 – 2:35 | Visual disambiguation fallback | Ambiguous UI buttons with high-contrast red numbers |
-| **Scene 7: Closing & What's Next** | 2:35 – 2:50 | Future roadmap: CPU fleet, TORGO dysarthria, Rust | Summary graphic of the sub-1B micromodel fleet |
+| **Scene 7: Closing & What's Next** | 2:35 – 2:50 | Future roadmap: CPU fleet, TORGO dysarthria, Rust | Summary graphic of the micromodel fleet |
 
 ---
 
@@ -32,7 +32,7 @@ This script provides a shot-by-shot, timed guide for recording the 2.5 to 3 minu
 ### Scene 2: The "Pull the Network Cable" Moment (0:15 – 0:35)
 - **Visual:** Split screen. Left: Physical close-up of presenter reaching behind the laptop and pulling out the Ethernet cable, then turning Wi-Fi off in Windows Action Center. Right: Network icon shows "No Internet Access".
 - **Presenter (Spoken):**
-  > "Accessibility software should never depend on cloud latency or leak private documents to remote APIs. Right now, I'm pulling the network cable and disconnecting Wi-Fi. Grace runs completely locally on this RTX 4060 laptop—from wake word to vision grounding to speech."
+  > "Accessibility software should never depend on cloud latency or leak private documents to remote APIs. Right now, I'm pulling the network cable and disconnecting Wi-Fi. Grace runs completely locally on this laptop—from wake word to vision grounding to speech."
 - **On-Screen Caption:**
   > **Airgapped Privacy: Zero Cloud Packets • 100% On-Device Inference**
 
@@ -89,15 +89,15 @@ This script provides a shot-by-shot, timed guide for recording the 2.5 to 3 minu
 - **Presenter (Spoken Interrupt - Loud and Clear):**
   > "Stop!"
 - **Grace Visual & Audio Action:**
-  - Descending cancel chime plays immediately (<300 ms).
+  - Descending cancel chime plays immediately.
   - Cursor instantly halts; active typing stops dead.
   - Overlay updates to red/gray: `[ Stopped ] Ready`
   - Spoken response:
     > *"Stopped."*
 - **Presenter (Spoken Commentary):**
-  > "The microphone remains open and armed during every action. A voice stop halts execution in under 300 milliseconds. The user always has total authority."
+  > "The microphone remains open and armed during every action. A voice stop halts execution immediately. The user always has total authority."
 - **On-Screen Caption:**
-  > **Sub-300ms Barge-In • Real-Time Voice Interrupt Reflex**
+  > **Voice Barge-In • Real-Time Voice Interrupt Reflex**
 
 ---
 
@@ -126,7 +126,7 @@ This script provides a shot-by-shot, timed guide for recording the 2.5 to 3 minu
 ### Scene 7: Closing & What's Next (2:35 – 2:50)
 - **Visual:** Presenter on camera with summary slide highlighting the post-buildathon architecture.
 - **Presenter (Spoken):**
-  > "What you've seen is our interim buildathon model running on an RTX 4060. Our next step is bringing this capability to the CPU floor: a sub-1B micromodel fleet for budget laptops, speech fine-tuning on the TORGO dysarthria dataset, and a native Rust executable. Grace puts full PC control back into the hands of those who need it most. Thank you."
+  > "What you've seen is our interim buildathon model running locally on this laptop. Our next step is bringing this capability to the CPU floor: a micromodel fleet for budget laptops, speech fine-tuning on the TORGO dysarthria dataset, and a native Rust executable. Grace puts full PC control back into the hands of those who need it most. Thank you."
 - **On-Screen Graphic:**
-  > **Grace Roadmap: Sub-1B CPU Fleet • TORGO Speech Personalisation • Pure Rust Single Binary**
+  > **Grace Roadmap: CPU Micromodel Fleet • TORGO Speech Personalisation • Pure Rust Single Binary**
   > **GitHub: github.com/IronManRox228228/Grace**

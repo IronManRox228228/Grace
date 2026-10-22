@@ -30,7 +30,7 @@ Existing assistive technologies fail them in critical ways:
 Instead of demanding strict syntax, Grace understands natural user intentions (e.g. *"Grace, switch to Notepad and copy my notes to the browser"*), autonomously inspects the desktop, plans logical execution steps, verifies the effect of each action, and speaks concise natural language status updates.
 
 Grace operates with a **dual-path architecture**:
-- **Fast-Path Dispatcher (<300 ms):** Common system commands (launching applications, media control, volume, undo) execute instantaneously without LLM latency.
+- **Fast-Path Dispatcher:** Common system commands (launching applications, media control, volume, undo) execute directly, without an LLM call.
 - **ReAct Agent Loop:** Complex goals trigger an autonomous reasoning loop that inspects the Windows UI Automation (UIA) accessibility tree, falls back to Set-of-Marks visual grounding for unstandardized controls, and verifies screen state changes after every step.
 
 ---
@@ -38,8 +38,8 @@ Grace operates with a **dual-path architecture**:
 ## 4. Technical Stack & Architecture
 
 - **Speech Recognition (ASR):** Local `faster-whisper` (CTranslate2) with pre-warmed Whisper Base.en models running on-device.
-- **Wake Word Detection:** Offline `openWakeWord` and lightweight Vosk keyword spotting with continuous cancel-watch capabilities for sub-300ms voice barge-in.
-- **Reasoning & Vision (LLM):** Quantized `Holo3.1-4B-Instruct` (GGUF) served locally via `llama.cpp` (`llama-server`) with cuBLAS GPU acceleration and a multimodal vision projector (`--mmproj`).
+- **Wake Word Detection:** Offline `openWakeWord` and lightweight Vosk keyword spotting with continuous cancel-watch capabilities for voice barge-in.
+- **Reasoning & Vision (LLM):** Quantized `Holo3.1-4B-Instruct` (GGUF) served locally via `llama.cpp` (`llama-server`) with a multimodal vision projector (`--mmproj`).
 - **Desktop Automation:** Windows UI Automation (UIA) tree walker combined with Win32 `SendInput` keyboard and mouse actuation, DPI-aware coordinate scaling, and safe application index caching.
 - **Speech Synthesis (TTS):** Local `Kokoro-82M` ONNX text-to-speech providing human-like voice synthesis with zero cloud dependencies.
 - **Desktop Shell & UI:** High-contrast, accessible Tauri v2 native overlay shell with React, TypeScript, Tailwind CSS, keyboard focus support, and Windows High Contrast mode compatibility.
@@ -50,9 +50,9 @@ Grace operates with a **dual-path architecture**:
 ## 5. What's Novel & Key Differentiators
 
 1. **100% Offline Airgapped Computer Control:** Unlike cloud-tethered OS agents, Grace runs completely locally on the device with zero outbound network calls, ensuring total privacy for personal, financial, and medical documents.
-2. **Dual-Path Latency Architecture:** Distinguishes instantaneous one-shot commands (<300 ms) from complex multi-step reasoning, providing conversational responsiveness without sacrificing agentic power.
+2. **Dual-Path Latency Architecture:** Distinguishes immediate one-shot commands from complex multi-step reasoning, providing conversational responsiveness without sacrificing agentic power.
 3. **Accessible Set-of-Marks Disambiguation ("4 or 7?"):** When UI controls are ambiguous or unstandardized in the accessibility tree, Grace overlays high-contrast numbered badges and asks the user to pick by voice or switch input—eliminating frustrating click failures.
-4. **Instant Voice Stop Reflex:** The microphone stream remains open during task execution, allowing the user to say *"Stop"* to halt typing, mouse movement, or speech synthesis within 300 ms.
+4. **Instant Voice Stop Reflex:** The microphone stream remains open during task execution, allowing the user to say *"Stop"* to halt typing, mouse movement, or speech synthesis immediately.
 5. **Deterministic Tape Harness:** An hermetic session recorder and replay engine that records multi-step agent interactions to structured tapes, allowing automated regression testing without driving physical hardware.
 
 ---
@@ -65,9 +65,9 @@ Grace operates with a **dual-path architecture**:
 - **Safety Architecture Rewrite:** Built an explicit allowlist `SafetyGuard` requiring verbal human confirmation for destructive actions (`delete_file`, `close_app`, `lock_computer`) with strict yes/no parsing (`51180f7`).
 - **Airgap & Security Hardening:** Implemented offline-by-default runtime enforcement, per-launch 32-byte WebSocket bearer tokens, Windows DPAPI credential encryption at rest, and regex tape sanitization (`1dfdc72`, `64c9263`).
 - **Untrusted Content Quarantine:** Implemented delimited marker quarantine (`<<<UNTRUSTED_DATA_START ...>>>`) to neutralize prompt injection from hostile desktop windows and websites (`64c9263`).
-- **Audio & Accessibility Sweep:** Resolved audio barge-in, echo suppression mic gating (200 ms), silent activation timeouts (3 s), and unindexed app handling (`b9878d4`).
+- **Audio & Accessibility Sweep:** Resolved audio barge-in, echo suppression mic gating, silent activation timeouts, and unindexed app handling (`b9878d4`).
 - **Scenario Tape Coverage:** Generated and verified 14 new deterministic scenario tapes covering all system tools, failure recovery, and disambiguation paths (`5065bc6`).
-- **Demo Polish & Preflight Check:** Built startup warm-up (1-token text + vision projector warm-up), instant acknowledgement earcon (<300 ms), RTX 4060 GPU tuning configs, per-turn latency reporting (`scripts/latency_report.py`), automated watchdog process recovery, 14-point preflight checklist (`scripts/demo_check.py`), and high-contrast Choice Overlay (`eb9b0fb`).
+- **Demo Polish & Preflight Check:** Built startup warm-up (text-token + vision projector warm-up), instant acknowledgement earcon, GPU tuning configs, per-turn latency reporting (`scripts/latency_report.py`), automated watchdog process recovery, 14-point preflight checklist (`scripts/demo_check.py`), and high-contrast Choice Overlay (`eb9b0fb`).
 
 ---
 
