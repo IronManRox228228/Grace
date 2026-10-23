@@ -15,8 +15,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from verified_download import HashMismatch, download_and_verify, download_unpinned
 
 VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
-# Placeholder hash for Vosk model. User must fill in the real SHA-256 after checking (R33).
-VOSK_MODEL_SHA256 = "0" * 64
+# Real SHA-256 of the alphacephei vosk-model-small-en-us-0.15 zip, pinned from
+# the verified download on 2026-10-23 (R33).
+VOSK_MODEL_SHA256 = "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498"
 _PLACEHOLDER_SHA256 = "0" * 64
 
 
