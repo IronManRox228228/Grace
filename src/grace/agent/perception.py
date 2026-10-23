@@ -77,24 +77,32 @@ async def _await(awaitable):
     return await awaitable
 
 
-def _run_async(awaitable):
+def _run_async(awaitable, timeout: float | None = None):
     """Resolve a WinRT awaitable from either a sync or an async context.
 
     This used to call nest_asyncio.apply() and then re-enter the *running*
     loop. Monkey-patching the loop to be reentrant from library code is a
     process-wide change that breaks the invariants asyncio.to_thread and
     aiohttp rely on, and it can deadlock if the coroutine ever needs the loop
-    it is nested inside. Here a nested call is pushed to a short-lived thread
-    with its own loop instead, so the outer loop is never re-entered.
+    it is nested inside. Here the coroutine is always pushed to a short-lived
+    daemon thread with its own loop, so no outer loop is ever re-entered,
+    inline or nested.
+
+    ``timeout`` is a hard wall that lives on THIS thread:
+
+    - Windows OCR can park forever: the WinRT IAsyncOperation may simply
+      never post its completion to the proactor loop (observed under pytest
+      on this machine; the same wait would wedge a real goal mid-run).
+    - A wait_for timer does NOT reliably rescue that park: the loop never
+      surfaces past the IOCP wait to process the timer, so the cancellation
+      never lands either (confirmed by a faulthandler dump after 45s).
+    - Thread.join(timeout) is a kernel-level wait on the worker's handle and
+      cannot be defeated by a parked loop, so the bound is enforced here:
+      on deadline this thread raises TimeoutError, the parked daemon worker
+      (and its abandoned operation) is left behind, and the caller's except
+      path degrades honestly (Tesseract fallback / empty read). A fresh
+      attempt on the next snapshot starts a fresh worker.
     """
-    try:
-        running = asyncio.get_running_loop()
-    except RuntimeError:
-        running = None
-
-    if running is None:
-        return asyncio.run(_await(awaitable))
-
     result: dict = {}
 
     def _worker():
@@ -105,10 +113,12 @@ def _run_async(awaitable):
 
     thread = threading.Thread(target=_worker, name="grace-winrt-ocr", daemon=True)
     thread.start()
-    thread.join()
+    thread.join(timeout)
+    if "value" in result:
+        return result["value"]
     if "error" in result:
         raise result["error"]
-    return result.get("value")
+    raise TimeoutError(f"awaitable did not complete within {timeout}s")
 
 
 def _word_rect(word) -> Optional[tuple[int, int, int, int]]:
@@ -640,7 +650,15 @@ class PerceptionEngine:
                         bitmap = await decoder.get_software_bitmap_async()
                         return await engine.recognize_async(bitmap)
 
-                    result = _run_async(_run_winrt_pipeline())
+                    # Windows OCR can simply never post its completion on some
+                    # machines/sessions (observed on Python 3.11.9 under
+                    # pytest: the proactor loop parks in GetQueuedCompletion-
+                    # StatusEx forever with 0 CPU; one unbounded wait here
+                    # froze a whole test suite for 2h — and the same wait
+                    # would wedge a live goal mid-run). Bound the attempt:
+                    # on timeout the except below degrades to the Tesseract
+                    # fallback (or an empty read) and the capture completes.
+                    result = _run_async(_run_winrt_pipeline(), 6.0)
 
                     lines = []
                     for line in result.lines:
