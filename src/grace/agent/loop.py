@@ -396,7 +396,17 @@ class AgentLoop:
                 last_observation = view.markdown
                 attempts.clear()
 
-            expectation_note = self._expectation_note(last_step, last_result, snapshot)
+            # How many times the previous action was already tried against this
+            # exact view. Zero on the first step, or after the screen changed;
+            # one or more means it ran and produced no visible movement.
+            last_repeat_count = (
+                attempts.get(_step_signature(last_step), 0)
+                if last_step is not None
+                else 0
+            )
+            expectation_note = self._expectation_note(
+                last_step, last_result, snapshot, repeat_count=last_repeat_count
+            )
 
             try:
                 hide_tree = self._fleet_config.is_fleet
@@ -729,6 +739,8 @@ class AgentLoop:
         last_step: Optional[PlannedStep],
         last_result: Optional[dict[str, Any]],
         snapshot,
+        *,
+        repeat_count: int = 0,
     ) -> str:
         """Report the previous step's stated expectation against what happened.
 
@@ -737,6 +749,12 @@ class AgentLoop:
         focus, window title - alongside its own stated expectation, inside the
         call it was going to make anyway. No extra model call, and a failed
         step becomes an explicit correction instead of a blind retry.
+
+        ``repeat_count`` is how many times the previous action was already
+        tried against this exact observation (i.e., the screen did not change
+        after the last dispatch). When it is non-zero the observation is
+        telling us the action is not moving anything; the planner needs to
+        hear that directly rather than be left to infer it.
         """
         if last_step is None or not last_result:
             return ""
@@ -768,6 +786,22 @@ class AgentLoop:
             lines.append(f"EFFECT UNKNOWN: {evidence}")
             lines.append("Do not treat that as failure. Look at the screen description "
                          "below and judge for yourself.")
+
+        # Repeat-without-progress signal. The tool's `verified` field tells us
+        # whether the individual dispatch landed; it does not tell us whether
+        # *the screen moved*. When the observation is identical to what it was
+        # before the action, the step had no visible effect regardless of what
+        # the tool claimed. The planner must be told - without this message it
+        # will reason from a stale observation and propose the same action again.
+        if repeat_count >= 1 and not reason:
+            ordinal = {1: "once", 2: "twice", 3: "three times"}.get(
+                repeat_count, f"{repeat_count} times"
+            )
+            lines.append(
+                f"NO VISIBLE EFFECT: the screen has not changed after this action "
+                f"was tried {ordinal} in a row. "
+                f"You must choose a different action or declare the goal complete."
+            )
 
         title = _window_title(snapshot)
         if title:

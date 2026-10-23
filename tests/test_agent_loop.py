@@ -838,3 +838,90 @@ class TestCancellation:
         dispatcher.execute.return_value = {"status": "ok"}
         second = asyncio.run(loop.run(user_goal="second goal"))
         assert second["status"] == "ok"
+
+
+class TestNoEffectRepeatNote:
+    """When the planner repeats an action and the screen does not change, the
+    next prompt must say so explicitly.
+
+    The root of the live planner's loop: it sees a stale observation, reasons
+    soundly about it, and proposes the same action again. Without the message
+    the model has no signal that the view is stale; with it, it knows to choose
+    differently instead of continuing to reason from dead data.
+    """
+
+    def _note_for_repeat(self, loop, repeat_count):
+        """Build an expectation note with the given repeat count."""
+        step = PlannedStep(action="cua_click", params={"x": 1, "y": 2},
+                           expect="the box is focused")
+        return loop._expectation_note(
+            step,
+            {"status": "ok", "result": {"message": "Clicked"}},
+            snapshot(),
+            repeat_count=repeat_count,
+        )
+
+    def test_first_time_note_has_no_visible_effect_message(self):
+        # repeat_count=0 means it has not been repeated yet; that is the first
+        # attempt, and the note must not falsely claim there was no effect.
+        loop, _, _ = make_loop([])
+        note = self._note_for_repeat(loop, repeat_count=0)
+        assert "NO VISIBLE EFFECT" not in note
+
+    def test_second_time_note_says_no_visible_effect(self):
+        # repeat_count=1 means the screen was identical after the first try.
+        loop, _, _ = make_loop([])
+        note = self._note_for_repeat(loop, repeat_count=1)
+        assert "NO VISIBLE EFFECT" in note
+        assert "different action" in note
+
+    def test_ordinal_wording_counts_the_attempts(self):
+        loop, _, _ = make_loop([])
+        note_once = self._note_for_repeat(loop, repeat_count=1)
+        note_twice = self._note_for_repeat(loop, repeat_count=2)
+        assert "once" in note_once
+        assert "twice" in note_twice
+
+    def test_failure_suppresses_the_repeat_note(self):
+        # When the tool itself reported an error the existing IT FAILED message
+        # covers it; adding NO VISIBLE EFFECT on top would be contradictory.
+        loop, _, _ = make_loop([])
+        step = PlannedStep(action="cua_click", params={"x": 1, "y": 2}, expect="x")
+        note = loop._expectation_note(
+            step,
+            {"status": "error", "error": "element not found"},
+            snapshot(),
+            repeat_count=1,
+        )
+        assert "IT FAILED" in note
+        assert "NO VISIBLE EFFECT" not in note
+
+    def test_repeat_note_reaches_planner_prompt_on_frozen_screen(self):
+        """The note must arrive in the second plan call when the screen is frozen."""
+        click = (
+            '{"action": "cua_click", "params": {"x": 1, "y": 2}, '
+            '"expect": "the button is highlighted"}'
+        )
+        loop, gemma, _ = make_loop([click, DONE])
+        freeze_screen(loop)
+        asyncio.run(loop.run(user_goal="click the button"))
+        # Two planning calls were made; the second must carry the no-effect note.
+        assert gemma.generate_text.call_count == 2
+        second_prompt = gemma.generate_text.call_args_list[1].kwargs["prompt"]
+        assert "NO VISIBLE EFFECT" in second_prompt
+        assert "different action" in second_prompt
+
+    def test_three_identical_repeats_end_with_spoken_message(self):
+        """After max_repeated_actions the loop stops and speaks an honest reason."""
+        click = (
+            '{"action": "cua_click", "params": {"x": 1, "y": 2}, '
+            '"expect": "something"}'
+        )
+        loop, _, _ = make_loop([click] * 20)
+        freeze_screen(loop)
+        res = asyncio.run(loop.run(user_goal="open the message"))
+        assert res["status"] == "no_progress"
+        # The final_response must be a spoken, honest message - not an empty
+        # string, not a stack trace, and not the generic "goal completed" line.
+        assert res["final_response"]
+        assert "completed." not in res["final_response"]
