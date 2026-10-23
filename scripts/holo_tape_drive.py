@@ -7,6 +7,12 @@ desktop, mic and speaker call stays mocked exactly as ``replay`` and
 ``generate`` mock them, and every LLM decision - intent, planner, responder -
 is the live model over the production ``GemmaClient`` SSE path.
 
+With ``--backend gemini`` (also auto-picked from ``USE_CLOUD_LLM``) that same
+live edge runs through the production cloud path instead - the planner is the
+Gemini model, every desktop, mic and speaker call is still mocked, and the
+scenario data is still the tape's recording. No real screen is ever read and
+the R19 cloud-screenshot consent stays off.
+
 What is NOT graded here is event parity with the recording; the planner is a
 different brain and is free to route differently. What is reported is the
 plain facts: per-step dispatches with their served results, the agent result,
@@ -172,6 +178,15 @@ class ToolKeyedDispatcher:
         return None, None
 
 
+def _resolve_backend(requested: str) -> str:
+    """Follow --backend, or USE_CLOUD_LLM when 'auto' (same parse as Config)."""
+    if requested != "auto":
+        return requested
+    return ("gemini"
+            if os.getenv("USE_CLOUD_LLM", "").strip().lower() in ("true", "1", "yes")
+            else "local")
+
+
 def wait_for_server(url: str, timeout: float) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -184,18 +199,26 @@ def wait_for_server(url: str, timeout: float) -> bool:
     return False
 
 
-def _drive_config(tape: Tape, args) -> Any:
-    """The tape's recorded config, pointed at the live server, single-model preset.
+def _drive_config(tape: Tape, args, backend: str = "local",
+                  gemini_key: str = "") -> Any:
+    """The tape's recorded config, pointed at the live planner, single-model preset.
 
     ``gpu-single`` is the buildathon preset this drive reproduces: Holo 3.1-4B
     is the planner, and the element tree reaches it directly (no fleet
     decision ladder), matching how the corpus was recorded.
+
+    On ``gemini`` the same shape is kept - the planner becomes the cloud model
+    over the production GemmaClient path, the element trees are the tape's
+    recorded text, no real screen data flows anywhere and the R19 cloud
+    screenshot consent stays off. The key must be set explicitly here: the
+    tape's recorded config carries a ``"<redacted>"`` placeholder for
+    ``gemini_api_key``.
     """
     base = _config_from(tape)
     return dataclasses.replace(
         base,
-        use_cloud_llm=False,
-        gemini_api_key="",
+        use_cloud_llm=backend == "gemini",
+        gemini_api_key=gemini_key if backend == "gemini" else "",
         preset="gpu-single",
         llama_host=args.host,
         llama_port=args.port,
@@ -271,7 +294,8 @@ def _install_intent_from_tape(stack: ExitStack, tape: Tape, records: list[dict])
     stack.enter_context(mock.patch.object(GemmaClient, "generate_intent", _served_intent))
 
 
-async def drive_tape(tape_dir: str, args, tmp_enrollment: str, intent_from_tape: bool) -> dict:
+async def drive_tape(tape_dir: str, args, tmp_enrollment: str, intent_from_tape: bool,
+                     backend: str = "local", gemini_key: str = "") -> dict:
     """Run one tape through the real activation path with a live planner."""
     import grace.main as main_mod
     from grace.agent.memory import PersistentMemoryStore as RealMemoryStore
@@ -279,7 +303,7 @@ async def drive_tape(tape_dir: str, args, tmp_enrollment: str, intent_from_tape:
     from grace.harness.replay import TapePump, TapeWhisper
 
     tape = Tape.load(tape_dir)
-    config = _drive_config(tape, args)
+    config = _drive_config(tape, args, backend, gemini_key)
     records: list[dict] = []
     notes: list[str] = []
     executed: list[dict] = []
@@ -444,7 +468,20 @@ def main(argv=None) -> int:
     parser.add_argument("--server-url", default=None,
                         help="an already-running llama-server to use instead of starting one")
     parser.add_argument("--json", default=None, help="write the report as JSON here")
+    parser.add_argument("--backend", choices=("auto", "local", "gemini"),
+                        default="auto",
+                        help="auto follows USE_CLOUD_LLM; gemini needs GEMINI_API_KEY "
+                             "and starts no local server")
     args = parser.parse_args(argv)
+
+    backend = _resolve_backend(args.backend)
+    gemini_key = ""
+    if backend == "gemini":
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        if not gemini_key:
+            print("ERROR: backend 'gemini' selected but GEMINI_API_KEY is not set.")
+            print("       (Set it in .env; .env is applied when any grace module imports.)")
+            return 2
 
     if not args.port:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -459,7 +496,7 @@ def main(argv=None) -> int:
     os.makedirs(temp_enrollment, exist_ok=True)
 
     try:
-        if not args.server_url:
+        if backend == "local" and not args.server_url:
             for label, path in (("model", args.model), ("mmproj", args.mmproj),
                                 ("llama-server", args.server)):
                 if not os.path.exists(path):
@@ -481,7 +518,9 @@ def main(argv=None) -> int:
                 break
             print(f"\n=== Driving tape (all-live): {tape_dir} ===", flush=True)
             result = asyncio.run(drive_tape(tape_dir, args, temp_enrollment,
-                                            intent_from_tape=False))
+                                            intent_from_tape=False,
+                                            backend=backend,
+                                            gemini_key=gemini_key))
             results.append(result)
             print_report(result)
             if not result["ok"]:
@@ -490,7 +529,9 @@ def main(argv=None) -> int:
                     print("\n-> all-live pass never reached a planner; "
                           "repeating with the tape's recorded intent served")
                     result2 = asyncio.run(drive_tape(tape_dir, args, temp_enrollment,
-                                                     intent_from_tape=True))
+                                                     intent_from_tape=True,
+                                                     backend=backend,
+                                                     gemini_key=gemini_key))
                     results.append(result2)
                     print_report(result2)
                     if not result2["ok"]:

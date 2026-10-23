@@ -14,6 +14,13 @@ against the baseline by hand.
 The server is started for the run and stopped in ``finally`` - one
 llama-server, one foreground command. ``--server-url`` points at an already
 running llama-server instead of starting one.
+
+``--backend gemini`` (also picked up automatically from ``USE_CLOUD_LLM``)
+runs every decision through the same production ``GemmaClient`` cloud path
+with no llama-server involved at all. The intent step sends text only - no
+real screen data ever flows - so the R19 cloud-screenshot consent gate stays
+untouched. This is how a machine without local model weights verifies live
+routing.
 """
 
 from __future__ import annotations
@@ -48,6 +55,29 @@ def _route_name(complexity: TaskComplexity) -> str:
         TaskComplexity.FAST_PATH: "fast_path",
         TaskComplexity.CONVERSATION: "converse",
     }[complexity]
+
+
+def _resolve_backend(requested: str) -> str:
+    """Follow --backend, or USE_CLOUD_LLM when 'auto' (same parse as Config)."""
+    if requested != "auto":
+        return requested
+    return ("gemini"
+            if os.getenv("USE_CLOUD_LLM", "").strip().lower() in ("true", "1", "yes")
+            else "local")
+
+
+def _build_client(url: str, backend: str, api_key: Optional[str],
+                  model_name: Optional[str]) -> GemmaClient:
+    """One client per (re)build; the cloud path ignores base_url entirely."""
+    if api_key:
+        return GemmaClient(
+            base_url=url,
+            api_key=api_key,
+            model_name=model_name or os.getenv("GEMINI_MODEL_NAME",
+                                               "gemini-3.1-flash-lite"),
+            allow_cloud_screenshots=False,  # R19: this step sends text only
+        )
+    return GemmaClient(base_url=url, api_key=None)
 
 
 def start_server(args) -> subprocess.Popen:
@@ -91,7 +121,9 @@ def load_lines(path: str) -> list[dict]:
     return lines
 
 
-async def run_eval(url: str, lines: list[dict]) -> list[dict]:
+async def run_eval(url: str, lines: list[dict], *, backend: str = "local",
+                   api_key: Optional[str] = None,
+                   model_name: Optional[str] = None) -> list[dict]:
     """The production intent step only: generate -> parse -> classify.
 
     `generate_intent` returns None when the SSE stream or pooled connection
@@ -112,7 +144,7 @@ async def run_eval(url: str, lines: list[dict]) -> list[dict]:
         retries = 0
         started = time.time()
 
-        client = GemmaClient(base_url=url, api_key=None)
+        client = _build_client(url, backend, api_key, model_name)
         try:
             for attempt in range(3):
                 try:
@@ -135,7 +167,7 @@ async def run_eval(url: str, lines: list[dict]) -> list[dict]:
                     await client.close()
                 except Exception:
                     pass
-                client = GemmaClient(base_url=url, api_key=None)
+                client = _build_client(url, backend, api_key, model_name)
                 await asyncio.sleep(1.0)
         finally:
             try:
@@ -225,6 +257,10 @@ def main(argv=None) -> int:
     parser.add_argument("--ngl", type=int, default=999)
     parser.add_argument("--server-url", default=None,
                         help="an already-running llama-server to use instead of starting one")
+    parser.add_argument("--backend", choices=("auto", "local", "gemini"),
+                        default="auto",
+                        help="auto follows USE_CLOUD_LLM; gemini needs GEMINI_API_KEY "
+                             "and starts no local server")
     args = parser.parse_args(argv)
 
     if not args.port:
@@ -232,6 +268,19 @@ def main(argv=None) -> int:
             s.bind((args.host, 0))
             args.port = s.getsockname()[1]
     url = args.server_url or f"http://{args.host}:{args.port}"
+
+    backend = _resolve_backend(args.backend)
+    api_key: Optional[str] = None
+    model_name: Optional[str] = None
+    if backend == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if not api_key:
+            print("ERROR: backend 'gemini' selected but GEMINI_API_KEY is not set.")
+            print("       (Set it in .env; .env is applied when any grace module imports.)")
+            return 2
+        model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3.1-flash-lite")
+        print(f"Backend: cloud Gemini ({model_name}); no llama-server is started "
+              f"and no real screen data is sent (R19 untouched).")
 
     lines = load_lines(args.dataset)
     if not lines:
@@ -246,7 +295,7 @@ def main(argv=None) -> int:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     try:
-        if not args.server_url:
+        if backend == "local" and not args.server_url:
             for label, path in (("model", args.model), ("mmproj", args.mmproj),
                                 ("llama-server", args.server)):
                 if not os.path.exists(path):
@@ -258,9 +307,13 @@ def main(argv=None) -> int:
                 return 1
             print(f"llama-server healthy at {url} (pid {proc.pid})")
 
-        rows = asyncio.run(run_eval(url, lines))
+        rows = asyncio.run(
+            run_eval(url, lines, backend=backend, api_key=api_key,
+                     model_name=model_name))
         summary = print_rows_and_table(rows)
-        summary["base_url"] = url
+        summary["backend"] = backend
+        if backend == "local":
+            summary["base_url"] = url
         summary["dataset"] = args.dataset
         summary["prompt"] = get_system_prompt()
         summary["rows"] = rows
