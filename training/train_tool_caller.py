@@ -153,7 +153,7 @@ def run_training(config: TrainingConfig) -> Dict[str, Any]:
                 break
 
             # Resource governor check
-            should_pause, reason = governor.should_pause()
+            should_pause, reason = (False, "") if config.smoke_run else governor.should_pause()
             if should_pause:
                 logger.warning("Pausing training: %s", reason)
                 time.sleep(1.0)

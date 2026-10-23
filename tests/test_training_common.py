@@ -12,7 +12,14 @@ from training.common import (
 
 
 def test_resource_governor_user_active_hook():
-    gov = ResourceGovernor(allow_on_battery=True, max_cpu_percent=100.0)
+    gov = ResourceGovernor(
+        allow_on_battery=True,
+        max_cpu_percent=100.0,
+        power_provider=lambda: (True, 80),
+        thermal_provider=lambda: (45.0, False),
+        cpu_percent_provider=lambda: 10.0,
+        turn_active_provider=lambda: False,
+    )
     should_pause, reason = gov.should_pause()
     assert should_pause is False
 
