@@ -91,12 +91,12 @@ Grace is designed to run completely offline. In accordance with Grace's hard rul
 
 ## 5. Large Language & Vision Models (Buildathon Interim)
 
-### Holo3.1-4B-Instruct (GGUF)
+### Holo-3.1-4B (GGUF)
 - **Role:** Unified local LLM for intent routing, multi-step planning, tool calling, and vision grounding.
-- **Source:** [Holo-AI/Holo3.1-4B-Instruct-GGUF](https://huggingface.co/Holo-AI/Holo3.1-4B-Instruct-GGUF)
+- **Source:** the official upstream [Hcompany/Holo-3.1-4B](https://huggingface.co/Hcompany/Holo-3.1-4B) is gated; Grace runs on the ungated Apache-2.0 quant mirror [prithivMLmods/Holo-3.1-4B-GGUF](https://huggingface.co/prithivMLmods/Holo-3.1-4B-GGUF) (links verified 2026-10-23).
 - **Expected Files:**
-  - `Holo3.1-4B-Instruct-Q4_K_M.gguf` (~2.5 GB)
-  - `mmproj-Holo3.1-4B-Instruct-f16.gguf` (~600 MB)
+  - `Holo-3.1-4B.Q4_K_M.gguf` (~2.9 GB)
+  - `Holo-3.1-4B.mmproj-q8_0.gguf` (~350 MB)
 - **Target Directory:** `models/llm/` or user `Downloads/` directory referenced in `.env`.
 - **Config Keys:** `LLAMA_MODEL_PATH`, `LLAMA_MMPROJ_PATH`
 

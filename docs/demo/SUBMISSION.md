@@ -39,7 +39,7 @@ Grace operates with a **dual-path architecture**:
 
 - **Speech Recognition (ASR):** Local `faster-whisper` (CTranslate2) with pre-warmed Whisper Base.en models running on-device.
 - **Wake Word Detection:** Offline `openWakeWord` and lightweight Vosk keyword spotting with continuous cancel-watch capabilities for voice barge-in.
-- **Reasoning & Vision (LLM):** Quantized `Holo3.1-4B-Instruct` (GGUF) served locally via `llama.cpp` (`llama-server`) with a multimodal vision projector (`--mmproj`).
+- **Reasoning & Vision (LLM):** Quantized `Holo-3.1-4B` (GGUF) served locally via `llama.cpp` (`llama-server`) with a multimodal vision projector (`--mmproj`).
 - **Desktop Automation:** Windows UI Automation (UIA) tree walker combined with Win32 `SendInput` keyboard and mouse actuation, DPI-aware coordinate scaling, and safe application index caching.
 - **Speech Synthesis (TTS):** Local `Kokoro-82M` ONNX text-to-speech providing human-like voice synthesis with zero cloud dependencies.
 - **Desktop Shell & UI:** High-contrast, accessible Tauri v2 native overlay shell with React, TypeScript, Tailwind CSS, keyboard focus support, and Windows High Contrast mode compatibility.

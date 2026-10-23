@@ -34,8 +34,8 @@ Grace runs entirely offline. Download the required model weights manually and pl
 
 | Model / Asset | Role | Source / Hugging Face Repo | File Name | Size |
 |---|---|---|---|---|
-| **Holo3.1-4B-Instruct** | Unified LLM (intent, planning, vision grounding, tool calling) | `Holo-AI/Holo3.1-4B-Instruct-GGUF` | `Holo3.1-4B-Instruct-Q4_K_M.gguf` | ~2.5 GB |
-| **Holo3.1-4B mmproj** | Multimodal projector for vision grounding | `Holo-AI/Holo3.1-4B-Instruct-GGUF` | `mmproj-Holo3.1-4B-Instruct-f16.gguf` | ~600 MB |
+| **Holo-3.1-4B** | Unified LLM (intent, planning, vision grounding, tool calling) | Official `Hcompany/Holo-3.1-4B` is gated — use the ungated quant mirror `prithivMLmods/Holo-3.1-4B-GGUF` | `Holo-3.1-4B.Q4_K_M.gguf` | ~2.9 GB |
+| **Holo-3.1-4B mmproj** | Multimodal projector for vision grounding | `prithivMLmods/Holo-3.1-4B-GGUF` | `Holo-3.1-4B.mmproj-q8_0.gguf` | ~350 MB |
 | **Whisper Base.en** | Local speech-to-text (ASR) | `Systran/faster-whisper-base.en` | Bundled / cached via `faster-whisper` | ~140 MB |
 | **openWakeWord / Vosk** | Offline wake word ("Grace") | Pre-trained openWakeWord models | `grace.onnx` or small Vosk English model | ~45 MB |
 | **Kokoro-82M** | Local text-to-speech (TTS) | `hexgrad/Kokoro-82M` | `kokoro-v0_19.onnx` + `voices.json` | ~320 MB |
@@ -44,8 +44,8 @@ Grace runs entirely offline. Download the required model weights manually and pl
 Configure `.env` with:
 ```env
 LLAMA_SERVER_EXE=C:\Users\<User>\llama.cpp\llama-server.exe
-LLAMA_MODEL_PATH=C:\Users\<User>\Downloads\Holo3.1-4B-Instruct-Q4_K_M.gguf
-LLAMA_MMPROJ_PATH=C:\Users\<User>\Downloads\mmproj-Holo3.1-4B-Instruct-f16.gguf
+LLAMA_MODEL_PATH=C:\Users\<User>\Downloads\Holo-3.1-4B.Q4_K_M.gguf
+LLAMA_MMPROJ_PATH=C:\Users\<User>\Downloads\Holo-3.1-4B.mmproj-q8_0.gguf
 USE_CLOUD_LLM=false
 ```
 
