@@ -287,6 +287,8 @@ class GraceApp:
         self.memory_store = PersistentMemoryStore()
         if hasattr(self.dispatcher, "set_memory_store"):
             self.dispatcher.set_memory_store(self.memory_store)
+        if hasattr(self.agent_loop, "set_memory_store"):
+            self.agent_loop.set_memory_store(self.memory_store)
 
         # TTS. A --no-tts session (typed-command users) swaps both engines
         # for the harness's silent stand-in, so the same speech paths run and
@@ -1347,6 +1349,15 @@ class GraceApp:
 
         return await self._route_transcript(trace, transcript)
 
+    def _get_intent_system_prompt(self) -> str:
+        base = self.intent_prompt or get_system_prompt()
+        if hasattr(self, "memory_store") and self.memory_store:
+            facts = self.memory_store.render_context(600, 8)
+            if facts:
+                from grace.agent.planner import wrap_untrusted
+                return f"{base.rstrip()}\n\n### What you know about the user\n{wrap_untrusted(facts)}\n"
+        return base
+
     async def _route_transcript(self, trace, transcript: str) -> bool:
         """Everything after a final transcript exists, identical for a
         heard string and a typed one: the stop/repeat reflexes, answers to
@@ -1434,7 +1445,7 @@ class GraceApp:
             async with trace.stage("intent_llm"):
                 intent_json = await self.gemma.generate_intent(
                     user_message=transcript,
-                    system_prompt=self.intent_prompt,
+                    system_prompt=self._get_intent_system_prompt(),
                 )
             trace.mark_event("first_model_token")
         except RateLimitError as e:
@@ -1744,7 +1755,7 @@ class GraceApp:
             async with stage("intent_llm"):
                 intent_json = await self.gemma.generate_intent(
                     user_message=transcript,
-                    system_prompt=self.intent_prompt,
+                    system_prompt=self._get_intent_system_prompt(),
                 )
         except RateLimitError as e:
             log.error(f"Follow-up intent generation rate limited: {e}")

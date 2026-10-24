@@ -349,3 +349,128 @@ class TestConfirmationAndSafetyFlow:
         assert app.agent_loop.has_pending_confirmation is False
         assert app.memory_store.get_active_fact("name") is None
         app.memory_store.close()
+
+    def test_facts_injected_into_planner_prompt_wrapped_in_untrusted(self):
+        """Confirmed facts appear under '### What you know about the user' wrapped in untrusted markers."""
+        from grace.agent.planner import Planner
+
+        planner = Planner(MagicMock())
+        prompt = planner.build_prompt(
+            goal="play my usual song",
+            elements_prompt="[]",
+            user_facts="- usual song: Signal by Home",
+        )
+        assert "### What you know about the user\n" in prompt
+        assert "<<<UNTRUSTED_DATA_START" in prompt
+        assert "- usual song: Signal by Home" in prompt
+        assert "<<<UNTRUSTED_DATA_END>>>" in prompt
+
+    def test_facts_injected_into_intent_prompt_wrapped_in_untrusted(self):
+        """Confirmed facts appear in intent prompt wrapped in untrusted markers."""
+        from grace.intent.prompt import get_system_prompt
+
+        prompt = get_system_prompt(user_facts="- usual song: Signal by Home")
+        assert "### What you know about the user\n" in prompt
+        assert "<<<UNTRUSTED_DATA_START" in prompt
+        assert "- usual song: Signal by Home" in prompt
+        assert "<<<UNTRUSTED_DATA_END>>>" in prompt
+
+    def test_app_get_intent_system_prompt_includes_facts(self):
+        """GraceApp._get_intent_system_prompt includes confirmed facts wrapped in untrusted markers."""
+        from grace.main import GraceApp
+
+        app = GraceApp(tts_off=True)
+        app.memory_store = PersistentMemoryStore(db_path=":memory:")
+        app.memory_store.store_fact("name", "Ashman", provenance="user_heard")
+        app.memory_store.confirm_fact("name")
+
+        sys_prompt = app._get_intent_system_prompt()
+        assert "### What you know about the user" in sys_prompt
+        assert "name: Ashman" in sys_prompt
+        assert "<<<UNTRUSTED_DATA_START" in sys_prompt
+        app.memory_store.close()
+
+    def test_user_facts_bounded_to_8_facts_and_600_chars(self):
+        """User facts injected into context are strictly capped at 8 facts and 600 chars."""
+        from grace.agent.memory import AgentMemory
+
+        store = PersistentMemoryStore(db_path=":memory:")
+        for i in range(15):
+            topic = f"topic_{i}"
+            val = f"favorite color number {i}"
+            store.store_fact(topic, val, provenance="user_heard")
+            store.confirm_fact(topic)
+
+        memory = AgentMemory(user_goal="test goal", persistent_store=store)
+        rendered = memory.format_user_facts_markdown(budget_chars=600, max_facts=8)
+
+        lines = [line for line in rendered.strip().split("\n") if line.strip()]
+        assert len(lines) <= 8
+        assert len(rendered) <= 600
+        store.close()
+
+    @pytest.mark.asyncio
+    async def test_end_to_end_remember_and_play_usual_song(self):
+        """End-to-end: after 'remember my usual song is Signal by Home', 'play my usual song' plans a search for Signal by Home."""
+        from grace.main import GraceApp
+
+        app = GraceApp(tts_off=True)
+        app.memory_store = PersistentMemoryStore(db_path=":memory:")
+        app.dispatcher.set_memory_store(app.memory_store)
+        app.agent_loop.set_memory_store(app.memory_store)
+
+        spoken = []
+        app._speak_response = lambda text: spoken.append(text) or asyncio.sleep(0)
+
+        # 1. User says: remember my usual song is Signal by Home
+        await app._route_transcript(MagicMock(), "remember my usual song is Signal by Home")
+        assert app.agent_loop.has_pending_confirmation is True
+
+        # 2. User confirms: yes
+        await app._route_transcript(MagicMock(), "yes")
+        assert app.agent_loop.has_pending_confirmation is False
+        assert app.memory_store.get_active_fact("usual_song") is not None
+        assert app.memory_store.get_active_fact("usual_song")["value"] == "Signal by Home"
+
+        # 3. User says: play my usual song
+        # Mock planner LLM to capture prompt and respond with a plan searching for Signal by Home
+        planner_prompts = []
+
+        async def fake_planner_generate_text(prompt, system_prompt, **kwargs):
+            planner_prompts.append(prompt)
+            return (
+                '{"thought": "search for Signal by Home", "action": "open_app", '
+                '"params": {"app_name": "Spotify"}, "expect": "Spotify is open", '
+                '"is_completed": true, "final_response": "Playing Signal by Home"}'
+            )
+
+        app.agent_loop._planner._llm.generate_text = fake_planner_generate_text
+
+        # Mock perception so screen observation succeeds without live desktop
+        dummy_snapshot = MagicMock()
+        dummy_snapshot.is_blind = False
+        dummy_snapshot.to_markdown.return_value = "[1] (button) Search"
+        dummy_snapshot.active_window = MagicMock(title="Spotify")
+        dummy_snapshot.png_bytes = None
+        dummy_snapshot.graph = None
+        app.agent_loop._perception.capture_snapshot_async = AsyncMock(return_value=dummy_snapshot)
+        app.agent_loop._perception.capture_snapshot = MagicMock(return_value=dummy_snapshot)
+        app.gemma.generate_intent = AsyncMock(return_value=None)
+
+        # Also mock dispatcher open_app to succeed
+        async def fake_dispatch(intent, confirmed=False):
+            return {"status": "ok", "app": intent.params.get("app_name")}
+
+        app.dispatcher.execute = fake_dispatch
+
+        await app._route_transcript(MagicMock(), "play my usual song")
+
+        # Verify planner received prompt containing the remembered song in untrusted block
+        assert len(planner_prompts) >= 1
+        last_prompt = planner_prompts[0]
+        assert "### What you know about the user" in last_prompt
+        assert "usual_song: Signal by Home" in last_prompt
+        assert "<<<UNTRUSTED_DATA_START" in last_prompt
+
+        app.memory_store.close()
+

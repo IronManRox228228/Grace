@@ -803,3 +803,10 @@ class AgentMemory:
         if not lines:
             return "No previous facts or ruled out approaches."
         return "\n".join(lines)
+
+    def format_user_facts_markdown(self, budget_chars: int = 600, max_facts: int = 8) -> str:
+        """Render bounded confirmed facts from persistent memory store for prompt injection."""
+        if not self.persistent_store:
+            return ""
+        return self.persistent_store.render_context(budget_chars=budget_chars, max_facts=max_facts)
+

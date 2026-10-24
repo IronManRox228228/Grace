@@ -8,12 +8,13 @@ truth. It used to be a fourth hand-maintained copy and had already drifted out
 of sync with the parser's whitelist.
 """
 
+from grace.agent.planner import wrap_untrusted
 from grace.intent.tools import format_tools_compact
 
 
-def get_system_prompt() -> str:
+def get_system_prompt(user_facts: str = "") -> str:
     """Return concise system prompt for intent extraction."""
-    return f"""\
+    base = f"""\
 You are Grace's intent parser on Windows 11. Convert user speech into structured JSON. Always respond with EXACTLY ONE JSON object (no code fences, no extra text).
 
 JSON Format:
@@ -29,3 +30,6 @@ Rules:
 - If the message asks for TWO OR MORE actions, joined by "and", "then", commas or anything similar, it is a multi-step task: answer with a tool call for the FIRST action only, and let the rest of the task run later. Never answer a multi-step message with `converse`, and never invent one tool call that covers every step.
 - Return ONLY valid raw JSON.
 """
+    if user_facts:
+        return f"{base.rstrip()}\n\n### What you know about the user\n{wrap_untrusted(user_facts)}\n"
+    return base

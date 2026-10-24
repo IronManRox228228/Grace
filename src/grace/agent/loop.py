@@ -154,8 +154,10 @@ class AgentLoop:
         max_iterations: Optional[int] = None,
         start_grounding_backend=None,
         config: Optional[Any] = None,
+        memory_store: Optional[Any] = None,
     ):
         self._config = config
+        self._memory_store = memory_store
         self._gemma = gemma
         self._vision_llm = vision_llm or gemma
         self._dispatcher = dispatcher
@@ -219,6 +221,9 @@ class AgentLoop:
 
     def set_cancel_hook(self, hook) -> None:
         self._cancel_hook = hook
+
+    def set_memory_store(self, memory_store: Any) -> None:
+        self._memory_store = memory_store
 
     # -- safety resumption -------------------------------------------------
 
@@ -343,6 +348,7 @@ class AgentLoop:
         """Run the autonomous Observe-Plan-Act loop for a given user goal."""
         limit = max_iterations if max_iterations is not None else self._max_iterations
         memory = AgentMemory(user_goal=user_goal, max_iterations=limit,
+                             persistent_store=self._memory_store,
                              max_seconds=self._max_seconds)
         self._planner.reset()
         self._pending = None
@@ -410,6 +416,7 @@ class AgentLoop:
 
             try:
                 hide_tree = self._fleet_config.is_fleet
+                facts_ctx = memory.format_user_facts_markdown() if hasattr(memory, "format_user_facts_markdown") else ""
                 async with stage(f"plan#{step_no}") as plan_stage:
                     step = await self._planner.plan(
                         goal=memory.user_goal,
@@ -420,6 +427,7 @@ class AgentLoop:
                         window_title=_window_title(snapshot),
                         image_b64=view.image_b64,
                         hide_tree=hide_tree,
+                        user_facts=facts_ctx,
                     )
                     plan_stage.detail(
                         f"{step.action if step else 'unparsed'} "
@@ -685,6 +693,7 @@ class AgentLoop:
         history has usually forgotten by the time this fires.
         """
         try:
+            facts_ctx = memory.format_user_facts_markdown() if hasattr(memory, "format_user_facts_markdown") else ""
             return await self._planner.plan(
                 goal=memory.user_goal,
                 elements_prompt=view.markdown,
@@ -694,6 +703,7 @@ class AgentLoop:
                 window_title=_window_title(snapshot),
                 image_b64=view.image_b64,
                 model=self._stronger_model or None,
+                user_facts=facts_ctx,
             )
         except (PlannerBudgetExceeded, RateLimitError):
             # Both are handled by the caller's own planning path on the next
