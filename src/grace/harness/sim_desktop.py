@@ -9,6 +9,7 @@ and verifies that the sim has reached its goal state.
 from __future__ import annotations
 
 import dataclasses
+import os
 from io import BytesIO
 from typing import Any, Optional
 
@@ -380,7 +381,8 @@ class GenericTapeSim(BaseTapeSim):
     """Fallback simulator reconstructing states from tape snapshots."""
 
     def __init__(self, tape: Tape):
-        super().__init__(tape.scenario or "generic_tape")
+        scenario_name = tape.meta.get("scenario") or os.path.basename(os.path.normpath(tape.dir)) or "generic_tape"
+        super().__init__(scenario_name)
         from grace.harness.generate import blank_screen
         from grace.harness.replay import _rebuild_snapshot
 
@@ -431,7 +433,7 @@ class GenericTapeSim(BaseTapeSim):
 
 
 def create_sim_for_tape(tape: Tape) -> BaseTapeSim:
-    name = (tape.scenario or getattr(tape, "dir", "") or "").lower()
+    name = (tape.meta.get("scenario") or getattr(tape, "dir", "") or "").lower()
     if "agentic_two_step" in name:
         return TwoStepSim()
     if "agentic_read_pdf" in name:
