@@ -92,6 +92,7 @@ Say: *"Grace, open Notepad and write my appointment at 3 PM."*
 - **Hybrid Grounding:** Inspects native Windows UI Automation (UIA) accessibility control trees first; falls back to vision grounding with Set-of-Marks visual tags for non-standard controls.
 - **Voice Stop Reflex:** Immediate interruptibility (<500 ms) via continuous wake-word cancel watch during active planning, actuation, or speech output.
 - **Safety Confirmations:** Irreversible or high-risk actions (`delete_file`, `close_app`, `lock_computer`) pause execution and demand clear spoken confirmation.
+- **Agent-Written User Memory:** Remembers what the user tells it (e.g. *"remember my usual song is Signal by Home"*, *"remember that I prefer Firefox"*), confirms verbally before saving, injects confirmed facts into intent and planner prompts (bounded to 8 facts, 600 chars, quarantined in untrusted data delimiters), and supports voice recall (*"What do you remember about me?"*) and hard deletion (*"Forget my name"*, *"Forget that I prefer Firefox"*, *"Forget everything"*). Provenance safety guarantees facts come exclusively from spoken words, never screens or documents, and stored facts can never override safety gates.
 - **Deterministic Tape Harness:** Every turn can be recorded to structured tapes (`events`, `prompts`, `transcripts`, `actions`, `timings`) and verified via bit-exact replay testing.
 
 ### What Doesn't (Honest Limits & Ongoing Work)
@@ -172,7 +173,7 @@ flowchart TD
 ## Verification & Testing
 
 Grace maintains strict automated regression test suites across Python, Rust, and Frontend:
-- **Python Backend:** `1163 passed, 1 skipped` (`pytest`)
+- **Python Backend:** `1198 passed, 1 skipped` (`pytest`)
 - **Rust Crates:** last recorded `289 passed, 3 ignored, 0 failed` (`cargo test --workspace`, per `PORT_STATUS.md`; not re-verifiable on this machine without the Rust toolchain)
 - **Frontend Renderer:** `65 passed` (`npm run test`)
 - **Preflight Checks:** `14/14 checks passed` (`python scripts/demo_check.py`)
