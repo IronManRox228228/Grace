@@ -307,3 +307,65 @@ expected \ decided | agent | fast_path | converse
 - Rust: not run on this machine (no Rust toolchain); last recorded `255 passed, 3 ignored, 0 failed`
 
 **Process check:** No python, pytest, cargo, rustc, grace, or llama-server processes left running. `llama-server` was started and stopped in `finally` by the tape drive; no processes remain.
+
+---
+
+## Task 16 — Memory wiring (`16-memory-wiring.md`)
+
+**Status:** Code complete, verified in Python only (Rust side not runnable on this machine — no Rust toolchain during this session; `cargo` installed afterward, results below).
+
+**Python side (`src/grace/agent/memory.py`):**
+- `PersistentMemoryStore` with DPAPI encryption (`win32crypt.CryptProtectData`, user scope) for `memory.db` at rest (R20)
+- External salt in `memory.salt` with legacy migration (R23)
+- Typed text salt-redacted: `[REDACTED len=N hash=...]` (R21/R25 class)
+- `forget_goal`, `forget_today`, `forget_app`, `forget_everything` hard deletes (R17)
+- `MAX_REMEMBERED = 8` cap on established/ruled-out scratchpad facts
+- `get_recent_history(limit=5)` — note: `loop.py:407` passes `history=""`, so this path is dead in production (documented in corrections table)
+
+**Rust side (`crates/grace-memory`):** Facts store + history store on `rusqlite`/FTS5, provenance ladder, one-live-fact-per-topic, bounded prompt context, voice-scoped hard deletes, off-thread compaction. Per `PORT_STATUS.md`: fully completed in Task 16. Not re-verified on this machine (no Rust toolchain during Python session).
+
+**Test counts:** Python suite green at 1163 passed, 1 skipped (includes `test_memory_security.py` and `test_training_common.py` memory tests).
+
+---
+
+## Tasks 17–20 — Rust port (audio, desktop, replay/PDF/LLM, sidecar default)
+
+**Status:** Code present in `crates/` per `PORT_STATUS.md` (all marked "Fully completed"). Not re-verifiable on this machine during the Python session — Rust toolchain was not installed. `cargo test --workspace` was launched after installing Rust; results pending.
+
+Per `PORT_STATUS.md`:
+- Task 17 (Rust audio): real mic capture (cpal/WASAPI), Silero VAD, Zipformer KWS, Sherpa-ONNX ASR/TTS, barge-in + echo gating
+- Task 18 (Rust desktop): UIA tree walk via COM, `DesktopActuator` with `SendInput`, screenshot via BitBlt, replaced `NoopSystemActions`/`ScriptedPerception` in live backend
+- Task 19 (Rust replay/PDF/LLM): `snapshots.jsonl` tape reader, `read_pdf`/`summarize_pdf` via `lopdf`, `llama-server` lifecycle management with Job Object
+- Task 20 (Rust default): Sidecar split, Tauri hardening, `GRACE_BACKEND=rust` default, parity gate (`scripts/parity.ps1`), Python retirement plan
+
+---
+
+## Task 21 — Floor machine (`21-floor-machine.md`)
+
+**Status:** SKIPPED — user confirmed the borrowed i5-8300H laptop is not available. `tools/floor/` throttle kit (`bandwidth-hog`, `clutter`, `fill-disk`) and `docs/floor/SETUP.md` exist per PORT_STATUS.md Task 20 completion but were not exercised on real floor hardware.
+
+---
+
+## Task 22 — Final consistency audit (`22-final-audit.md`)
+
+**Findings and fixes:**
+
+1. **`.env.example` missing `NVIDIA_API_KEY`/`NVIDIA_MODEL_NAME`** — `config.py` defines both fields but `.env.example` didn't document them. Fixed: added both keys with comments.
+
+2. **`PLAN.md §0` stale claims** — Branch said `migration/phase-0-contract-and-harness` (now `main`); test counts said Python 1143/Rust 311 from 2026-10-22 (actual: Python 1163 passed, 1 skipped in 418.55s; Rust unverified on this machine). Fixed: updated branch, test counts, and phase description.
+
+3. **`README.md` stale test counts** — Python said `1136 passed`, Rust said `295 passed`. Fixed: Python → `1163 passed, 1 skipped`; Rust → `last recorded 289 passed, 3 ignored, 0 failed (per PORT_STATUS.md; not re-verifiable without Rust toolchain)`.
+
+4. **Corpus `meta.json` files contain developer username paths** (`C:\Users\Ashman Das\...` in kokoro/llama/vosk paths) — R44 class finding. **Not fixed:** these are committed regression test tapes; changing them would break replay parity, and rule 10 prohibits rewriting history. Reported for user decision.
+
+5. **Dead code:** No UI-TARS or `nest_asyncio` references remain in `src/grace/`, `crates/`, or `tests/`. No dead imports found.
+
+6. **Tests touching real devices:** All desktop calls (`os.startfile`, `SetCursorPos`, `LockWorkStation`, etc.) are properly mocked via `conftest.py` guards and per-test `monkeypatch`. No unguarded real-device calls found in tests.
+
+7. **Secrets/privacy scan:** No API keys, tokens, or passwords found in committed files. The only pattern match is a redaction regex in `src/grace/harness/redact.py` (intended). No real usernames/home paths in source code (only in corpus tape metadata — see finding 4).
+
+**Test counts (verbatim, this session):**
+- Python: `1163 passed, 1 skipped, 11 warnings in 418.55s (0:06:58)` — zero failures, faulthandler trip-wire 60s never fired
+- Rust: `cargo test --workspace` in progress (results pending)
+
+**Process check:** No stray processes.

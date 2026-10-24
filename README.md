@@ -172,8 +172,8 @@ flowchart TD
 ## Verification & Testing
 
 Grace maintains strict automated regression test suites across Python, Rust, and Frontend:
-- **Python Backend:** `1136 passed, 1 skipped` (`pytest`)
-- **Rust Crates:** `295 passed, 3 ignored` (`cargo test --workspace`)
+- **Python Backend:** `1163 passed, 1 skipped` (`pytest`)
+- **Rust Crates:** last recorded `289 passed, 3 ignored, 0 failed` (`cargo test --workspace`, per `PORT_STATUS.md`; not re-verifiable on this machine without the Rust toolchain)
 - **Frontend Renderer:** `65 passed` (`npm run test`)
 - **Preflight Checks:** `14/14 checks passed` (`python scripts/demo_check.py`)
 - **Deterministic Replay Gate:** 100% pass on 30/30 recorded corpus tapes with exact event parity.

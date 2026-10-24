@@ -6,10 +6,10 @@ Agreed on 2026-09-26. This file is the handoff between sessions: read it before 
 
 ## 0. Where things stand
 
-- **Current phase:** Final consistency audit and migration complete (Task 21 & Task 22). The Rust backend (`grace-backend`) is the default runtime (`GRACE_BACKEND=rust`), running as a supervised sidecar in a Windows Job Object with automated health recovery. Floor-machine hardware simulation kit (`tools/floor/`) and floor latency benchmarks (`docs/benchmarks/floor.md`) validate all PLAN §9 latency budgets. Python serving is deprecated and scheduled for retirement in v0.2.0; offline training, dysarthria adaptation, and benchmarks remain in Python permanently.
-- **Branch:** `migration/phase-0-contract-and-harness`.
-- **Tests:** Python **1143 passed, 1 skipped** (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`, 2026-10-22). Rust **311 passed, 3 ignored, 0 failed** across all 10 crates/packages, 28 test suites including doc-tests (`cargo test --workspace`, 2026-10-22).
-- **Corpus:** All **30 of 30** tapes in `corpus/` replay cleanly through the Rust backend with 100% exact event parity (`cargo test -p grace-harness turn_replay`). Parity gate script verified at `scripts/parity.ps1`.
+- **Current phase:** Task 22 — final consistency audit (docs, config, dead code). Task 21 (floor machine) skipped — hardware not available. Rust backend (`grace-backend`) is the default runtime (`GRACE_BACKEND=rust`), running as a supervised sidecar in a Windows Job Object with automated health recovery. Python serving is deprecated and scheduled for retirement in v0.2.0; offline training, dysarthria adaptation, and benchmarks remain in Python permanently.
+- **Branch:** `main`.
+- **Tests:** Python **1163 passed, 1 skipped** (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`, 2026-10-24). Rust not re-run on this machine (no Rust toolchain installed); last recorded `255 passed, 3 ignored, 0 failed`.
+- **Corpus:** All **30 of 30** tapes in `corpus/` replay cleanly through the Rust backend with 100% exact event parity (last recorded; parity gate script at `scripts/parity.ps1`).
 
 ---
 
