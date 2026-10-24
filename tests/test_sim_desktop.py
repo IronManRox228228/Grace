@@ -119,7 +119,8 @@ class TestReadPdfSim:
         assert not sim.is_goal_state()
 
         # 2. read_pdf
-        res2 = sim.dispatch(Intent(tool="read_pdf", params={"path": "C:\\Users\\x\\Documents\\report.pdf"}))
+        pdf_path = res1["files"][0]
+        res2 = sim.dispatch(Intent(tool="read_pdf", params={"path": pdf_path}))
         assert res2.get("status") == "ok"
         assert "projections" in res2.get("text", "")
         assert sim.current_state_name == "pdf_read"
@@ -127,7 +128,7 @@ class TestReadPdfSim:
 
     def test_direct_read_pdf_reaches_goal(self):
         sim = ReadPdfSim()
-        res = sim.dispatch(Intent(tool="read_pdf", params={"path": "C:\\Users\\x\\Documents\\report.pdf"}))
+        res = sim.dispatch(Intent(tool="read_pdf", params={"path": sim._pdf_path}))
         assert res.get("status") == "ok"
         assert sim.is_goal_state()
 

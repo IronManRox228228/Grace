@@ -290,13 +290,15 @@ class ReadPdfSim(BaseTapeSim):
 
     Goal: Read report PDF to user.
     State 0 ('initial'): Notepad open with empty editor.
-    State 1 ('file_found'): Files searched; C:\\Users\\x\\Documents\\report.pdf found.
+    State 1 ('file_found'): Files searched; Documents\\report.pdf found.
     State 2 ('pdf_read'): PDF text extracted/read (GOAL STATE).
     State 3 ('pdf_opened'): PDF opened in viewer (GOAL STATE).
     """
 
     def __init__(self):
         super().__init__("agentic_read_pdf")
+        user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+        self._pdf_path = os.path.join(user_profile, "Documents", "report.pdf")
         self._setup_states()
 
     def _setup_states(self) -> None:
@@ -342,8 +344,8 @@ class ReadPdfSim(BaseTapeSim):
             self.current_state_name = "file_found"
             return {
                 "status": "ok",
-                "text": "Here are the matching files:\n  1. C:\\Users\\x\\Documents\\report.pdf",
-                "files": ["C:\\Users\\x\\Documents\\report.pdf"],
+                "text": f"Here are the matching files:\n  1. {self._pdf_path}",
+                "files": [self._pdf_path],
             }
 
         if tool == "read_pdf":
@@ -366,10 +368,13 @@ class ReadPdfSim(BaseTapeSim):
 
         if tool == "open_file":
             name = params.get("name", "")
-            if "report.pdf" in name:
+            if "report.pdf" in name.lower():
                 self.current_state_name = "pdf_opened"
                 return {"status": "ok", "text": "I've opened report.pdf."}
             return {"status": "error", "error": f"File '{name}' not found."}
+
+        if tool == "open_app":
+            return {"status": "ok", "text": f"Opened {params.get('name', 'app')}."}
 
         if tool == "converse":
             return {"status": "ok"}
