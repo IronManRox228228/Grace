@@ -161,14 +161,20 @@ class Dispatcher:
         computer_use: Optional[ComputerUse] = None,
         ws_server: Optional[WsEventServer] = None,
         kokoro_engine: Optional[Any] = None,
+        memory_store: Optional[Any] = None,
     ):
         self._cua = computer_use
         self._ws = ws_server
         self._kokoro_engine = kokoro_engine
+        self._memory_store = memory_store
         self._last_search_results: list[str] = []
         self._app_indexer = None
         self._app_indexer_lock = asyncio.Lock()
         self._training_scheduler = None
+
+    def set_memory_store(self, memory_store: Any) -> None:
+        """Install persistent memory store for fact storage and retrieval."""
+        self._memory_store = memory_store
 
     def set_kokoro_engine(self, engine: Any) -> None:
         """Install Kokoro engine for runtime speech parameter adjustments."""
@@ -217,6 +223,7 @@ class Dispatcher:
         "read_pdf", "summarize_pdf", "adjust_volume", "lock_computer",
         "open_calculator", "delete_file", "undo", "describe_screen",
         "set_speech_rate", "voice_training_status", "rollback_voice_model",
+        "remember",
     }
 
     @staticmethod
@@ -234,6 +241,15 @@ class Dispatcher:
             return None
         if not (intent.tool.startswith("cua_") or intent.tool in Dispatcher.KNOWN_TOOLS):
             return None
+        if intent.tool == "remember":
+            prompt = intent.params.get("confirmation_prompt") or "Should I remember this?"
+            return {
+                "status": "confirmation_required",
+                "confirmation_prompt": prompt,
+                "text": prompt,
+                "tool": "remember",
+                "params": intent.params,
+            }
         is_safe, prompt = SafetyGuard.evaluate(intent.tool, intent.params)
         if is_safe:
             return None
@@ -288,6 +304,7 @@ class Dispatcher:
             "undo": self._undo,
             "describe_screen": self._describe_screen,
             "set_speech_rate": self._set_speech_rate,
+            "remember": lambda p: self._remember(p, confirmed=confirmed),
         }
 
         handler = handler_map.get(tool)
@@ -1029,4 +1046,33 @@ class Dispatcher:
             "action": "rollback_voice_model",
             "text": msg,
         }
+
+    async def _remember(self, params: dict, confirmed: bool = False) -> dict:
+        """Store and confirm a fact about the user (PLAN.md §12.1)."""
+        if not confirmed:
+            prompt = params.get("confirmation_prompt") or "Should I remember this?"
+            return {
+                "status": "confirmation_required",
+                "confirmation_prompt": prompt,
+                "text": prompt,
+                "tool": "remember",
+                "params": params,
+            }
+
+        topic = params.get("topic")
+        value = params.get("value")
+        if not topic or not value:
+            return {"status": "error", "error": "Missing topic or value"}
+
+        from grace.agent.memory import PersistentMemoryStore
+        store = self._memory_store or PersistentMemoryStore()
+        existing = store.get_active_fact(topic)
+        if existing:
+            store.supersede_fact(topic, value, reason="user update", provenance="user_heard")
+        else:
+            store.store_fact(topic, value, provenance="user_heard")
+        store.confirm_fact(topic)
+        spoken = params.get("spoken_fact") or f"that your {topic} is {value}"
+        msg = f"I'll remember {spoken}."
+        return {"status": "ok", "text": msg}
 

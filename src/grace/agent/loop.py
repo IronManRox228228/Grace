@@ -667,6 +667,9 @@ class AgentLoop:
                         confirmed: bool = False) -> dict[str, Any]:
         if step.action == "converse":
             return {"status": "ok"}
+        if step.action == "remember":
+            logger.warning("Planner attempted to call remember tool; blocked for provenance safety.")
+            return {"status": "error", "error": "Planner output cannot store user facts."}
         intent = Intent(tool=step.action, params=step.params)
         async with stage(f"dispatch:{step.action}"):
             return await self._dispatcher.execute(intent, confirmed=confirmed)

@@ -65,6 +65,7 @@ class CapabilityRouter:
         "undo",
         "describe_screen",
         "set_speech_rate",
+        "remember",
     }
 
     # Tools that inherently need to look at the screen and iterate.

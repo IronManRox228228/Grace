@@ -48,6 +48,7 @@ from grace.automation.computer_use import ComputerUse
 from grace.tools.dispatcher import Dispatcher
 from grace.tts.kokoro_engine import KokoroEngine
 from grace.ws_server import WsEventServer
+from grace.agent.facts import detect_remember_pattern, is_value_in_transcript
 from grace.tts.player import TTSPlayer
 from grace.response.generator import ResponseGenerator
 from grace.response.feedback import FeedbackSounds
@@ -284,6 +285,8 @@ class GraceApp:
         # Persistent memory store (PLAN §12, Task 16)
         from grace.agent.memory import PersistentMemoryStore
         self.memory_store = PersistentMemoryStore()
+        if hasattr(self.dispatcher, "set_memory_store"):
+            self.dispatcher.set_memory_store(self.memory_store)
 
         # TTS. A --no-tts session (typed-command users) swaps both engines
         # for the harness's silent stand-in, so the same speech paths run and
@@ -876,10 +879,23 @@ class GraceApp:
         return True
 
     async def _handle_voice_memory_command(self, transcript: str, clean: str) -> Optional[bool]:
-        """Handle voice memory forget commands (Task 16)."""
+        """Handle voice memory commands (PLAN.md §12.1)."""
         store = getattr(self, "memory_store", None)
         if not store:
             return None
+
+        # Deterministic remember pattern
+        remember_spec = detect_remember_pattern(transcript)
+        if remember_spec is not None:
+            prompt = remember_spec["confirmation_prompt"]
+            intent = Intent(tool="remember", params=remember_spec)
+            log.info(f"Remember pattern matched: topic={remember_spec['topic']}")
+            self.agent_loop.park_intent(intent, prompt)
+            from grace.input.switch_input import VoiceSwitchRaceResolver
+            self._confirmation_race_resolver = VoiceSwitchRaceResolver()
+            await self._speak_response(prompt)
+            self._confirmation_prompt_finished_at = time.monotonic()
+            return True
 
         if clean in ("forget today", "forget what i did today"):
             store.forget_today()
@@ -1443,6 +1459,24 @@ class GraceApp:
 
         await self.ws_server.emit({"type": "UnderstandingFinished"})
 
+        if intent and intent.tool == "remember":
+            val = str(intent.params.get("value", "")).strip()
+            topic = str(intent.params.get("topic", "")).strip()
+            if not val or not is_value_in_transcript(val, transcript):
+                log.warning(f"Provenance safety: rejected remember intent; value '{val}' was not spoken by user in '{transcript}'")
+                await self._speak_response("I can only remember things you say to me.")
+                await self.ws_server.emit({"type": "ConversationFinished"})
+                return True
+            prompt = intent.params.get("confirmation_prompt") or f"Should I remember that {topic} is {val}?"
+            intent.params["confirmation_prompt"] = prompt
+            self.agent_loop.park_intent(intent, prompt)
+            from grace.input.switch_input import VoiceSwitchRaceResolver
+            self._confirmation_race_resolver = VoiceSwitchRaceResolver()
+            await self._speak_response(prompt)
+            self._confirmation_prompt_finished_at = time.monotonic()
+            await self.ws_server.emit({"type": "ConversationFinished"})
+            return True
+
         # 5. Route & Execute (Dual-Path Architecture)
         complexity = CapabilityRouter.classify(transcript, intent)
         trace.mark_event(f"route_{complexity.value}")
@@ -1725,6 +1759,22 @@ class GraceApp:
                 intent = self.intent_parser.parse(intent_json)
             except Exception as e:
                 log.debug(f"Follow-up intent parse failed: {e}")
+
+        if intent and intent.tool == "remember":
+            val = str(intent.params.get("value", "")).strip()
+            topic = str(intent.params.get("topic", "")).strip()
+            if not val or not is_value_in_transcript(val, transcript):
+                log.warning(f"Provenance safety: rejected follow-up remember intent; value '{val}' was not spoken in '{transcript}'")
+                await self._speak_response("I can only remember things you say to me.")
+                return True
+            prompt = intent.params.get("confirmation_prompt") or f"Should I remember that {topic} is {val}?"
+            intent.params["confirmation_prompt"] = prompt
+            self.agent_loop.park_intent(intent, prompt)
+            from grace.input.switch_input import VoiceSwitchRaceResolver
+            self._confirmation_race_resolver = VoiceSwitchRaceResolver()
+            await self._speak_response(prompt)
+            self._confirmation_prompt_finished_at = time.monotonic()
+            return True
 
         complexity = CapabilityRouter.classify(transcript, intent)
         if complexity == TaskComplexity.AGENTIC_GOAL:

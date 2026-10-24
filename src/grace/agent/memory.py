@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from grace.agent.facts import looks_like_secret, redact_value
+
 logger = logging.getLogger("grace.agent.memory")
 
 
@@ -164,6 +166,60 @@ class PersistentMemoryStore:
                         )
                         """
                     )
+                    self._conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS facts (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            topic TEXT NOT NULL,
+                            group_key TEXT NOT NULL,
+                            kind TEXT NOT NULL,
+                            value TEXT NOT NULL,
+                            provenance TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            active INTEGER NOT NULL DEFAULT 1,
+                            created_turn INTEGER NOT NULL DEFAULT 0,
+                            last_used_turn INTEGER NOT NULL DEFAULT 0,
+                            superseded_by INTEGER,
+                            supersede_reason TEXT,
+                            created REAL,
+                            confirmed INTEGER NOT NULL DEFAULT 0
+                        )
+                        """
+                    )
+                    self._conn.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS facts_one_active_per_topic ON facts(topic) WHERE active = 1"
+                    )
+                    self._conn.execute(
+                        "CREATE INDEX IF NOT EXISTS facts_group_active ON facts(group_key) WHERE active = 1"
+                    )
+                    try:
+                        self._conn.execute(
+                            "CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(value, content='facts', content_rowid='id')"
+                        )
+                        self._conn.execute(
+                            """
+                            CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
+                                INSERT INTO facts_fts(rowid, value) VALUES (new.id, new.value);
+                            END;
+                            """
+                        )
+                        self._conn.execute(
+                            """
+                            CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
+                                INSERT INTO facts_fts(facts_fts, rowid, value) VALUES('delete', old.id, old.value);
+                            END;
+                            """
+                        )
+                        self._conn.execute(
+                            """
+                            CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN
+                                INSERT INTO facts_fts(facts_fts, rowid, value) VALUES('delete', old.id, old.value);
+                                INSERT INTO facts_fts(rowid, value) VALUES (new.id, new.value);
+                            END;
+                            """
+                        )
+                    except Exception as fts_exc:
+                        logger.debug("FTS5 table/triggers skipped or not available: %s", fts_exc)
                 self._flush_encrypted()
             except Exception as exc:
                 logger.warning(f"Persistent memory DB init failed: {exc}")
@@ -290,15 +346,231 @@ class PersistentMemoryStore:
         return deleted
 
     def forget_everything(self) -> None:
-        """Clear all stored task history and user preferences (R17)."""
+        """Clear all stored task history, user preferences, and facts (PLAN.md §12.1, R17)."""
         with self._lock:
             try:
                 with self._conn:
                     self._conn.execute("DELETE FROM task_history")
                     self._conn.execute("DELETE FROM user_preferences")
+                    self._conn.execute("DELETE FROM facts")
+                    try:
+                        self._conn.execute("DELETE FROM facts_fts")
+                    except Exception:
+                        pass
                 self._flush_encrypted()
+                logger.info("Wiped persistent memory: task_history, user_preferences, and facts cleared")
             except Exception as exc:
                 logger.debug(f"Failed to wipe persistent memory: {exc}")
+
+    def store_fact(
+        self,
+        topic: str,
+        value: str,
+        provenance: str = "user_heard",
+        group_key: Optional[str] = None,
+        kind: str = "fact",
+        current_turn: int = 0,
+        is_password_field: bool = False,
+    ) -> int:
+        """Store a new fact about the user (PLAN.md §12.1).
+
+        Only 'user_heard', 'model', or 'screen' can be passed as initial provenance.
+        'user_confirmed' is reachable solely via confirm_fact().
+        Refuses secret-shaped topics or values.
+        """
+        if is_password_field or looks_like_secret(topic, value):
+            raise ValueError(f"Secret-shaped value refused for topic '{topic}'")
+        if provenance == "user_confirmed":
+            raise ValueError("user_confirmed provenance cannot be set directly; only confirm_fact() can produce it")
+        if provenance not in ("user_heard", "model", "screen"):
+            raise ValueError(f"Invalid provenance '{provenance}'")
+
+        group_key = group_key or topic
+        status = "pending" if provenance == "user_heard" else "usable"
+        now = time.time()
+
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute("SELECT id FROM facts WHERE topic = ? AND active = 1", (topic,))
+            if cursor.fetchone():
+                raise ValueError(f"Topic '{topic}' is already active; use supersede_fact instead")
+
+            with self._conn:
+                cursor.execute(
+                    """
+                    INSERT INTO facts (topic, group_key, kind, value, provenance, status, active, created_turn, last_used_turn, created, confirmed)
+                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0)
+                    """,
+                    (topic, group_key, kind, value, provenance, status, current_turn, current_turn, now),
+                )
+                fact_id = cursor.lastrowid
+            self._flush_encrypted()
+            logger.info("Stored fact id=%d topic=%s provenance=%s value=%s", fact_id, topic, provenance, redact_value(value, self.salt))
+            return fact_id
+
+    def supersede_fact(
+        self,
+        topic: str,
+        value: str,
+        reason: str = "user correction",
+        provenance: str = "user_heard",
+        kind: str = "fact",
+        current_turn: int = 0,
+        is_password_field: bool = False,
+    ) -> int:
+        """Replace the active fact for a topic in one transaction, recording why (PLAN.md §12.1)."""
+        if is_password_field or looks_like_secret(topic, value):
+            raise ValueError(f"Secret-shaped value refused for topic '{topic}'")
+        if provenance == "user_confirmed":
+            raise ValueError("user_confirmed provenance cannot be set directly; use confirm_fact()")
+        if provenance not in ("user_heard", "model", "screen"):
+            raise ValueError(f"Invalid provenance '{provenance}'")
+
+        status = "pending" if provenance == "user_heard" else "usable"
+        now = time.time()
+
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute("SELECT id, group_key FROM facts WHERE topic = ? AND active = 1", (topic,))
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError(f"No active fact for topic '{topic}' to supersede")
+            old_id, group_key = row[0], row[1]
+
+            with self._conn:
+                cursor.execute("UPDATE facts SET active = 0, supersede_reason = ? WHERE id = ?", (reason, old_id))
+                cursor.execute(
+                    """
+                    INSERT INTO facts (topic, group_key, kind, value, provenance, status, active, created_turn, last_used_turn, created, confirmed)
+                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0)
+                    """,
+                    (topic, group_key, kind, value, provenance, status, current_turn, current_turn, now),
+                )
+                new_id = cursor.lastrowid
+                cursor.execute("UPDATE facts SET superseded_by = ? WHERE id = ?", (new_id, old_id))
+            self._flush_encrypted()
+            logger.info("Superseded fact old_id=%d new_id=%d topic=%s value=%s", old_id, new_id, topic, redact_value(value, self.salt))
+            return new_id
+
+    def confirm_fact(self, topic: str, current_turn: int = 0) -> None:
+        """The dedicated confirmation path (PLAN.md §12.1).
+
+        Promotes a pending fact to user_confirmed and usable.
+        Only called when the user explicitly confirmed with yes.
+        """
+        with self._lock:
+            cursor = self._conn.cursor()
+            with self._conn:
+                cursor.execute(
+                    """
+                    UPDATE facts
+                    SET provenance = 'user_confirmed', status = 'usable', confirmed = 1, last_used_turn = ?
+                    WHERE topic = ? AND active = 1
+                    """,
+                    (current_turn, topic),
+                )
+                if cursor.rowcount == 0:
+                    raise ValueError(f"No active fact for topic '{topic}' to confirm")
+            self._flush_encrypted()
+            logger.info("Confirmed fact topic=%s", topic)
+
+    def get_active_fact(self, topic: str) -> Optional[dict[str, Any]]:
+        """Retrieve the single active fact for a topic if one exists."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, topic, group_key, kind, value, provenance, status, active,
+                       created_turn, last_used_turn, superseded_by, supersede_reason, created, confirmed
+                FROM facts WHERE topic = ? AND active = 1
+                """,
+                (topic,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "topic": row[1],
+                "group_key": row[2],
+                "kind": row[3],
+                "value": row[4],
+                "provenance": row[5],
+                "status": row[6],
+                "active": bool(row[7]),
+                "created_turn": row[8],
+                "last_used_turn": row[9],
+                "superseded_by": row[10],
+                "supersede_reason": row[11],
+                "created": row[12],
+                "confirmed": bool(row[13]),
+            }
+
+    def get_all_confirmed_facts(self) -> list[dict[str, Any]]:
+        """All active, user-confirmed facts, ordered by recency of use."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, topic, group_key, kind, value, provenance, status, active,
+                       created_turn, last_used_turn, superseded_by, supersede_reason, created, confirmed
+                FROM facts
+                WHERE active = 1 AND provenance = 'user_confirmed'
+                ORDER BY last_used_turn DESC, id DESC
+                """
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "topic": r[1],
+                    "group_key": r[2],
+                    "kind": r[3],
+                    "value": r[4],
+                    "provenance": r[5],
+                    "status": r[6],
+                    "active": bool(r[7]),
+                    "created_turn": r[8],
+                    "last_used_turn": r[9],
+                    "superseded_by": r[10],
+                    "supersede_reason": r[11],
+                    "created": r[12],
+                    "confirmed": bool(r[13]),
+                }
+                for r in rows
+            ]
+
+    def get_all_facts(self) -> list[str]:
+        """List of confirmed fact strings for word biasing."""
+        facts = self.get_all_confirmed_facts()
+        return [f"{f['topic']}: {f['value']}" for f in facts]
+
+    def forget_fact(self, topic: str) -> int:
+        """Hard delete a topic's entire history (PLAN.md §12.1)."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            with self._conn:
+                cursor.execute("DELETE FROM facts WHERE topic = ?", (topic,))
+                deleted = cursor.rowcount
+            self._flush_encrypted()
+            logger.info("Forgot fact topic=%s (deleted %d rows)", topic, deleted)
+            return deleted
+
+    def render_context(self, budget_chars: int = 600, max_facts: int = 8) -> str:
+        """Render bounded confirmed facts for prompt injection (PLAN.md §12.1).
+
+        Capped at max_facts (default 8) and budget_chars (default 600).
+        """
+        facts = self.get_all_confirmed_facts()[:max_facts]
+        lines = []
+        total_len = 0
+        for f in facts:
+            line = f"- {f['topic']}: {f['value']}"
+            if total_len + len(line) + 1 > budget_chars:
+                break
+            lines.append(line)
+            total_len += len(line) + 1
+        return "\n".join(lines)
 
 
 # How many established facts / ruled-out approaches to carry forward. They go

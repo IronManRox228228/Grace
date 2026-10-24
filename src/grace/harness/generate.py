@@ -412,6 +412,7 @@ SIDE_EFFECTING_HANDLERS = (
     "_read_pdf", "_summarize_pdf", "_adjust_volume", "_lock_computer",
     "_open_calculator", "_delete_file",
     "_undo", "_describe_screen", "_set_speech_rate",
+    "_remember",
 )
 
 

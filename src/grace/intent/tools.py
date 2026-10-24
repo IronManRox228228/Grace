@@ -263,6 +263,15 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
         ],
         is_system=True,
     ),
+    ToolDefinition(
+        name="remember",
+        description="Remember a fact or preference about the user when they state it (e.g. name, preferences, favorite things).",
+        params=[
+            ToolParam("topic", "Topic or key for the fact (e.g. 'name', 'preference:browser', 'usual_song')", True, None, "str"),
+            ToolParam("value", "The value or content to remember", True, None, "str"),
+        ],
+        is_system=True,
+    ),
 ]
 
 ALL_TOOLS: list[ToolDefinition] = CUA_TOOLS + SYSTEM_TOOLS
@@ -297,9 +306,15 @@ def format_tools_compact() -> str:
 
 
 def format_tools_for_prompt() -> str:
-    """Format all available tools into a rich, detailed schema string for system prompts."""
+    """Format all available tools into a rich, detailed schema string for system prompts.
+
+    Note: 'remember' is an intent-level tool for spoken user facts; it is deliberately
+    excluded from the planner prompt so screen text can never drive fact creation (PLAN §12.1).
+    """
     lines = []
     for tool in ALL_TOOLS:
+        if tool.name == "remember":
+            continue
         lines.append(f"### `{tool.name}`")
         lines.append(f"Description: {tool.description}")
         if tool.params:
