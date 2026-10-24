@@ -925,3 +925,65 @@ class TestNoEffectRepeatNote:
         # string, not a stack trace, and not the generic "goal completed" line.
         assert res["final_response"]
         assert "completed." not in res["final_response"]
+
+
+class TestToolResultFeedback:
+    """Non-screen tool results must be fed back to the planner in the next prompt
+    under '### Result of your last step', wrapped in wrap_untrusted and capped in size.
+    """
+
+    def test_search_files_result_fed_back_under_last_step_result(self):
+        plan1 = (
+            '{"action": "search_files", "params": {"query": "report.pdf"}, '
+            '"expect": "find report"}'
+        )
+        loop, gemma, dispatcher = make_loop([plan1, DONE])
+        freeze_screen(loop)
+        dispatcher.execute.return_value = {
+            "status": "ok",
+            "text": "Here are the matching files:\n  1. C:\\Users\\test\\Documents\\report.pdf",
+            "files": ["C:\\Users\\test\\Documents\\report.pdf"],
+        }
+        res = asyncio.run(loop.run(user_goal="read my report pdf"))
+        assert res["status"] == "ok"
+        assert gemma.generate_text.call_count == 2
+        second_prompt = gemma.generate_text.call_args_list[1].kwargs["prompt"]
+
+        # Result of last step must contain the tool's actual output wrapped in untrusted markers
+        assert "### Result of your last step" in second_prompt
+        last_step_section = second_prompt.split("### Result of your last step")[1]
+        assert "The tool reported:" in last_step_section
+        assert "<<<UNTRUSTED_DATA_START" in last_step_section
+        assert "report.pdf" in last_step_section
+        # Non-screen tool with successful result must not falsely claim NO VISIBLE EFFECT
+        assert "NO VISIBLE EFFECT" not in last_step_section
+
+    def test_tool_result_is_capped_in_size_and_defanged(self):
+        safe_path = os.path.join(os.path.expanduser("~"), "Documents", "huge.pdf").replace("\\", "/")
+        plan1 = (
+            f'{{"action": "read_pdf", "params": {{"path": "{safe_path}"}}, '
+            f'"expect": "read text"}}'
+        )
+        loop, gemma, dispatcher = make_loop([plan1, DONE])
+        freeze_screen(loop)
+        huge_text = "Important data line " * 100  # 2000 chars
+        dispatcher.execute.return_value = {
+            "status": "ok",
+            "text": huge_text,
+            "action": "read_pdf",
+        }
+        res = asyncio.run(loop.run(user_goal="read huge pdf"))
+        assert res["status"] == "ok"
+        assert gemma.generate_text.call_count == 2
+        second_prompt = gemma.generate_text.call_args_list[1].kwargs["prompt"]
+        last_step_section = second_prompt.split("### Result of your last step")[1]
+        assert "The tool reported:" in last_step_section
+        assert "<<<UNTRUSTED_DATA_START" in last_step_section
+        assert "<<<UNTRUSTED_DATA_END>>>" in last_step_section
+        # Output should be capped (length within untrusted markers <= 800 chars)
+        start_idx = last_step_section.find("<<<UNTRUSTED_DATA_START")
+        end_idx = last_step_section.find("<<<UNTRUSTED_DATA_END>>>")
+        assert end_idx > start_idx
+        block = last_step_section[start_idx:end_idx]
+        assert len(block) < 800
+
