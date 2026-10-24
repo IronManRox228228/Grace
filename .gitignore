@@ -26,6 +26,11 @@ models/
 .DS_Store
 Thumbs.db
 
+# Local-only / personal (never committed)
+.claude/
+TODO.md
+nul
+
 # Node
 node_modules/
 
