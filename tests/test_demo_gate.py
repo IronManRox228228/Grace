@@ -21,10 +21,33 @@ def test_evaluate_tape_verdict_pass_on_status_ok():
     res = {
         "goal_status": "ok",
         "ok": True,
+        "sim_goal_reached": True,
         "steps": [{"action": "click"}, {"action": "done"}],
         "final_response": "Goal reached successfully.",
     }
     assert evaluate_tape_verdict(res) == "PASS"
+
+
+def test_evaluate_tape_verdict_not_proven_when_planner_says_done_early_without_sim_goal():
+    # Planner claimed done (status: ok), but sim never reached its goal state
+    res = {
+        "goal_status": "ok",
+        "ok": False,
+        "sim_goal_reached": False,
+        "steps": [{"action": "converse"}],
+        "final_response": "I'm done.",
+    }
+    assert evaluate_tape_verdict(res) == "NOT PROVEN"
+
+    # Even if res['ok'] was claimed True, sim_goal_reached being False gives NOT PROVEN
+    res_claim = {
+        "goal_status": "ok",
+        "ok": True,
+        "sim_goal_reached": False,
+        "steps": [{"action": "converse"}],
+        "final_response": "All done.",
+    }
+    assert evaluate_tape_verdict(res_claim) == "NOT PROVEN"
 
 
 def test_evaluate_tape_verdict_not_proven_on_no_progress():

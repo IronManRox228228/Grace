@@ -344,27 +344,29 @@ async def drive_tape(tape_dir: str, args, tmp_enrollment: str, intent_from_tape:
         app._loop = asyncio.get_running_loop()
 
         from grace.harness.clock import install_audio_clock_vad
+        from grace.harness.sim_desktop import SimDispatcher, SimPerception, create_sim_for_tape
         install_audio_clock_vad(app)
         pump = TapePump(tape)
         app.pump = pump
-        app.agent_loop._perception = RepeatingSnapshots(tape)
+
+        sim = create_sim_for_tape(tape)
+        app.agent_loop._perception = SimPerception(sim)
         app.agent_loop._max_iterations = GENERATION_STEP_CAP
 
-        dispatcher = ToolKeyedDispatcher(tape, app.dispatcher)
+        dispatcher = SimDispatcher(sim, app.dispatcher)
         app.dispatcher = dispatcher
         app.agent_loop._dispatcher = dispatcher
 
         orig_execute = dispatcher.execute
 
         async def _record_execute(intent, confirmed: bool = False):
-            dispatcher.last_source_tool = None
             result = await orig_execute(intent, confirmed=confirmed)
             entry = {
                 "tool": intent.tool,
                 "params": {k: v for k, v in intent.params.items()
                            if not k.startswith("_")},
                 "confirmed": confirmed,
-                "served_from": getattr(dispatcher, "last_source_tool", None),
+                "served_from": "sim_desktop",
                 "status": result.get("status"),
                 "text": result.get("text"),
             }
@@ -399,13 +401,15 @@ async def drive_tape(tape_dir: str, args, tmp_enrollment: str, intent_from_tape:
     event_types = [e.get("type") for e in ws.events]
     dispatch_failures = [d for d in executed if d["status"] == "error"]
     goal_status = (agent_result or {}).get("status")
-    goal_ok = goal_status == "ok"
+    sim_ok = sim.is_goal_state() if sim is not None else True
+    goal_ok = (goal_status == "ok") and sim_ok
 
     return {
         "tape": os.path.basename(os.path.normpath(tape_dir)),
         "pass": "intent_from_tape" if intent_from_tape else "all_live",
         "goal_status": goal_status,
         "ok": goal_ok,
+        "sim_goal_reached": sim_ok,
         "final_response": (agent_result or {}).get("final_response"),
         "steps": [
             {

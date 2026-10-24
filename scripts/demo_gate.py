@@ -234,14 +234,19 @@ def evaluate_tape_verdict(res: Optional[dict]) -> str:
     status = res.get("goal_status")
     steps = res.get("steps") or []
     final_resp = res.get("final_response")
+    sim_goal_reached = res.get("sim_goal_reached", True)
 
     # Stuck loop / runaway exceeding step cap
     if len(steps) > 12:
         return "FAIL"
 
-    # Only PASS if status is ok and goal was completed
-    if status == "ok" and res.get("ok", True):
+    # Only PASS if status is ok, goal was completed, and sim reached goal state
+    if status == "ok" and res.get("ok", True) and sim_goal_reached:
         return "PASS"
+
+    # Planner claimed done early, but sim is not in goal state -> NOT PROVEN
+    if status == "ok" and not sim_goal_reached:
+        return "NOT PROVEN"
 
     # no_progress or honest failure
     if status == "no_progress":
