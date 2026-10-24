@@ -302,6 +302,30 @@ expected \ decided | agent | fast_path | converse
 
 **Step 4 — Re-drive:** `scripts/holo_tape_drive.py --backend gemini` on both agentic tapes (`agentic_two_step`, `agentic_read_pdf`). Both tapes reach their goal or end with an honest failure message (no stuck loop). Smoke reply parses.
 
+**Local Holo Re-run (Local Backend, single GPU llama-server):**
+Re-ran `scripts/holo_intent_eval.py` and `scripts/holo_tape_drive.py` against a single local `llama-server` instance using local Holo 3.1-4B (`Holo-3.1-4B.Q4_K_M.gguf` + `Holo-3.1-4B.mmproj-q8_0.gguf`). Stopped cleanly in `finally`, no lingering processes.
+
+Verbatim intent eval confusion table (`bench/demo_intents.jsonl`, 33 commands):
+```
+expected \ decided |     agent | fast_path |  converse
+------------------------------------------------------
+             agent |        14 |         0 |         1
+         fast_path |         1 |        10 |         0
+          converse |         0 |         0 |         7
+```
+- agent: 14/15 routed to agent loop (line 1 YouTube command routes to agent); converse: 7/7 (all 7 converse, no 429 quota failure); fast_path: 10/11.
+- Line 10 ("take a screenshot and open it in paint") routed converse via local intent reply.
+- Line 22 ("open my resume file") routed agent via `_search_without_a_search_ask` guard.
+- 0 transport errors; clean execution.
+
+Verbatim tape drive results:
+- `corpus/agentic_two_step`:
+  - Pass 1 (all-live): intent routes to `AGENTIC_GOAL`; planner issued `cua_click` on search box (id 2) across 3 steps before exhausting the recorded two-step dispatch results (`TapeExhausted`).
+  - Pass 2 (intent from tape): recorded `cua_click` served; planner executed `cua_click` on search box (id 2) until tape exhausted.
+- `corpus/agentic_read_pdf`:
+  - Pass 1 (all-live): intent routes to `AGENTIC_GOAL` (`search_files`); planner executed `search_files` {"query": "report.pdf"} across 2 steps before exhausting the single recorded dispatch result (`TapeExhausted`).
+  - Pass 2 (intent from tape): recorded `read_pdf` served; planner executed `search_files` {"query": "report.pdf"} across 2 steps until tape exhausted.
+
 **Serial test counts (verbatim):**
 - Python: `1163 passed, 1 skipped, 11 warnings in 418.55s (0:06:58)` — full suite, faulthandler trip-wire 60s, zero failures
 - Rust: **not runnable on this machine.** `cargo.exe` present but `rustc.exe` missing (toolchain download interrupted twice by network timeouts; `rustup component add rustc` fails: missing manifest). Last recorded Rust counts per `PORT_STATUS.md`: `289 passed, 3 ignored, 0 failed` across the workspace, all 30/30 corpus tapes passing replay. Toolchain reinstall blocked on network stability; tests not re-run.

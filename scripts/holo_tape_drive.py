@@ -483,9 +483,15 @@ def main(argv=None) -> int:
             print("       (Set it in .env; .env is applied when any grace module imports.)")
             return 2
 
-    if not args.port:
+    if args.server_url:
+        from urllib.parse import urlparse
+        p = urlparse(args.server_url)
+        args.host = p.hostname or args.host
+        if p.port:
+            args.port = p.port
+    elif not args.port:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
+            s.bind((args.host, 0))
             args.port = s.getsockname()[1]
     url = args.server_url or f"http://{args.host}:{args.port}"
 

@@ -115,7 +115,10 @@ class GemmaClient:
 
     async def _get_http(self):
         if self._http is None or self._http.closed:
-            connector = aiohttp.TCPConnector(limit=10, keepalive_timeout=60, enable_cleanup_closed=True)
+            if not self._api_key:
+                connector = aiohttp.TCPConnector(limit=10, force_close=True, enable_cleanup_closed=True)
+            else:
+                connector = aiohttp.TCPConnector(limit=10, keepalive_timeout=60, enable_cleanup_closed=True)
             self._http = aiohttp.ClientSession(connector=connector)
         return self._http
 
@@ -455,41 +458,48 @@ class GemmaClient:
 
     async def _stream_response(self, payload: dict) -> AsyncIterator[str]:
         """Parse SSE stream and yield token chunks from local llama-server."""
-        try:
-            # Pooled session, same reasoning as the Gemini path.
-            session = await self._get_http()
-            async with session.post(
-                f"{self._base_url}/v1/chat/completions",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    logger.error(f"LLM SSE stream failed with status {resp.status}: {body}")
-                    raise RuntimeError(f"LLM request failed: HTTP {resp.status}: {body}")
+        for attempt in range(2):
+            try:
+                session = await self._get_http()
+                async with session.post(
+                    f"{self._base_url}/v1/chat/completions",
+                    json=payload,
+                    headers={"Connection": "close"},
+                    timeout=aiohttp.ClientTimeout(total=120),
+                ) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        logger.error(f"LLM SSE stream failed with status {resp.status}: {body}")
+                        raise RuntimeError(f"LLM request failed: HTTP {resp.status}: {body}")
 
-                async for line_bytes in resp.content:
-                    line_str = line_bytes.decode("utf-8", errors="replace").strip()
-                    if not line_str or line_str.startswith(":"):
-                        continue
-                    if line_str == "data: [DONE]":
-                        break
-                    if line_str.startswith("data: "):
-                        data_json = line_str[6:].strip()
-                        try:
-                            chunk_data = json.loads(data_json)
-                            choices = chunk_data.get("choices", [])
-                            if choices and isinstance(choices, list):
-                                delta = choices[0].get("delta", {})
-                                content = delta.get("content")
-                                if content:
-                                    yield content
-                        except json.JSONDecodeError as ex:
-                            logger.debug(f"Failed to decode LLM stream chunk: {ex}")
+                    async for line_bytes in resp.content:
+                        line_str = line_bytes.decode("utf-8", errors="replace").strip()
+                        if not line_str or line_str.startswith(":"):
                             continue
-        except Exception as e:
-            logger.error(f"SSE streaming exception: {e}")
-            raise
+                        if line_str == "data: [DONE]":
+                            break
+                        if line_str.startswith("data: "):
+                            data_json = line_str[6:].strip()
+                            try:
+                                chunk_data = json.loads(data_json)
+                                choices = chunk_data.get("choices", [])
+                                if choices and isinstance(choices, list):
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content")
+                                    if content:
+                                        yield content
+                            except json.JSONDecodeError as ex:
+                                logger.debug(f"Failed to decode LLM stream chunk: {ex}")
+                                continue
+                return
+            except (aiohttp.ClientError, OSError) as e:
+                if attempt == 0:
+                    logger.warning(f"Local LLM transport retry after connection drop: {e}")
+                    await self.close()
+                    await asyncio.sleep(0.5)
+                    continue
+                logger.error(f"SSE streaming exception: {e}")
+                raise
 
     async def generate_intent(self, user_message: str, system_prompt: str) -> Optional[str]:
         """Generate structured intent JSON for a user message."""
