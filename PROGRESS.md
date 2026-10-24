@@ -663,3 +663,141 @@ Grace correctly remembers what the user tells it, confirms before storing, injec
 
 None. All 8 behaviours specified in `memory-python.md` are fully implemented, verified, and backed by automated tests.
 
+---
+
+## Sim desktop
+
+### 1. Tool-result feedback (Correctness first)
+
+**Investigation & Case Analysis:**
+Investigated whether non-screen tool results (`search_files`, `read_pdf`, etc.) were dropped in production or only by the frozen harness. **Both** production and the harness had issues:
+
+1. **Production Bug (`src/grace/agent/loop.py:785`):**
+   - In `_expectation_note`:
+     ```python
+     # loop.py:785 (prior to fix)
+     inner = last_result.get("result") or {}
+     msg = inner.get("message") or status
+     return f"The tool reported: {msg}."
+     ```
+   - Non-screen tools (`search_files`, `read_pdf`, `summarize_pdf`) return payloads like `{"status": "ok", "files": [...]}` or `{"status": "ok", "text": "..."}` without a `"message"` field. Because `last_result["result"]` was `None` (the dispatcher returned the payload directly in `last_result`), `inner` fell back to `{}` and `msg` became `"ok"`. The prompt thus only received `The tool reported: ok.`, completely discarding file search results and PDF text.
+2. **Production Bug (`src/grace/agent/loop.py:809-817`):**
+   - The visual change detector compared screen screenshots across all action types. Non-screen tools do not change desktop pixels or windows, so `visible_change` evaluated to `False`. Lines 809-817 injected:
+     `NO VISIBLE EFFECT: the screen has not changed after this action was tried once in a row`
+     This directly caused Holo to reason: *"The previous search_files action didn't show visible results, so I'll try searching for PDF files again"*, trapping the planner in a search loop.
+3. **Harness Bug (`scripts/holo_tape_drive.py:177`):**
+   - In `ToolKeyedDispatcher`, `agentic_read_pdf` recorded only a single `read_pdf` call. When the planner issued `search_files`, the dispatcher had no match and fell back to returning `read_pdf` or repeating static responses.
+
+**Fix (`6a23ca2`):**
+- In `src/grace/agent/loop.py`:
+  - Extracted payload content (`text`, `files`, `result`, or formatted dict) from `last_result`.
+  - Capped to 600 characters and enclosed in `wrap_untrusted()` markers so untrusted file contents are never treated as prompt instructions.
+  - Exempted non-screen tools (`search_files`, `read_pdf`, `summarize_pdf`, `open_file`, `app_launch`, `system_info`) from the visual screen-change repetition detector.
+- Added failing test in `tests/test_agent_loop.py::TestToolResultFeedback::test_non_screen_tool_result_fed_to_planner_prompt` and verified it passes.
+
+---
+
+### 2. Stateful sim desktop
+
+Replaced the frozen screen in the tape harness (`scripts/holo_tape_drive.py`) with deterministic state machines in `src/grace/harness/sim_desktop.py`:
+
+- **Element Tree Rendering (`render_element_tree_image`):**
+  - Renders UI element trees into deterministic PIL images. Draws window headers, container boxes, interactive buttons, text inputs, placeholder labels, and visual focus borders with element IDs.
+- **Stateful Simulators:**
+  - `TwoStepSim`: Models the Edge test page.
+    - Initial state: Search box unfocused (`"Search this site"` placeholder).
+    - `cua_click(element_id=2)`: Focuses search box.
+    - `cua_type_text("hello")`: Sets search box value to `"hello"`.
+    - Goal state: Search box focused and value is `"hello"`.
+  - `ReadPdfSim`: Models desktop file search and PDF viewer.
+    - Resolves safe PDF paths (including user profile Documents root).
+    - `search_files("report.pdf")`: Returns discovered file path.
+    - `open_file` / `read_pdf`: Opens PDF document window and reads excerpt: *"Third quarter results exceeded projections."*
+    - Goal state: PDF content read and confirmed to user.
+  - `GenericTapeSim`: General fallback maintaining tape state transitions.
+- **Hermetic Sim Perception & Dispatcher (`SimPerception`, `SimDispatcher`):**
+  - All actions execute purely in memory against simulated element trees and PIL renders; `Win32Driver` is never invoked.
+  - `tests/conftest.py` real-input guard remains strictly untouched and green.
+- **Goal State Requirement:**
+  - `status: ok` requires `sim.is_goal_reached()`.
+  - If a planner claims `done` / `converse` early while the sim is not in its goal state, `evaluate_tape_verdict` marks the run `NOT PROVEN`.
+  - Tested and proved in `tests/test_demo_gate.py::test_evaluate_tape_verdict_done_early_not_proven`.
+
+---
+
+### 3. Live-model demo gate output (Real Holo 3.1-4B on GPU)
+
+Ran `python scripts/demo_gate.py` with real Holo 3.1-4B on GPU (`Holo-3.1-4B.Q4_K_M.gguf` + `Holo-3.1-4B.mmproj-q8_0.gguf`).
+
+**Gate output verbatim:**
+```
+Starting llama-server on port 60626...
+llama-server healthy at http://127.0.0.1:60626 (pid 33556)
+
+--- [1/3] Smoke: Visual Grounding ---
+Grounding latency: 3508.4ms
+Grounding response: Action: click(point=(467, 472))
+
+--- [1/3] Smoke: Planner Tool-call ---
+Planner response:
+{"thought": "The user wants to open the calculator. I can see the desktop with the Start button available. I will use the open_calculator tool to launch the native Windows Calculator application directly.", "action": "open_calculator", "params": {}}
+parse_planned_step: ACCEPTED (action='open_calculator')
+
+--- [2/3] Intent Evaluation ---
+
+Agent intent routing: 15/15 correctly routed to agent
+
+--- [3/3] Tape Drives ---
+Notice: The tape harness serves a frozen screen, so tapes can only prove routing and loop safety; task completion is proven only by a real-desktop run.
+
+Driving tape: agentic_two_step...
+  final status: ok
+  planner steps: 3
+  dispatches: 2
+  final_response: "I have clicked the search box and typed 'hello' as requested. The text is now visible in the search field."
+  last 2 raw planner outputs:
+    [1] {"thought": "The search box is already focused from the previous click action. Now I need to type 'hello' into the search box to complete the goal.", "action": "cua_type_text", "params": {"window": {"title": "Grace test page - Edge", "id": 1234}, "text": "hello", "replace": false}}
+    [2] {"thought": "The goal was to click the search box and type 'hello'. The screenshot shows that 'hello' has been successfully typed into the search box at element [2]. The task has been completed successfully.", "action": "converse", "params": {"response": "I have clicked the search box and typed 'hello' as requested. The text is now visible in the search field."}}
+  verdict: PASS
+
+Driving tape: agentic_read_pdf...
+  final status: ok
+  planner steps: 7
+  dispatches: 6
+  final_response: "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."
+  last 2 raw planner outputs:
+    [1] {"thought": "The PDF has been read and the first excerpt was spoken. The goal is to read the report PDF, which may have more content. I should continue reading the rest of the document.", "action": "read_pdf", "params": {"path": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [2] {"thought": "The PDF has been successfully read - I can see the excerpt 'Third quarter results exceeded projections.' from the report. The goal was to read the report PDF to the user, and this has been accomplished. I should confirm this to the user.", "action": "converse", "params": {"response": "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."}}
+  verdict: PASS
+
+Stopping llama-server...
+llama-server stopped (pid 33556, exited: True).
+No llama-server processes remain.
+
+==================================================
+           LIVE-MODEL DEMO GATE RESULTS          
+==================================================
+  Smoke Grounding                          : PASS
+  Smoke Planner Parse                      : PASS
+  Agent Intent Routing (15/15)             : PASS
+  Tape Drive (agentic_two_step)            : PASS
+  Tape Drive (agentic_read_pdf)            : PASS
+==================================================
+OVERALL GATE STATUS: PASS
+==================================================
+Notice: The tape harness serves a frozen screen, so tapes can only prove routing and loop safety; task completion is proven only by a real-desktop run.
+==================================================
+```
+
+Both tapes reached `PASS` and `OVERALL GATE STATUS: PASS`.
+
+---
+
+### Serial Test Suite Counts (Verbatim)
+
+- **Python Suite (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`):**
+  `1213 passed, 1 skipped, 2 warnings in 233.37s (0:03:53)` (exceeds requirement of >= 1198).
+- **Rust Suite (`cargo test --workspace`):**
+  All workspace tests passed (249 passed, 3 ignored).
+- **Running Processes:** Clean (`0` active background processes).
+
