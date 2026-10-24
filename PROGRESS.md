@@ -481,3 +481,85 @@ Deleted. Grep confirmed no file in the repo imports `bench` directly (`import be
 
 **8. Process check:**
 `Get-Process | Where-Object { $_.ProcessName -match '^(python|pytest|cargo|rustc|grace|llama-server)' }` returned 0 matching processes. Clean.
+
+---
+
+## Gate honesty
+
+**Commit:**
+- `f882e3e` `fix(gate): never count an unfinished task as a pass`
+
+**Summary of changes:**
+1. `scripts/demo_gate.py`:
+   - Made verdict evaluation honest: A tape verdict is `PASS` only on `status: ok` with the goal reached within step cap. `no_progress` or an honest failure is `NOT PROVEN`, shown as such, and makes the overall gate status `NOT PROVEN` (exit code 2), never `PASS`.
+   - Per-tape reporting prints `final status`, `planner steps`, `dispatches`, `final_response`, the last 2 raw planner outputs, and `verdict`.
+   - Gate output explicitly states: "Notice: The tape harness serves a frozen screen, so tapes can only prove routing and loop safety; task completion is proven only by a real-desktop run."
+2. `docs/demo/FLOWS.md`:
+   - Updated preflight and tape documentation to clearly state that the tape harness serves a frozen screen, tapes only prove routing and loop safety, task completion is proven only by a real-desktop run, and tape drives under the harness report `NOT PROVEN` (exit code 2).
+3. `tests/test_demo_gate.py`:
+   - Comprehensive unit tests covering `evaluate_tape_verdict`, `compute_overall_status`, `extract_raw_planner_outputs`, and exit code behavior (PASS -> 0, NOT PROVEN -> 2, FAIL -> 1) with hermetic fake results.
+
+**Serial test suite:**
+- `1174 passed, 1 skipped, 1 warning in 197.36s (0:03:17)` (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`)
+- Rust suite: `cargo test --workspace` all passed.
+
+**Gate output verbatim:**
+```
+Starting llama-server on port 51934...
+llama-server healthy at http://127.0.0.1:51934 (pid 16272)
+
+--- [1/3] Smoke: Visual Grounding ---
+Grounding latency: 3721.2ms
+Grounding response: Action: click(point=(467, 472))
+
+--- [1/3] Smoke: Planner Tool-call ---
+Planner response:
+{"thought": "The user wants to open the calculator. I can see the desktop with the Start button available. I will use the open_calculator tool to launch the native Windows Calculator application directly.", "action": "open_calculator", "params": {}}
+parse_planned_step: ACCEPTED (action='open_calculator')
+
+--- [2/3] Intent Evaluation ---
+
+Agent intent routing: 15/15 correctly routed to agent
+
+--- [3/3] Tape Drives ---
+Notice: The tape harness serves a frozen screen, so tapes can only prove routing and loop safety; task completion is proven only by a real-desktop run.
+
+Driving tape: agentic_two_step...
+  final status: no_progress
+  planner steps: 8
+  dispatches: 8
+  final_response: "I've tried the same thing several times in Grace test page - Edge without getting anywhere, so I've stopped."
+  last 2 raw planner outputs:
+    [1] {"thought": "The previous action typed but didn't properly focus the search box. I need to first click on the site's search box (id: 2) to focus it, then type 'hello'. The search box is in the Main frame with placeholder 'Search this site'.", "action": "cua_type_text", "params": {"window": {"title": "Grace test page - Edge", "id": 1234}, "text": "hello", "replace": true}}
+    [2] {"thought": "I need to click the search box first to focus it before typing. Element ID 2 is the site's search box with placeholder 'Search this site'. I'll click it to focus, then type 'hello'.", "action": "cua_click", "params": {"window": {"title": "Grace test page - Edge", "id": 1234}, "element_id": 2, "target_name": "Search box with placeholder 'Search this site'", "click_count": 1}}
+  verdict: NOT PROVEN
+
+Driving tape: agentic_read_pdf...
+  final status: no_progress
+  planner steps: 4
+  dispatches: 4
+  final_response: "I've tried the same thing several times in Untitled - Notepad without getting anywhere, so I've stopped."
+  last 2 raw planner outputs:
+    [1] {"thought": "The user wants me to read their report PDF. Currently Notepad is open but empty. I need to find and open the PDF file first. The previous search_files action didn't show visible results, so I'll try searching for PDF files again to locate the report.", "action": "search_files", "params": {"query": "report.pdf"}}
+    [2] {"thought": "The user wants me to read their report PDF. Currently Notepad is open but empty. I need to find and open the PDF file first. The previous search_files action didn't show visible results, so I'll try searching for PDF files again to locate the report.", "action": "search_files", "params": {"query": "report.pdf"}}
+  verdict: NOT PROVEN
+
+Stopping llama-server...
+llama-server stopped (pid 16272, exited: True).
+No llama-server processes remain.
+
+==================================================
+           LIVE-MODEL DEMO GATE RESULTS          
+==================================================
+  Smoke Grounding                          : PASS
+  Smoke Planner Parse                      : PASS
+  Agent Intent Routing (15/15)             : PASS
+  Tape Drive (agentic_two_step)            : NOT PROVEN
+  Tape Drive (agentic_read_pdf)            : NOT PROVEN
+==================================================
+OVERALL GATE STATUS: NOT PROVEN
+==================================================
+Notice: The tape harness serves a frozen screen, so tapes can only prove routing and loop safety; task completion is proven only by a real-desktop run.
+==================================================
+```
+
