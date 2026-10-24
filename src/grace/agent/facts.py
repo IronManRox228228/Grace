@@ -224,3 +224,103 @@ def detect_remember_pattern(transcript: str) -> Optional[dict[str, Any]]:
         }
 
     return None
+
+
+def format_fact_for_speech(topic: str, value: str) -> str:
+    """Format a stored fact for speaking aloud naturally."""
+    if topic == "name":
+        return f"your name is {value}"
+    if topic == "usual_song":
+        return f"your usual song is {value}"
+    if topic == "preference:browser":
+        return f"you prefer {value}"
+    if topic.startswith("preference:"):
+        return f"you prefer {value}"
+    if topic.startswith("fact:"):
+        return pronoun_flip(value)
+    clean_topic = topic.replace("_", " ").replace(":", " ")
+    return f"{clean_topic} is {value}"
+
+
+def is_recall_command(clean: str) -> bool:
+    """Check if utterance asks Grace to recall facts about the user."""
+    return clean in (
+        "what do you remember about me",
+        "what do you remember",
+        "what do you know about me",
+        "what do you know",
+        "what have you remembered",
+        "tell me what you remember",
+        "tell me what you know about me",
+    ) or clean.startswith("what do you remember") or clean.startswith("what do you know about me")
+
+
+def detect_forget_fact_pattern(
+    transcript: str, confirmed_facts: Optional[list[dict[str, Any]]] = None
+) -> Optional[tuple[str, str]]:
+    """Detect voice command to forget a specific fact (PLAN.md §12.1).
+
+    Returns (topic, human_label) or None.
+    Handles:
+    - "forget my name" / "forget that my name is Ashman"
+    - "forget that I prefer Firefox" / "forget I prefer Firefox"
+    - "forget my usual song" / "forget that my usual song is Signal by Home"
+    - "forget <fact value or topic name>"
+    """
+    if not transcript or not transcript.strip():
+        return None
+
+    raw = transcript.strip()
+    clean = re.sub(r"[^\w\s]", "", raw.lower()).strip()
+
+    if not clean.startswith("forget"):
+        return None
+
+    # Exclude broad session wipes handled elsewhere
+    if clean in ("forget today", "forget what i did today", "forget everything", "forget all"):
+        return None
+    if clean.startswith("forget what i did in "):
+        return None
+
+    target = re.sub(r"^forget\s+(?:that\s+)?", "", clean).strip()
+    if not target:
+        return None
+
+    # 1. Name
+    if target in ("my name", "name") or target.startswith("my name is ") or target.startswith("name is "):
+        return ("name", "your name")
+
+    # 2. Usual song
+    if target in ("my usual song", "usual song") or target.startswith("my usual song is "):
+        return ("usual_song", "your usual song")
+
+    # 3. Preferences (e.g. browser or generic prefer)
+    if target in ("browser preference", "my browser", "my preferred browser"):
+        return ("preference:browser", "your browser preference")
+
+    m_pref = re.search(r"\b(?:i\s+)?prefer\s+(.+)$", target)
+    if m_pref:
+        pref = m_pref.group(1).strip()
+        if pref in ("firefox", "chrome", "edge", "safari", "brave", "opera"):
+            return ("preference:browser", f"that you prefer {pref.capitalize()}")
+        slug = re.sub(r"\s+", "_", pref)
+        return (f"preference:{slug}", f"that you prefer {pref}")
+
+    # 4. Match against currently confirmed facts if available
+    if confirmed_facts:
+        for f in confirmed_facts:
+            topic = f.get("topic", "")
+            val = str(f.get("value", "")).lower()
+            val_clean = re.sub(r"[^\w\s]", "", val).strip()
+            # If value appears in utterance (e.g. "firefox" or "signal by home")
+            if val_clean and val_clean in target:
+                label = format_fact_for_speech(topic, f.get("value", ""))
+                return (topic, label)
+            # If topic words match target
+            clean_topic = topic.replace("_", " ").replace(":", " ")
+            if clean_topic in target or target in clean_topic:
+                label = format_fact_for_speech(topic, f.get("value", ""))
+                return (topic, label)
+
+    return None
+

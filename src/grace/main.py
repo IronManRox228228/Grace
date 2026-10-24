@@ -48,7 +48,13 @@ from grace.automation.computer_use import ComputerUse
 from grace.tools.dispatcher import Dispatcher
 from grace.tts.kokoro_engine import KokoroEngine
 from grace.ws_server import WsEventServer
-from grace.agent.facts import detect_remember_pattern, is_value_in_transcript
+from grace.agent.facts import (
+    detect_remember_pattern,
+    is_value_in_transcript,
+    is_recall_command,
+    detect_forget_fact_pattern,
+    format_fact_for_speech,
+)
 from grace.tts.player import TTSPlayer
 from grace.response.generator import ResponseGenerator
 from grace.response.feedback import FeedbackSounds
@@ -899,6 +905,23 @@ class GraceApp:
             self._confirmation_prompt_finished_at = time.monotonic()
             return True
 
+        # Voice recall: "What do you remember about me?"
+        if is_recall_command(clean):
+            facts = store.get_all_confirmed_facts()
+            if not facts:
+                msg = "I don't remember anything about you yet."
+            else:
+                spoken_items = [format_fact_for_speech(f["topic"], f["value"]) for f in facts]
+                if len(spoken_items) == 1:
+                    msg = f"I remember that {spoken_items[0]}."
+                elif len(spoken_items) == 2:
+                    msg = f"I remember that {spoken_items[0]}, and {spoken_items[1]}."
+                else:
+                    msg = f"I remember that {', '.join(spoken_items[:-1])}, and {spoken_items[-1]}."
+            self._last_spoken_text = msg
+            await self._speak_response(msg)
+            return True
+
         if clean in ("forget today", "forget what i did today"):
             store.forget_today()
             msg = "I've forgotten everything from today."
@@ -917,6 +940,22 @@ class GraceApp:
             app = clean[len("forget what i did in "):].strip()
             store.forget_app(app)
             msg = f"I've forgotten your history in {app}."
+            self._last_spoken_text = msg
+            await self._speak_response(msg)
+            return True
+
+        # Forget single fact by voice: "Forget my name" / "forget that I prefer Firefox"
+        forget_match = detect_forget_fact_pattern(transcript, store.get_all_confirmed_facts())
+        if forget_match is not None:
+            topic, label = forget_match
+            store.forget_fact(topic)
+            msg = f"I've forgotten {label}."
+            self._last_spoken_text = msg
+            await self._speak_response(msg)
+            return True
+
+        if clean.startswith("forget ") or clean.startswith("forget that "):
+            msg = "I don't have anything remembered about that."
             self._last_spoken_text = msg
             await self._speak_response(msg)
             return True

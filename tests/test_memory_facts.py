@@ -474,3 +474,145 @@ class TestConfirmationAndSafetyFlow:
 
         app.memory_store.close()
 
+    @pytest.mark.asyncio
+    async def test_voice_recall_when_empty(self):
+        """'What do you remember about me?' when no facts stored answers with apology."""
+        from grace.main import GraceApp
+
+        app = GraceApp(tts_off=True)
+        app.memory_store = PersistentMemoryStore(db_path=":memory:")
+        spoken = []
+        app._speak_response = lambda text: spoken.append(text) or asyncio.sleep(0)
+
+        await app._route_transcript(MagicMock(), "What do you remember about me?")
+        assert spoken == ["I don't remember anything about you yet."]
+        app.memory_store.close()
+
+    @pytest.mark.asyncio
+    async def test_voice_recall_reads_confirmed_facts_aloud(self):
+        """'What do you remember about me?' reads all confirmed facts naturally."""
+        from grace.main import GraceApp
+
+        app = GraceApp(tts_off=True)
+        app.memory_store = PersistentMemoryStore(db_path=":memory:")
+        app.memory_store.store_fact("name", "Ashman", provenance="user_heard")
+        app.memory_store.confirm_fact("name")
+        app.memory_store.store_fact("preference:browser", "Firefox", provenance="user_heard")
+        app.memory_store.confirm_fact("preference:browser")
+
+        spoken = []
+        app._speak_response = lambda text: spoken.append(text) or asyncio.sleep(0)
+
+        await app._route_transcript(MagicMock(), "What do you remember about me?")
+        assert len(spoken) == 1
+        assert "your name is Ashman" in spoken[0]
+        assert "you prefer Firefox" in spoken[0]
+        app.memory_store.close()
+
+    @pytest.mark.asyncio
+    async def test_voice_forget_one_fact_by_name(self):
+        """'Forget my name' deletes only the name fact and keeps other facts intact."""
+        from grace.main import GraceApp
+
+        app = GraceApp(tts_off=True)
+        app.memory_store = PersistentMemoryStore(db_path=":memory:")
+        app.memory_store.store_fact("name", "Ashman", provenance="user_heard")
+        app.memory_store.confirm_fact("name")
+        app.memory_store.store_fact("preference:browser", "Firefox", provenance="user_heard")
+        app.memory_store.confirm_fact("preference:browser")
+
+        spoken = []
+        app._speak_response = lambda text: spoken.append(text) or asyncio.sleep(0)
+
+        await app._route_transcript(MagicMock(), "Forget my name")
+        assert spoken == ["I've forgotten your name."]
+
+        # Verify 'name' is gone, 'preference:browser' still exists
+        assert app.memory_store.get_active_fact("name") is None
+        assert app.memory_store.get_active_fact("preference:browser") is not None
+        assert app.memory_store.get_active_fact("preference:browser")["value"] == "Firefox"
+        app.memory_store.close()
+
+    @pytest.mark.asyncio
+    async def test_voice_forget_one_fact_by_phrase(self):
+        """'Forget that I prefer Firefox' deletes the browser preference fact."""
+        from grace.main import GraceApp
+
+        app = GraceApp(tts_off=True)
+        app.memory_store = PersistentMemoryStore(db_path=":memory:")
+        app.memory_store.store_fact("preference:browser", "Firefox", provenance="user_heard")
+        app.memory_store.confirm_fact("preference:browser")
+
+        spoken = []
+        app._speak_response = lambda text: spoken.append(text) or asyncio.sleep(0)
+
+        await app._route_transcript(MagicMock(), "Forget that I prefer Firefox")
+        assert "forgotten that you prefer Firefox" in spoken[0]
+        assert app.memory_store.get_active_fact("preference:browser") is None
+        app.memory_store.close()
+
+    @pytest.mark.asyncio
+    async def test_voice_forget_everything_deletes_all_facts(self):
+        """'Forget everything' deletes all facts, preferences, and task history."""
+        from grace.main import GraceApp
+
+        app = GraceApp(tts_off=True)
+        app.memory_store = PersistentMemoryStore(db_path=":memory:")
+        app.memory_store.store_fact("name", "Ashman", provenance="user_heard")
+        app.memory_store.confirm_fact("name")
+        app.memory_store.store_fact("usual_song", "Signal by Home", provenance="user_heard")
+        app.memory_store.confirm_fact("usual_song")
+
+        spoken = []
+        app._speak_response = lambda text: spoken.append(text) or asyncio.sleep(0)
+
+        await app._route_transcript(MagicMock(), "Forget everything")
+        assert spoken == ["I've forgotten everything."]
+
+        # Verify all facts hard-deleted
+        assert len(app.memory_store.get_all_confirmed_facts()) == 0
+        assert app.memory_store.get_active_fact("name") is None
+        assert app.memory_store.get_active_fact("usual_song") is None
+
+        # Verify subsequent recall reports nothing
+        spoken.clear()
+        await app._route_transcript(MagicMock(), "What do you remember about me?")
+        assert spoken == ["I don't remember anything about you yet."]
+        app.memory_store.close()
+
+    @pytest.mark.asyncio
+    async def test_typed_text_path_memory_commands(self):
+        """Typed input path (_handle_text_activation) routes memory recall and forget identically to voice."""
+        from grace.main import GraceApp
+
+        app = GraceApp(tts_off=True)
+        app.memory_store = PersistentMemoryStore(db_path=":memory:")
+        app.dispatcher.set_memory_store(app.memory_store)
+        app.agent_loop.set_memory_store(app.memory_store)
+
+        spoken = []
+        app._speak_response = lambda text: spoken.append(text) or asyncio.sleep(0)
+
+        # 1. Store via typed
+        await app._handle_text_activation("remember my usual song is Signal by Home")
+        assert app.agent_loop.has_pending_confirmation is True
+
+        # 2. Confirm via typed
+        await app._handle_text_activation("yes")
+        assert app.agent_loop.has_pending_confirmation is False
+        assert app.memory_store.get_active_fact("usual_song") is not None
+
+        # 3. Recall via typed
+        spoken.clear()
+        await app._handle_text_activation("What do you remember about me?")
+        assert len(spoken) == 1
+        assert "your usual song is Signal by Home" in spoken[0]
+
+        # 4. Forget via typed
+        spoken.clear()
+        await app._handle_text_activation("Forget my usual song")
+        assert spoken == ["I've forgotten your usual song."]
+        assert app.memory_store.get_active_fact("usual_song") is None
+
+        app.memory_store.close()
+
