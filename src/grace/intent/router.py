@@ -100,6 +100,7 @@ class CapabilityRouter:
         "copy", "paste", "play", "mute", "unmute", "undo", "lock", "unlock",
         "download", "upload", "install", "print", "save", "send", "email",
         "reply", "summarize", "minimize", "maximize", "check", "go",
+        "take", "capture", "screenshot",
     )
 
     # Longest utterance still treated as a single deterministic command.

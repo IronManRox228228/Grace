@@ -12,16 +12,21 @@ Every flow has a corresponding deterministic replay tape stored in `%TEMP%\grace
 Before walking on stage or starting the recording:
 
 1. **Pull the network cable / disable Wi-Fi.** Prove Grace has zero non-loopback connections.
-2. Run the preflight verification script:
+2. **Run the live-model demo gate ("run before every recording"):**
+   ```cmd
+   python scripts/demo_gate.py
+   ```
+   Verifies local Holo 3.1-4B visual grounding, planner tool-calling, intent routing (100% of `agent` intents routed), and agentic tape drive execution without stuck loops. All checks must show `PASS`.
+3. Run the preflight verification script:
    ```cmd
    python scripts/demo_check.py --demo
    ```
    Ensure all 14 checklist items pass in green.
-3. Launch Grace with the Tauri overlay shell:
+4. Launch Grace with the Tauri overlay shell:
    ```cmd
    cargo tauri dev
    ```
-4. Verify the overlay pill appears at the bottom center of the display showing **`Grace • Ready`** with a green **`Offline`** badge.
+5. Verify the overlay pill appears at the bottom center of the display showing **`Grace • Ready`** with a green **`Offline`** badge.
 
 ---
 

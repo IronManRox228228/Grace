@@ -140,6 +140,7 @@ class ToolKeyedDispatcher:
         self._inner = inner
         self.calls: list[dict] = []
         self.last_source_tool: Optional[str] = None
+        self._last_served: Optional[dict] = None
 
     async def execute(self, intent, confirmed: bool = False):
         from grace.tools.dispatcher import Dispatcher
@@ -164,6 +165,7 @@ class ToolKeyedDispatcher:
                 f"the backend dispatched {intent.tool}({intent.params}) but the "
                 f"tape records no dispatch result to serve"
             )
+        self._last_served = served
         self.last_source_tool = source
         return served
 
@@ -175,6 +177,8 @@ class ToolKeyedDispatcher:
         if self._raw_records:
             record = self._raw_records.pop(0)
             return record["result"], record["tool"]
+        if self._last_served is not None:
+            return self._last_served, "repeated_last"
         return None, None
 
 
