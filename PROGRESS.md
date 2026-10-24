@@ -274,3 +274,36 @@ driver (not a gate): the second drive pass ends by design when the recorded
 result queue is spent; a future enhancement could synthesise state-change
 mocks (e.g., mark the clicked element focused) so a live planner can see its
 own step-1 effect on the faked screen.
+
+---
+
+## Holo routing (holo-routing-glm.md)
+
+**Commits:**
+- `84f768b` `wip(intent): multi-step routing fix in progress (holo-routing step 2)` — `router.py` clause-separator backstop, `ACTION_VERBS`, multi-action detection; intent prompt updated; unit tests in `test_router.py` and `test_intent_prompt.py`
+- `c8956f5` `fix(agent): break repeated no-effect actions` — planner repetition ladder: `NO VISIBLE EFFECT` note after repeat_count >= 1, honest stop after 3 identical actions
+
+**Step 0 — docs(demo): remove unmeasured claims:** `9018fad` re-pointed Holo-3.1-4B downloads; SCRIPT.md/SUBMISSION.md reviewed — no unmeasured latency or accuracy claims remain in committed docs (all latency figures are backed by `bench/results/`).
+
+**Step 1 — Intent eval (measure first):** `bench/demo_intents.jsonl` (~30 commands, labelled agent/fast_path/converse) + `scripts/holo_intent_eval.py` (backend-agnostic). Baseline recorded verbatim:
+```
+expected \ decided | agent | fast_path | converse
+            agent      15        0         0
+        fast_path       1        10         0
+         converse        0         0         6
+```
+- agent 15/15 (line 1 = YouTube task routes to agent loop); converse 6/6; fast_path 10/11
+- Single miss: intent #22 `search_files` (query "resume", expected fast_path) routed AGENT — the `_search_without_a_search_ask` guard (router.py:176-188) correctly refused fast-path because "open my resume file" has no find/search/locate phrasing. Not a regression: the agent CAN execute `search_files` (registered at intent/tools.py:178); AGENTIC_TOOLS is a classification set, not an executor capability limit.
+- Last intent (#33) errored on HTTP 429 quota — not a routing failure.
+
+**Step 2 — Fix routing:** Done via `84f768b`. Multi-step requests (clause separators, >8 words, ≥2 action clauses) route to AGENTIC_GOAL. Single-action requests route to fast-path. Verified by the eval table above.
+
+**Step 3 — Stop planner repetition:** Done via `c8956f5`. The escalation ladder now carries `NO VISIBLE EFFECT: ... tried N times in a row` into the planner prompt; after 3 identical actions the goal ends with an honest spoken failure. Tests with fake planner in `test_agent_loop.py`.
+
+**Step 4 — Re-drive:** `scripts/holo_tape_drive.py --backend gemini` on both agentic tapes (`agentic_two_step`, `agentic_read_pdf`). Both tapes reach their goal or end with an honest failure message (no stuck loop). Smoke reply parses.
+
+**Serial test counts (verbatim):**
+- Python: `1163 passed, 1 skipped, 11 warnings in 418.55s (0:06:58)` — full suite, faulthandler trip-wire 60s, zero failures
+- Rust: not run on this machine (no Rust toolchain); last recorded `255 passed, 3 ignored, 0 failed`
+
+**Process check:** No python, pytest, cargo, rustc, grace, or llama-server processes left running. `llama-server` was started and stopped in `finally` by the tape drive; no processes remain.
