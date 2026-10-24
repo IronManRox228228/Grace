@@ -3,10 +3,14 @@
 Starts llama-server with Holo 3.1-4B once, runs:
 1. Smoke tests: visual grounding and streaming planner tool-call.
 2. Intent evaluation: verifies all 'agent'-labelled intents route to agent.
-3. Tape drive: runs both agentic tapes (agentic_two_step, agentic_read_pdf)
-   verifying they reach their goal or end with an honest failure message (no stuck loop).
+3. Tape drive: runs both agentic tapes (agentic_two_step, agentic_read_pdf).
+   A tape verdict is PASS only on `status: ok` with the goal reached.
+   `no_progress` or an honest failure is `NOT PROVEN` (the tape harness serves
+   a frozen screen, so tapes can only prove routing and loop safety; task
+   completion is proven only by a real-desktop run).
 
-Stops the server in finally, prints one PASS/FAIL table, and exits non-zero on FAIL.
+Stops the server in finally, prints one PASS/FAIL/NOT PROVEN table, and exits
+non-zero on FAIL (exit code 1) or NOT PROVEN (exit code 2).
 All desktop, mic, and speaker edges stay mocked.
 """
 
@@ -211,9 +215,79 @@ def run_intents_gate(url: str, dataset_path: str) -> tuple[bool, int, int]:
     return all_agent_ok, routed_agent, total_agent
 
 
-def run_tapes_gate(url: str, tapes: list[str], args) -> dict[str, bool]:
+FROZEN_SCREEN_NOTE = (
+    "The tape harness serves a frozen screen, so tapes can only prove "
+    "routing and loop safety; task completion is proven only by a real-desktop run."
+)
+
+
+def evaluate_tape_verdict(res: Optional[dict]) -> str:
+    """Evaluate a tape drive result dictionary into PASS, NOT PROVEN, or FAIL.
+
+    - A tape verdict is PASS only on `status: ok` with the goal reached (within step cap).
+    - `no_progress` or an honest failure is `NOT PROVEN`.
+    - Stuck loop (>12 steps), unhandled exception, crash, or error status is `FAIL`.
+    """
+    if not isinstance(res, dict):
+        return "FAIL"
+
+    status = res.get("goal_status")
+    steps = res.get("steps") or []
+    final_resp = res.get("final_response")
+
+    # Stuck loop / runaway exceeding step cap
+    if len(steps) > 12:
+        return "FAIL"
+
+    # Only PASS if status is ok and goal was completed
+    if status == "ok" and res.get("ok", True):
+        return "PASS"
+
+    # no_progress or honest failure
+    if status == "no_progress":
+        return "NOT PROVEN"
+    if status in ("failed", "budget_exceeded"):
+        return "NOT PROVEN"
+    if bool(final_resp) and status is not None and status != "error":
+        return "NOT PROVEN"
+
+    return "FAIL"
+
+
+def compute_overall_status(summary: dict[str, str]) -> tuple[str, int]:
+    """Compute overall status string and exit code from check summary.
+
+    - Any FAIL -> ('FAIL', 1)
+    - Any NOT PROVEN -> ('NOT PROVEN', 2)
+    - All PASS -> ('PASS', 0)
+    """
+    statuses = list(summary.values())
+    if any(s == "FAIL" for s in statuses):
+        return "FAIL", 1
+    if any(s == "NOT PROVEN" for s in statuses):
+        return "NOT PROVEN", 2
+    return "PASS", 0
+
+
+def extract_raw_planner_outputs(res: dict) -> list[str]:
+    """Extract raw planner output strings from tape drive result."""
+    outputs: list[str] = []
+    for r in (res.get("llm_records") or []):
+        if isinstance(r, dict):
+            call = r.get("call", "")
+            if call == "generate_text" or ("intent" not in call and r.get("raw")):
+                raw = r.get("raw")
+                if raw and isinstance(raw, str):
+                    outputs.append(raw)
+        elif isinstance(r, str):
+            outputs.append(r)
+    return outputs
+
+
+def run_tapes_gate(url: str, tapes: list[str], args) -> dict[str, str]:
     print("\n--- [3/3] Tape Drives ---")
-    results = {}
+    print(f"Notice: {FROZEN_SCREEN_NOTE}")
+    results: dict[str, str] = {}
     temp_enrollment = os.path.join(tempfile.gettempdir(), "grace-demo-gate", "enrollment")
     os.makedirs(temp_enrollment, exist_ok=True)
 
@@ -229,26 +303,32 @@ def run_tapes_gate(url: str, tapes: list[str], args) -> dict[str, bool]:
             final_resp = res.get("final_response")
             steps = res.get("steps") or []
             dispatches = res.get("dispatches") or []
-            print(f"  status: {status}")
-            print(f"  steps : {len(steps)}")
+            print(f"  final status: {status}")
+            print(f"  planner steps: {len(steps)}")
             print(f"  dispatches: {len(dispatches)}")
             print(f"  final_response: {final_resp!r}")
 
-            # Reached goal or ended with honest failure message (no stuck loop).
-            # Honest failure = status in ("ok", "no_progress", "failed", "budget_exceeded")
-            # and final_response is a spoken explanation, without exceeding step cap (12).
-            honest_failure = (
-                (status == "ok") or
-                (status in ("no_progress", "failed", "budget_exceeded") and bool(final_resp)) or
-                (bool(final_resp) and len(steps) < 12)
-            )
-            no_stuck_loop = len(steps) <= 12
-            passed = honest_failure and no_stuck_loop
-            results[tape_name] = passed
-            print(f"  verdict: {'PASS' if passed else 'FAIL'}")
+            raw_outputs = extract_raw_planner_outputs(res)
+            last_2 = raw_outputs[-2:]
+            print("  last 2 raw planner outputs:")
+            if not last_2:
+                print("    (none)")
+            else:
+                for idx, out in enumerate(last_2, 1):
+                    lines = out.strip().splitlines()
+                    if len(lines) == 1:
+                        print(f"    [{idx}] {lines[0]}")
+                    else:
+                        print(f"    [{idx}] {lines[0]}")
+                        for line in lines[1:]:
+                            print(f"        {line}")
+
+            verdict = evaluate_tape_verdict(res)
+            results[tape_name] = verdict
+            print(f"  verdict: {verdict}")
         except Exception as e:
             print(f"  error driving {tape_name}: {e}")
-            results[tape_name] = False
+            results[tape_name] = "FAIL"
 
     return results
 
@@ -269,7 +349,7 @@ def main(argv=None) -> int:
     for label, path in (("model", args.model), ("mmproj", args.mmproj), ("llama-server", args.server)):
         if not args.server_url and not os.path.exists(path):
             print(f"ERROR: {label} not found at: {path}")
-            return 2
+            return 1
 
     if not args.port:
         args.port = get_free_port(args.host)
@@ -277,7 +357,8 @@ def main(argv=None) -> int:
 
     proc: Optional[subprocess.Popen] = None
     pre_existing = _llama_pids()
-    gate_passed = True
+    overall_status = "FAIL"
+    exit_code = 1
     summary: dict[str, str] = {}
 
     try:
@@ -306,10 +387,10 @@ def main(argv=None) -> int:
             os.path.join(repo_root, "corpus", "agentic_read_pdf"),
         ]
         tape_results = run_tapes_gate(url, tapes, args)
-        for tname, passed in tape_results.items():
-            summary[f"Tape Drive ({tname})"] = "PASS" if passed else "FAIL"
+        for tname, verdict in tape_results.items():
+            summary[f"Tape Drive ({tname})"] = verdict
 
-        gate_passed = all(v == "PASS" for v in summary.values())
+        overall_status, exit_code = compute_overall_status(summary)
 
     finally:
         if proc is not None:
@@ -335,10 +416,12 @@ def main(argv=None) -> int:
     for check, res in summary.items():
         print(f"  {check:<40} : {res}")
     print("="*50)
-    print(f"OVERALL GATE STATUS: {'PASS' if gate_passed else 'FAIL'}")
+    print(f"OVERALL GATE STATUS: {overall_status}")
+    print("="*50)
+    print(f"Notice: {FROZEN_SCREEN_NOTE}")
     print("="*50)
 
-    return 0 if gate_passed else 1
+    return exit_code
 
 
 if __name__ == "__main__":
