@@ -85,12 +85,16 @@ class GemmaClient:
         base_url: str = "http://127.0.0.1:8080",
         api_key: Optional[str] = None,
         model_name: str = "gemini-3.1-flash-lite",
+        nvidia_api_key: Optional[str] = None,
+        nvidia_model_name: Optional[str] = None,
         before_request=None,
         allow_cloud_screenshots: bool = False,
     ):
         self._base_url = base_url
         self._api_key = api_key
         self._model_name = model_name or "gemini-3.1-flash-lite"
+        self._nvidia_api_key = nvidia_api_key
+        self._nvidia_model_name = nvidia_model_name or "nemotron-3.5-lightning-30b-a3b"
         self._allow_cloud_screenshots = bool(allow_cloud_screenshots)
         self._http = None
         # Called before every local request. Used to hot-swap the model
@@ -185,11 +189,22 @@ class GemmaClient:
                 raise PermissionError(
                     "Cloud fallback is not permitted to send screenshots without explicit per-session consent (R19)"
                 )
-            gemini = self._stream_gemini_response(messages, temperature=temperature,
-                                                  max_tokens=max_tokens, model=effective_model)
-            if recorder is None:
-                return gemini
-            return _record_stream(recorder, "chat", request, gemini)
+            try:
+                gemini = self._stream_gemini_response(messages, temperature=temperature,
+                                                      max_tokens=max_tokens, model=effective_model)
+                if recorder is None:
+                    return gemini
+                return _record_stream(recorder, "chat", request, gemini)
+            except RateLimitError as e:
+                logger.warning(f"Gemini '{effective_model}' rate limited (HTTP 429): {e}; falling back to NVIDIA")
+                if self._nvidia_api_key:
+                    if recorder is not None:
+                        request["backend"] = "nvidia"
+                    nvidia = self._stream_nvidia_response(messages, temperature=temperature, max_tokens=max_tokens)
+                    if recorder is None:
+                        return nvidia
+                    return _record_stream(recorder, "chat", request, nvidia)
+                raise
 
         formatted_messages = []
         for msg in messages:
@@ -371,6 +386,72 @@ class GemmaClient:
 
         if last_error:
             raise last_error
+
+    async def _stream_nvidia_response(
+        self,
+        messages: list[dict],
+        temperature: float = 0.2,
+        max_tokens: int = 8192,
+        model: Optional[str] = None,
+    ) -> AsyncIterator[str]:
+        """Stream response tokens from NVIDIA NIM (OpenAI-compatible chat API).
+
+        Used as a fallback when Gemini returns HTTP 429. One attempt only -
+        no retry loop: if NVIDIA is also rate limited, surface the error.
+        """
+        model = model or self._nvidia_model_name or "nemotron-3.5-lightning-30b-a3b"
+        url = "https://integrate.api.nvidia.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self._nvidia_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # Convert messages to OpenAI-compatible format (NVIDIA NIM is OpenAI-shaped).
+        formatted_messages = []
+        for msg in messages:
+            msg_copy = dict(msg)
+            img_b64 = msg_copy.pop("image_b64", None)
+            content = msg_copy.get("content", "")
+            if img_b64:
+                content = [
+                    {"type": "text", "text": content},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                ]
+            msg_copy["content"] = content
+            formatted_messages.append(msg_copy)
+
+        payload = {
+            "model": model,
+            "messages": formatted_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+
+        session = await self._get_http()
+        async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                logger.error(f"NVIDIA '{model}' failed with status {resp.status}: {body[:150]}")
+                raise RuntimeError(f"HTTP {resp.status}: {body[:100]}")
+            async for line_bytes in resp.content:
+                line_str = line_bytes.decode("utf-8", errors="replace").strip()
+                if not line_str or line_str.startswith(":"):
+                    continue
+                if line_str == "data: [DONE]":
+                    break
+                if line_str.startswith("data: "):
+                    data_json = line_str[6:].strip()
+                    try:
+                        chunk_data = json.loads(data_json)
+                        choices = chunk_data.get("choices", [])
+                        if choices and isinstance(choices, list):
+                            delta = choices[0].get("delta", {})
+                            content = delta.get("content")
+                            if content:
+                                yield content
+                    except json.JSONDecodeError:
+                        continue
 
     async def _stream_response(self, payload: dict) -> AsyncIterator[str]:
         """Parse SSE stream and yield token chunks from local llama-server."""

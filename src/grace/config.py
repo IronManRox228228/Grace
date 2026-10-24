@@ -49,6 +49,9 @@ class Config:
     # llama-server & Gemini Cloud LLM
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     gemini_model_name: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL_NAME", "gemini-3.1-flash-lite"))
+    # NVIDIA NIM fallback: used only when Gemini returns HTTP 429 (quota).
+    nvidia_api_key: str = field(default_factory=lambda: os.getenv("NVIDIA_API_KEY", ""))
+    nvidia_model_name: str = field(default_factory=lambda: os.getenv("NVIDIA_MODEL_NAME", "nemotron-3.5-lightning-30b-a3b"))
     use_cloud_llm: bool = field(default_factory=lambda: os.getenv("USE_CLOUD_LLM", "false").lower() in ("true", "1", "yes"))
     allow_cloud_screenshots: bool = field(default_factory=lambda: os.getenv("ALLOW_CLOUD_SCREENSHOTS", "false").lower() in ("true", "1", "yes"))
     ws_auth_token: str = field(default_factory=lambda: os.getenv("GRACE_WS_TOKEN", ""))

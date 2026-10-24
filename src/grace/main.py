@@ -226,6 +226,8 @@ class GraceApp:
             base_url=self.config.llama_server_url,
             api_key=api_key,
             model_name=self.config.gemini_model_name,
+            nvidia_api_key=self.config.nvidia_api_key,
+            nvidia_model_name=self.config.nvidia_model_name,
             before_request=(lambda: self._model_swap.swap_to("planner")) if self._model_swap else None,
             allow_cloud_screenshots=self.config.allow_cloud_screenshots,
         )
