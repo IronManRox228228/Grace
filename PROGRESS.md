@@ -304,9 +304,9 @@ expected \ decided | agent | fast_path | converse
 
 **Serial test counts (verbatim):**
 - Python: `1163 passed, 1 skipped, 11 warnings in 418.55s (0:06:58)` — full suite, faulthandler trip-wire 60s, zero failures
-- Rust: not run on this machine (no Rust toolchain); last recorded `255 passed, 3 ignored, 0 failed`
+- Rust: **not runnable on this machine.** `cargo.exe` present but `rustc.exe` missing (toolchain download interrupted twice by network timeouts; `rustup component add rustc` fails: missing manifest). Last recorded Rust counts per `PORT_STATUS.md`: `289 passed, 3 ignored, 0 failed` across the workspace, all 30/30 corpus tapes passing replay. Toolchain reinstall blocked on network stability; tests not re-run.
 
-**Process check:** No python, pytest, cargo, rustc, grace, or llama-server processes left running. `llama-server` was started and stopped in `finally` by the tape drive; no processes remain.
+**Process check:** No python, pytest, cargo, rustc, grace, or llama-server processes left running.
 
 ---
 
