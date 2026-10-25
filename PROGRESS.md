@@ -1399,3 +1399,29 @@ Commit `f215406` `feat(intent): open X in my browser shortcut opens the URL dire
 ---
 
 
+
+### Item 8 — real-run capture — DONE
+
+Commit `a65d076` `feat(tooling): add scripts/real_run.ps1 for real-desktop run captures (real-desktop #8)` — pushed to origin/main.
+
+**Change:** Added `scripts/real_run.ps1 "<request>"`. It runs
+`grace.exe --text "<request>" --no-tts` and saves each run to
+`runs/<timestamp>/`:
+- the full log (log.txt),
+- each step's screenshot (step_NNN/screenshot.png),
+- each step's raw planner output (step_NNN/planner_*.json),
+- each step's element count (step_NNN/element_count.txt).
+
+The per-step data is captured live from Grace's WebSocket event stream
+(ws://127.0.0.1:8765) while grace.exe runs (best effort - if Grace does not
+emit a field, that file is simply not written; the full log is always
+captured). PowerShell 5.1 syntax was parse-checked; the script itself cannot
+be executed here because Rule 1 prohibits driving the real desktop in this
+session.
+
+Added `runs/` to `.gitignore` - the user reviews these, and Claude reads them.
+
+**Note:** Not executed against the real desktop (Rule 1) and the per-step
+event schema was not observable without a live run, so treat the WebSocket
+capture as best effort and review the first real run's output.
+
