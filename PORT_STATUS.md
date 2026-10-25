@@ -84,7 +84,7 @@ cargo test -p grace-win --lib -- --ignored --test-threads=1
   JSON objects/arrays, box tokens, tuples), bounds validation, screen DPI scaling,
   `describe_target` phrase building, and `Grounder::locate` round-trip.
 - **`grace-core::planner`** (`agent/planner.py`): `PlannedStep`,
-  `needs_grounding`'s exact three-way gate (has `element_id`? has both `x`
+  `needs_grounding`'s exact three-way gate (has `element_id` known to `rendered_element_ids`? has both `x`
   and `y`? else does it name a `target_name`/`describe`?), the full system
   prompt, `build_prompt`'s section ordering, the per-goal call budget
   (0/negative = unlimited, matching `math.inf`), and `parse_planned_step`'s
