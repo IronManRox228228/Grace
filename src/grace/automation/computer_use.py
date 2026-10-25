@@ -131,6 +131,64 @@ def _settled_state() -> Optional[dict[str, Any]]:
     return _screen_state()
 
 
+def _read_scroll_percent(x: Optional[int], y: Optional[int]) -> Optional[tuple[float, float]]:
+    """(vertical, horizontal) scroll percent of the scrollable under (x, y).
+
+    Reads UIA's ScrollPattern on the element at the point, or the nearest
+    scrollable ancestor. None when UIA cannot say; either value is -1 when
+    that axis does not scroll.
+    """
+    if x is None or y is None:
+        return None
+    try:
+        import ctypes.wintypes
+
+        from grace.perception.uia_provider import _get_uia
+
+        uia = _get_uia()
+        if uia is None:
+            return None
+        client = uia.client
+        element = uia.uia.ElementFromPoint(ctypes.wintypes.POINT(int(x), int(y)))
+        for _ in range(12):
+            if element is None:
+                return None
+            try:
+                pattern = element.GetCurrentPattern(client.UIA_ScrollPatternId)
+            except Exception:
+                pattern = None
+            if pattern:
+                scroll = pattern.QueryInterface(client.IUIAutomationScrollPattern)
+                return (
+                    float(scroll.CurrentVerticalScrollPercent),
+                    float(scroll.CurrentHorizontalScrollPercent),
+                )
+            element = uia.walker.GetParentElement(element)
+    except Exception:
+        return None
+    return None
+
+
+def _scroll_position_fact(
+    before: Optional[tuple[float, float]],
+    after: Optional[tuple[float, float]],
+    vertical: bool = True,
+) -> str:
+    """One plain sentence about where the scroll bar was and is, or ''."""
+    if before is None or after is None:
+        return ""
+    axis = 0 if vertical else 1
+    was, now = before[axis], after[axis]
+    if was < 0 or now < 0:
+        return ""
+    text = f"Scroll position {round(was)}% -> {round(now)}%"
+    if now >= 99.5:
+        text += " (at the bottom)" if vertical else " (at the right edge)"
+    elif now <= 0.5:
+        text += " (at the top)" if vertical else " (at the left edge)"
+    return text
+
+
 def _change_verdict(
     before: Optional[dict[str, Any]],
     after: Optional[dict[str, Any]],
@@ -1137,6 +1195,7 @@ class ComputerUse:
             scroll_y = 500
 
         before = _screen_state()
+        pos_before = _read_scroll_percent(x, y)
         try:
             if explicit_coords and x is not None and y is not None:
                 pyautogui.scroll(-scroll_y, x=x, y=y)
@@ -1162,13 +1221,19 @@ class ComputerUse:
         # against pre-scroll rectangles for the rest of the 1.5s cache TTL.
         _invalidate_graph()
         verified, evidence = _change_verdict(before, _settled_state())
+        message = f"Scrolled ({scroll_x}, {scroll_y or 0})"
+        position = _scroll_position_fact(
+            pos_before, _read_scroll_percent(x, y), vertical=bool(scroll_y) or not scroll_x
+        )
+        if position:
+            message = f"{message}. {position}"
         return {
             "ok": True,
             "sent": True,
             "verified": verified,
             "evidence": evidence,
             "action": "scroll",
-            "message": f"Scrolled ({scroll_x}, {scroll_y or 0})",
+            "message": message,
         }
 
     def _drag(self, params: dict[str, Any]) -> dict[str, Any]:
