@@ -1075,6 +1075,126 @@ class ComputerUse:
         graph = PerceptionEngine.get_graph_builder().get()
         return graph.by_id(element_id) if graph is not None else None
 
+    @classmethod
+    def _verify_foreground(cls, target_hwnd: int, timeout_ms: int = 500) -> tuple[bool, int, str]:
+        """Poll GetForegroundWindow for up to timeout_ms if transient 0 is returned."""
+        import win32gui
+
+        end_time = time.monotonic() + (timeout_ms / 1000.0)
+        fg = 0
+        actual_title = ""
+        while True:
+            try:
+                fg = win32gui.GetForegroundWindow()
+            except Exception:
+                fg = 0
+            if fg == target_hwnd:
+                try:
+                    actual_title = normalize_title(win32gui.GetWindowText(fg) or "")
+                except Exception:
+                    actual_title = ""
+                return True, fg, actual_title
+            if fg != 0:
+                try:
+                    actual_title = normalize_title(win32gui.GetWindowText(fg) or "")
+                except Exception:
+                    actual_title = ""
+                return False, fg, actual_title
+            # Transient 0: switch in progress, re-poll
+            if time.monotonic() >= end_time:
+                break
+            time.sleep(0.05)
+        return False, fg, actual_title
+
+    @classmethod
+    def _apply_activation_technique(cls, hwnd: int, technique: int) -> None:
+        """Execute one window activation technique."""
+        import ctypes
+        import win32api
+        import win32con
+        import win32gui
+        import win32process
+
+        user32 = ctypes.windll.user32
+        VK_MENU = 0x12
+        KEYEVENTF_KEYUP = 0x0002
+
+        if technique == 2:
+            # 2. AttachThreadInput to foreground thread, SetForegroundWindow + BringWindowToTop
+            fg_hwnd = 0
+            try:
+                fg_hwnd = win32gui.GetForegroundWindow()
+            except Exception:
+                pass
+            fg_thread = 0
+            if fg_hwnd:
+                try:
+                    fg_thread, _ = win32process.GetWindowThreadProcessId(fg_hwnd)
+                except Exception:
+                    pass
+            cur_thread = win32api.GetCurrentThreadId()
+            attached = False
+            if fg_thread and fg_thread != cur_thread:
+                try:
+                    attached = bool(user32.AttachThreadInput(cur_thread, fg_thread, True))
+                except Exception:
+                    attached = False
+            try:
+                win32gui.SetForegroundWindow(hwnd)
+                win32gui.BringWindowToTop(hwnd)
+            finally:
+                if attached:
+                    try:
+                        user32.AttachThreadInput(cur_thread, fg_thread, False)
+                    except Exception:
+                        pass
+        elif technique == 3:
+            # 3. synthetic Alt down/up, then SetForegroundWindow
+            user32.keybd_event(VK_MENU, 0, 0, 0)
+            user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+            win32gui.SetForegroundWindow(hwnd)
+        elif technique == 5:
+            # 5. SwitchToThisWindow(hwnd, True)
+            user32.SwitchToThisWindow(hwnd, True)
+        elif technique == 4:
+            # 4. ShowWindow(SW_MINIMIZE) then SW_RESTORE
+            win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+            time.sleep(0.05)
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+
+    def _activate_hwnd(self, target_hwnd: int, wanted: str) -> dict[str, Any]:
+        """Activate target_hwnd trying techniques 2 -> 3 -> 5 -> 4, verifying after each."""
+        last_fg_title = ""
+        for tech in (2, 3, 5, 4):
+            try:
+                self._apply_activation_technique(target_hwnd, tech)
+            except Exception as e:
+                logger.debug(f"Activation technique {tech} raised: {e}")
+                continue
+
+            verified, fg_hwnd, fg_title = self._verify_foreground(target_hwnd, timeout_ms=500)
+            last_fg_title = fg_title
+            if verified:
+                return {
+                    "ok": True,
+                    "sent": True,
+                    "verified": True,
+                    "evidence": f"the foreground window is '{fg_title}'",
+                    "action": "activate",
+                    "message": f"Activated window: {wanted}",
+                    "hwnd": target_hwnd,
+                }
+
+        return {
+            "ok": False,
+            "sent": True,
+            "verified": False,
+            "evidence": f"the foreground window is '{last_fg_title}'",
+            "action": "activate",
+            "message": f"Could not focus {wanted}",
+            "error": f"Activation failed: target window did not come to foreground (current foreground is '{last_fg_title}')",
+        }
+
     def _activate(self, params: dict[str, Any]) -> dict[str, Any]:
         import win32gui
         import win32con
@@ -1090,9 +1210,8 @@ class ComputerUse:
         if hwnd:
             try:
                 if win32gui.IsWindow(hwnd):
-                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                    win32gui.SetForegroundWindow(hwnd)
-                    return self._activated(normalize_title(win32gui.GetWindowText(hwnd) or str(hwnd)))
+                    target_title = normalize_title(win32gui.GetWindowText(hwnd) or window_title or str(hwnd))
+                    return self._activate_hwnd(hwnd, target_title)
             except Exception as e:
                 logger.debug(f"Activate via hwnd failed: {e}")
 
@@ -1101,7 +1220,7 @@ class ComputerUse:
                 try:
                     if win32gui.IsWindowVisible(h):
                         t = normalize_title(win32gui.GetWindowText(h) or "")
-                        if window_title and (window_title in t or t in window_title):
+                        if window_title and (window_title.lower() in t.lower() or t.lower() in window_title.lower()):
                             results.append(h)
                 except Exception:
                     pass
@@ -1112,15 +1231,7 @@ class ComputerUse:
                 pass
             if matched_hwnds:
                 target_hwnd = matched_hwnds[0]
-                try:
-                    win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
-                    win32gui.SetForegroundWindow(target_hwnd)
-                    return self._activated(window_title)
-                except Exception as e:
-                    return {"ok": False, "sent": True, "verified": False,
-                            "action": "activate",
-                            "message": f"Could not focus {window_title}: {e}",
-                            "evidence": f"SetForegroundWindow raised: {e}"}
+                return self._activate_hwnd(target_hwnd, window_title)
 
         # Nothing matched. This used to report success, which meant the planner
         # was told the window it asked for was in front and then planned its
@@ -1138,24 +1249,18 @@ class ComputerUse:
 
     @staticmethod
     def _activated(wanted: str) -> dict[str, Any]:
-        """Did the window we asked for actually come to the front?
-
-        Windows refuses `SetForegroundWindow` from a process that does not own
-        the current foreground window, and does so *silently* - the call returns
-        and nothing happens. Every precondition that asks "is the right window
-        in front" is downstream of this one, so it checks rather than assumes.
-        """
+        """Did the window we asked for actually come to the front?"""
         time.sleep(SETTLE_SECONDS)
         actual = _foreground_title()
         wanted_l, actual_l = normalize_title(wanted).lower(), actual.lower()
         verified = bool(actual) and (wanted_l in actual_l or actual_l in wanted_l)
         return {
-            "ok": True,
+            "ok": verified,
             "sent": True,
             "verified": verified,
             "evidence": f"the foreground window is '{actual}'",
             "action": "activate",
-            "message": f"Activated window: {wanted}",
+            "message": f"Activated window: {wanted}" if verified else f"Could not focus {wanted}",
         }
 
     @staticmethod
