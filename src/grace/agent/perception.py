@@ -350,10 +350,11 @@ class ScreenSnapshot:
                 lines.append(f"[{elem.index}] {elem.control_type}: \"{elem.name}\" | Bounds: [{cl}, {ct}, {cr}, {cb}] -> `cua_click(element_index={elem.index}{window_str})`")
 
         if self.ocr_lines:
-            lines.append("\n### Screen Text (Top OCR Output):")
-            for i, line in enumerate(self.ocr_lines[:15], 1):  # Increased from 8 to 15
-                x, y, w, h = line.bounding_box
-                lines.append(f"{i}. \"{line.text}\" (x:{x}, y:{y}, w:{w}, h:{h})")
+            lines.append("\n### Screen Text (OCR Output):")
+            from grace.agent.planner import wrap_untrusted
+            ordered = sorted(self.ocr_lines, key=lambda l: (l.bounding_box[1] // 20, l.bounding_box[0]))[:15]
+            ocr_text = "\n".join(f"- {line.text.strip()}" for line in ordered if line.text.strip())
+            lines.append(wrap_untrusted(ocr_text))
         else:
             lines.append("\n### Screen Text: (No readable text detected)")
 
@@ -513,7 +514,13 @@ class PerceptionEngine:
         # none, and the raw length said otherwise.
         ocr_lines = []
         actionable = graph.actionable_count if graph is not None else 0
-        should_ocr = self._run_ocr and img_bytes and actionable < _min_actionable()
+        from grace.perception.elements import FRAME_PAGE
+        is_browser = False
+        if graph and getattr(graph, "elements", None):
+            is_browser = any(getattr(e, "frame", "") == FRAME_PAGE for e in graph.elements)
+        elif getattr(graph, "window", None) and getattr(graph.window, "is_browser", False):
+            is_browser = True
+        should_ocr = self._run_ocr and img_bytes and (actionable < _min_actionable() or is_browser)
         if should_ocr:
             with stage("ocr") as ocr_stage:
                 ocr_lines = self._perform_ocr(img_bytes, width, height)

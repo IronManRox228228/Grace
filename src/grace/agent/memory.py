@@ -957,8 +957,11 @@ class AgentMemory:
         ruled_out = self.scratchpad.get("ruled_out", [])
         if ruled_out:
             lines.append("Ruled out approaches:")
+            seen = set()
             for item in ruled_out:
-                lines.append(f"- {item}")
+                if item not in seen:
+                    seen.add(item)
+                    lines.append(f"- {item}")
         other_keys = {k: v for k, v in self.scratchpad.items() if k not in ("established", "ruled_out")}
         if other_keys:
             lines.append("Scratchpad data:")

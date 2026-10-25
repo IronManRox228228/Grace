@@ -124,30 +124,39 @@ def _change_verdict(
     before: Optional[dict[str, Any]],
     after: Optional[dict[str, Any]],
 ) -> tuple[Optional[bool], str]:
-    """Whether the screen changed, in the three-valued sense `verified` needs."""
+    """Whether the screen changed, naming what changed and what didn't."""
     if before is None or after is None:
-        return None, ("the input was sent, but this window reports nothing that "
-                      "could confirm it - check visually or by its side effects")
+        return None, "input was sent, but this window reports nothing to check"
 
     changes = []
+    unchanged = []
+
+    # Window title change
     if after["window"] != before["window"]:
-        changes.append(f"the active window is now '{after['window']}'")
+        changes.append(f"Window changed to '{after['window']}'")
+    else:
+        unchanged.append("Page URL/title unchanged")
+
+    # Focus
     if after["focus_id"] != before["focus_id"]:
-        changes.append(f"keyboard focus moved to '{after['focus_name']}'")
+        name = after["focus_name"] or f"[{after['focus_id']}]"
+        changes.append(f"Focus moved to [{after['focus_id']}] '{name}'")
     elif after["focus_value"] != before["focus_value"]:
-        changes.append(f"the focused field now reads '{after['focus_value'][:60]}'")
+        changes.append(f"Focused field now reads '{after['focus_value'][:60]}'")
+    else:
+        unchanged.append("focus unchanged")
+
+    # Element count
     if after["elements"] != before["elements"]:
-        changes.append(
-            f"the window went from {before['elements']} to {after['elements']} elements"
-        )
+        changes.append(f"Element count {before['elements']} -> {after['elements']}")
+    else:
+        unchanged.append(f"element count {after['elements']}")
 
     if changes:
-        return True, "; ".join(changes)
+        return True, ". ".join(changes) + "."
     if before["blind"] or after["blind"]:
-        return None, ("nothing observable changed, but this window does not report "
-                      "its contents, so that is not evidence either way")
-    return False, ("nothing changed after settling: same window, same focus, "
-                   "same elements")
+        return None, "nothing observable changed, but this window does not report its contents"
+    return False, f"Screen unchanged after action ({', '.join(unchanged)})."
 
 
 def _contract(result: dict[str, Any]) -> dict[str, Any]:

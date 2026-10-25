@@ -973,8 +973,6 @@ class AgentLoop:
             if action_failed:
                 fail_count = sum(1 for s in failed_history if _are_actions_equivalent(s, step)) + 1
                 failed_history.append(step)
-                reason = _failure_reason(exec_result) or inner.get("evidence") or "action had no observable effect"
-                memory.rule_out(f"{step.action} with {_short_params(step.params)}", reason)
                 if fail_count >= 2:
                     action_name = step.action.replace("cua_", "")
                     question = f"I'm having trouble with {action_name}. Would you like me to try a different approach, or do something else?"
@@ -1159,7 +1157,7 @@ class AgentLoop:
         reason = _failure_reason(last_result)
 
         if reason:
-            lines.append(f"IT FAILED: {reason}")
+            lines.append(f"Tool error: {reason}")
             lines.append("Do not repeat this action unchanged. Try a different element or a different approach.")
         else:
             tool_output = ""
@@ -1194,12 +1192,12 @@ class AgentLoop:
         verified = inner.get("verified")
         evidence = inner.get("evidence") or ""
         if verified is True:
-            lines.append(f"EFFECT CONFIRMED: {evidence}")
+            lines.append(f"What changed: {evidence}")
         elif verified is False and not reason:
-            lines.append(f"NO EFFECT: {evidence}")
+            lines.append(f"Screen unchanged: {evidence}")
             lines.append("The input was sent but changed nothing. Try a different target.")
         elif verified is None and inner.get("sent"):
-            lines.append(f"EFFECT UNKNOWN: {evidence}")
+            lines.append(f"Observation: {evidence}")
             lines.append("Do not treat that as failure. Look at the screen description "
                          "below and judge for yourself.")
 
@@ -1223,7 +1221,7 @@ class AgentLoop:
                 repeat_count, f"{repeat_count} times"
             )
             lines.append(
-                f"NO VISIBLE EFFECT: the screen has not changed after this action "
+                f"The screen has not changed after this action "
                 f"was tried {ordinal} in a row. "
                 f"You must choose a different action or declare the goal complete."
             )
@@ -1572,7 +1570,7 @@ def _are_actions_equivalent(step_a: Optional[PlannedStep], step_b: Optional[Plan
 
 def _short_params(params: dict[str, Any]) -> str:
     """Enough of a step's parameters to recognise it again, and no more."""
-    interesting = {k: v for k, v in params.items() if k != "window"}
+    interesting = {k: v for k, v in params.items() if k != "window" and not k.startswith("_")}
     text = str(interesting)
     return text if len(text) <= 90 else text[:87] + "…"
 

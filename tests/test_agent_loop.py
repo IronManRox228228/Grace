@@ -296,7 +296,7 @@ class TestExpectationFeedback:
         step = PlannedStep(action="cua_type_text", params={}, expect="the search box has my query")
         result = {"status": "ok", "result": {"ok": False, "error": "Focus is on 'Address bar'"}}
         note = loop._expectation_note(step, result, snapshot())
-        assert "IT FAILED" in note
+        assert "Tool error" in note
         assert "Address bar" in note
         assert "Do not repeat this action unchanged" in note
 
@@ -307,13 +307,13 @@ class TestExpectationFeedback:
                                       snapshot(title="YouTube - Edge"))
         assert "the box is focused" in note
         assert "YouTube - Edge" in note
-        assert "IT FAILED" not in note
+        assert "Tool error" not in note
 
     def test_error_status_counts_as_failure(self):
         loop, _, _ = make_loop([])
         step = PlannedStep(action="open_app", params={}, expect="app opens")
         note = loop._expectation_note(step, {"status": "error", "error": "not found"}, snapshot())
-        assert "IT FAILED" in note and "not found" in note
+        assert "Tool error" in note and "not found" in note
 
     def test_focused_element_is_included(self):
         graph = MagicMock()
@@ -338,7 +338,7 @@ class TestExpectationFeedback:
         ], dispatch_result={"status": "ok", "result": {"ok": False, "error": "nothing there"}})
         asyncio.run(loop.run(user_goal="click the box"))
         second_prompt = gemma.generate_text.call_args_list[1].kwargs["prompt"]
-        assert "IT FAILED" in second_prompt
+        assert "Tool error" in second_prompt
 
 
 class TestActionVerdict:
@@ -355,14 +355,14 @@ class TestActionVerdict:
     def test_a_confirmed_effect_is_reported(self):
         note = self.note_for({"ok": True, "sent": True, "verified": True,
                               "evidence": "keyboard focus moved to 'Search'"})
-        assert "EFFECT CONFIRMED" in note
+        assert "What changed" in note and "CONFIRMED" not in note
         assert "Search" in note
 
     def test_no_effect_is_reported_as_no_effect(self):
         note = self.note_for({"ok": True, "sent": True, "verified": False,
                               "evidence": "nothing changed after settling"})
-        assert "NO EFFECT" in note
-        assert "IT FAILED" not in note, (
+        assert "Screen unchanged" in note
+        assert "Tool error" not in note, (
             "the input was dispatched; calling that a failed action tells the "
             "planner to stop using a tool that works"
         )
@@ -373,16 +373,16 @@ class TestActionVerdict:
         # verdict is what stopped a run that was succeeding.
         note = self.note_for({"ok": True, "sent": True, "verified": None,
                               "evidence": "this window does not report its contents"})
-        assert "EFFECT UNKNOWN" in note
+        assert "Observation" in note
         assert "Do not treat that as failure" in note
-        assert "NO EFFECT" not in note and "IT FAILED" not in note
+        assert "Screen unchanged" not in note and "Tool error" not in note
 
     def test_a_refused_action_is_still_a_failure(self):
         note = self.note_for({"ok": False, "sent": False, "verified": False,
                               "error": "Focus is on 'Address bar'",
                               "evidence": "no keystrokes were sent"})
-        assert "IT FAILED" in note
-        assert "NO EFFECT" not in note, (
+        assert "Tool error" in note
+        assert "Screen unchanged" not in note, (
             "an action that never left the building has no effect to report on"
         )
 
@@ -882,13 +882,13 @@ class TestNoEffectRepeatNote:
         # attempt, and the note must not falsely claim there was no effect.
         loop, _, _ = make_loop([])
         note = self._note_for_repeat(loop, repeat_count=0)
-        assert "NO VISIBLE EFFECT" not in note
+        assert "The screen has not changed" not in note and "NO VISIBLE EFFECT" not in note
 
     def test_second_time_note_says_no_visible_effect(self):
         # repeat_count=1 means the screen was identical after the first try.
         loop, _, _ = make_loop([])
         note = self._note_for_repeat(loop, repeat_count=1)
-        assert "NO VISIBLE EFFECT" in note
+        assert "The screen has not changed" in note and "NO VISIBLE EFFECT" not in note
         assert "different action" in note
 
     def test_ordinal_wording_counts_the_attempts(self):
@@ -909,8 +909,8 @@ class TestNoEffectRepeatNote:
             snapshot(),
             repeat_count=1,
         )
-        assert "IT FAILED" in note
-        assert "NO VISIBLE EFFECT" not in note
+        assert "Tool error" in note
+        assert "The screen has not changed" not in note and "NO VISIBLE EFFECT" not in note
 
     def test_repeat_note_reaches_planner_prompt_on_frozen_screen(self):
         """The note must arrive in the second plan call when the screen is frozen."""
@@ -924,7 +924,7 @@ class TestNoEffectRepeatNote:
         # Two planning calls were made; the second must carry the no-effect note.
         assert gemma.generate_text.call_count == 2
         second_prompt = gemma.generate_text.call_args_list[1].kwargs["prompt"]
-        assert "NO VISIBLE EFFECT" in second_prompt
+        assert "The screen has not changed" in second_prompt and "NO VISIBLE EFFECT" not in second_prompt
         assert "different action" in second_prompt
 
     def test_three_identical_repeats_end_with_spoken_message(self):
@@ -993,7 +993,7 @@ class TestToolResultFeedback:
         assert "<<<UNTRUSTED_DATA_START" in last_step_section
         assert "report.pdf" in last_step_section
         # Non-screen tool with successful result must not falsely claim NO VISIBLE EFFECT
-        assert "NO VISIBLE EFFECT" not in last_step_section
+        assert "The screen has not changed" not in last_step_section and "NO VISIBLE EFFECT" not in last_step_section
 
     def test_tool_result_is_capped_in_size_and_defanged(self):
         safe_path = os.path.join(os.path.expanduser("~"), "Documents", "huge.pdf").replace("\\", "/")
