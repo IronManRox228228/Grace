@@ -105,6 +105,7 @@ class PlannedStep:
     is_completed: bool = False
     final_response: str = ""
     user_update: str = ""
+    rendered_element_ids: Optional[set[int]] = None
 
     @property
     def needs_grounding(self) -> bool:
@@ -175,6 +176,28 @@ Respond with ONLY one JSON object, no code fences, no commentary:
 {{"thought": "why this step", "action": "<tool name>", "params": {{...}}, "expect": "what should be true next", "is_completed": false, "user_update": "short phrase shown to the user", "final_response": ""}}"""
 
 
+_RENDERED_ID_PATTERNS = [
+    re.compile(r'"id"\s*:\s*(\d+)'),
+    re.compile(r'\[(\d+)\]'),
+    re.compile(r'element_index\s*=\s*(\d+)'),
+    re.compile(r'element_id\s*=\s*(\d+)'),
+]
+
+
+def extract_rendered_element_ids(text: str) -> set[int]:
+    """Extract all element IDs that appear in rendered element prompts."""
+    if not text:
+        return set()
+    found: set[int] = set()
+    for pattern in _RENDERED_ID_PATTERNS:
+        for match in pattern.finditer(text):
+            try:
+                found.add(int(match.group(1)))
+            except (ValueError, TypeError):
+                pass
+    return found
+
+
 class Planner:
     """Wraps the cloud model with a per-goal call budget and JSON parsing."""
 
@@ -183,6 +206,7 @@ class Planner:
         # 0 or negative disables the cap entirely.
         self._max_calls = max_calls if max_calls and max_calls > 0 else math.inf
         self._calls = 0
+        self._last_rendered_ids: set[int] = set()
         self._system_prompt = get_planner_system_prompt()
         self.run_capture = run_capture
 
@@ -298,6 +322,12 @@ class Planner:
             available_secrets=available_secrets,
         )
 
+        if hide_tree:
+            rendered_element_ids = set()
+        else:
+            rendered_element_ids = extract_rendered_element_ids(elements_prompt)
+        self._last_rendered_ids = set(rendered_element_ids)
+
         self._calls += 1
         # An image only when the caller has one worth sending - a marked
         # screenshot for a window with no readable element list. When the list
@@ -333,6 +363,41 @@ class Planner:
         step, error_reason = parse_planned_step_with_reason(raw)
         if step is None:
             logger.warning(f"Planner output was not parseable ({error_reason}): {raw[:300]}")
+            return None
+
+        step.rendered_element_ids = set(rendered_element_ids)
+        step.params["_rendered_element_ids"] = set(rendered_element_ids)
+        if hide_tree:
+            step.params["_target_guidance"] = True
+
+        raw_id = step.params.get("element_id")
+        if raw_id is not None:
+            try:
+                eid = int(raw_id)
+                if eid not in rendered_element_ids:
+                    target_name = step.params.get("target_name") or step.params.get("name")
+                    logger.info(
+                        f"Dropping unshown element_id {eid} (rendered in prompt: {rendered_element_ids}); "
+                        f"resolving by target_name='{target_name}' or coordinates"
+                    )
+                    step.params.pop("element_id", None)
+            except (ValueError, TypeError):
+                step.params.pop("element_id", None)
+
+        raw_idx = step.params.get("element_index")
+        if raw_idx is not None:
+            try:
+                eidx = int(raw_idx)
+                if eidx not in rendered_element_ids:
+                    target_name = step.params.get("target_name") or step.params.get("name")
+                    logger.info(
+                        f"Dropping unshown element_index {eidx} (rendered in prompt: {rendered_element_ids}); "
+                        f"resolving by target_name='{target_name}' or coordinates"
+                    )
+                    step.params.pop("element_index", None)
+            except (ValueError, TypeError):
+                step.params.pop("element_index", None)
+
         return step
 
 

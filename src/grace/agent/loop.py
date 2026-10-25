@@ -704,6 +704,10 @@ class AgentLoop:
             # Pin element IDs to the snapshot the planner saw
             if snapshot and getattr(snapshot, "graph", None) is not None:
                 step.params["_graph"] = snapshot.graph
+            if hasattr(step, "rendered_element_ids") and step.rendered_element_ids is not None:
+                step.params["_rendered_element_ids"] = set(step.rendered_element_ids)
+            if hide_tree:
+                step.params["_target_guidance"] = True
 
             # Checked again here, not just at the top of the loop: planning
             # (and grounding, above) can take long enough that a "stop" heard

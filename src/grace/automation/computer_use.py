@@ -417,6 +417,13 @@ class ComputerUse:
         window = _normalize_window(window_raw)
         target_name = params.get("target_name") or params.get("name") or params.get("label")
         element_index = _to_int(params.get("element_index"))
+        if params.get("target_guidance") or params.get("_target_guidance"):
+            element_index = None
+        elif "_rendered_element_ids" in params:
+            rendered = params.get("_rendered_element_ids")
+            rendered_set = set(rendered) if rendered is not None else set()
+            if element_index is not None and element_index not in rendered_set:
+                element_index = None
         relative_to = params.get("relative_to")
         direction = params.get("direction", "left").lower().strip()
         click_count = _to_int(params.get("click_count")) or 1
@@ -477,11 +484,10 @@ class ComputerUse:
         if graph_target is not None:
             from grace.perception.elements import NAME_MATCH_THRESHOLD, name_match_score
             # R10: never click an element whose text does not plausibly match
-            # the target_name the planner asked for. An explicit element id is
-            # authoritative (the planner named the id itself), so only gate on
-            # name-based resolution. Return an error that names the mismatch.
-            element_id_given = params.get("element_id") is not None or element_index is not None
-            if target_name and not element_id_given and name_match_score(target_name, graph_target) < NAME_MATCH_THRESHOLD:
+            # the target_name the planner asked for. Even for a shown id,
+            # apply the name-mismatch guard when target_name is given, and
+            # refuse on mismatch.
+            if target_name and name_match_score(target_name, graph_target) < NAME_MATCH_THRESHOLD:
                 logger.warning(
                     f"_click mismatch: resolved [{graph_target.id}] {graph_target.role} "
                     f"'{graph_target.name}' does not plausibly match target '{target_name}'"
@@ -561,6 +567,24 @@ class ComputerUse:
             or params.get("label")
             or params.get("into")
         )
+
+        if params.get("target_guidance") or params.get("_target_guidance"):
+            if element_id is not None:
+                logger.info(
+                    f"_target_from_params: target-guidance mode; dropping element_id={element_id}; "
+                    f"resolving by target_name='{target_name}'"
+                )
+                element_id = None
+        elif "_rendered_element_ids" in params:
+            rendered = params.get("_rendered_element_ids")
+            rendered_set = set(rendered) if rendered is not None else set()
+            if element_id is not None and element_id not in rendered_set:
+                logger.info(
+                    f"_target_from_params: dropping unshown element_id={element_id} "
+                    f"(rendered: {rendered_set}); resolving by target_name='{target_name}'"
+                )
+                element_id = None
+
         return element_id, target_name
 
     def _resolve_from_graph(self, params: dict[str, Any], element_index, target_name):
@@ -585,6 +609,23 @@ class ComputerUse:
             element_id = int(element_id) if element_id is not None else None
         except (TypeError, ValueError):
             element_id = None
+
+        if params.get("target_guidance") or params.get("_target_guidance"):
+            if element_id is not None:
+                logger.info(
+                    f"_resolve_from_graph: target-guidance mode; dropping element_id={element_id} "
+                    f"and resolving by target_name='{target_name}'"
+                )
+                element_id = None
+        elif "_rendered_element_ids" in params:
+            rendered = params.get("_rendered_element_ids")
+            rendered_set = set(rendered) if rendered is not None else set()
+            if element_id is not None and element_id not in rendered_set:
+                logger.info(
+                    f"_resolve_from_graph: dropping unshown element_id={element_id} "
+                    f"(rendered: {rendered_set}); resolving by target_name='{target_name}'"
+                )
+                element_id = None
 
         found = graph.resolve(
             element_id=element_id,
