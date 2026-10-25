@@ -133,7 +133,7 @@ def redact_data(data: Any, username: str = "", home: str = "") -> Any:
 
 
             # Redact password field values in element snapshots
-            if is_pwd_element and k_lower in ("value", "text"):
+            if is_element_node and is_pwd_element and k_lower in ("value", "text"):
                 new_dict[k] = (
                     "[password field, filled]"
                     if (v and v != "[password field, empty]")

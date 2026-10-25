@@ -280,6 +280,14 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
         ],
         is_system=True,
     ),
+    ToolDefinition(
+        name="forget_secret",
+        description="Delete a saved secret password by name (e.g. 'gmail').",
+        params=[
+            ToolParam("name", "The name of the saved secret to forget", True, None, "str"),
+        ],
+        is_system=True,
+    ),
 ]
 
 ALL_TOOLS: list[ToolDefinition] = CUA_TOOLS + SYSTEM_TOOLS

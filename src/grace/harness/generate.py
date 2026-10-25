@@ -413,6 +413,7 @@ SIDE_EFFECTING_HANDLERS = (
     "_open_calculator", "_delete_file",
     "_undo", "_describe_screen", "_set_speech_rate",
     "_remember",
+    "_type_saved_secret", "_forget_secret",
 )
 
 

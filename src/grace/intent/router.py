@@ -66,6 +66,7 @@ class CapabilityRouter:
         "describe_screen",
         "set_speech_rate",
         "remember",
+        "forget_secret",
     }
 
     # Tools that inherently need to look at the screen and iterate.
@@ -77,6 +78,7 @@ class CapabilityRouter:
         "cua_secondary_action",
         "read_pdf",
         "summarize_pdf",
+        "type_saved_secret",
     }
 
     # Words that join a second clause onto the first. A second clause is a

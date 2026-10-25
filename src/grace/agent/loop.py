@@ -185,16 +185,15 @@ class AgentLoop:
         )
         self._max_seconds = _config_int("agent_max_seconds", DEFAULT_MAX_SECONDS, config=config)
         # Stronger model for escalation (Item 4: offline never claims a cloud model)
-        use_cloud = bool(getattr(config, "use_cloud_llm", False))
-        cfg_stronger = _config_str("stronger_planner_model", "", config=config)
-        if use_cloud and cfg_stronger:
-            self._stronger_model = cfg_stronger
-            self._escalation_label = cfg_stronger
+        self._stronger_model = _config_str(
+            "stronger_planner_model", DEFAULT_STRONGER_PLANNER_MODEL, config=config
+        )
+        use_cloud = bool(getattr(config, "use_cloud_llm", False)) if config is not None else False
+        if use_cloud and self._stronger_model:
+            self._escalation_label = self._stronger_model
         elif use_cloud:
-            self._stronger_model = DEFAULT_STRONGER_PLANNER_MODEL
             self._escalation_label = DEFAULT_STRONGER_PLANNER_MODEL
         else:
-            self._stronger_model = None
             self._escalation_label = "the same model (strategy-change note)" 
         self._pending: Optional[dict[str, Any]] = None
         self._cancel_requested = False
@@ -269,9 +268,8 @@ class AgentLoop:
         if self._ws_server:
             try:
                 await self._ws_server.emit({
-                    "type": "PillUpdate",
-                    "text": SAFE_HANDOFF_PILL_TEXT,
-                    "state": "paused",
+                    "type": "ToolExecutionStarted",
+                    "label": SAFE_HANDOFF_PILL_TEXT,
                 })
             except Exception:
                 pass
@@ -293,9 +291,7 @@ class AgentLoop:
         if self._ws_server:
             try:
                 await self._ws_server.emit({
-                    "type": "PillUpdate",
-                    "text": "",
-                    "state": "active",
+                    "type": "ToolExecutionFinished",
                 })
             except Exception:
                 pass
@@ -784,7 +780,7 @@ class AgentLoop:
                 expectation_note=expectation_note,
                 window_title=_window_title(snapshot),
                 image_b64=view.image_b64,
-                model=self._stronger_model or None,
+                model=self._stronger_model if (bool(getattr(self._config, 'use_cloud_llm', False)) if self._config is not None else False) else None,
                 user_facts=facts_ctx,
             )
         except (PlannerBudgetExceeded, RateLimitError):
