@@ -11,6 +11,7 @@ search box.
 
 import asyncio
 import logging
+import os
 import re
 import time
 from types import SimpleNamespace
@@ -185,15 +186,18 @@ class AgentLoop:
         )
         self._max_seconds = _config_int("agent_max_seconds", DEFAULT_MAX_SECONDS, config=config)
         # Stronger model for escalation (Item 4: offline never claims a cloud model)
-        self._stronger_model = _config_str(
-            "stronger_planner_model", DEFAULT_STRONGER_PLANNER_MODEL, config=config
-        )
         use_cloud = bool(getattr(config, "use_cloud_llm", False)) if config is not None else False
-        if use_cloud and self._stronger_model:
-            self._escalation_label = self._stronger_model
+        env_stronger = os.getenv("STRONGER_PLANNER_MODEL")
+        cfg_stronger = getattr(config, "stronger_planner_model", None) if config is not None else None
+        stronger_setting = cfg_stronger or env_stronger
+        if stronger_setting:
+            self._stronger_model = stronger_setting
+            self._escalation_label = stronger_setting
         elif use_cloud:
+            self._stronger_model = DEFAULT_STRONGER_PLANNER_MODEL
             self._escalation_label = DEFAULT_STRONGER_PLANNER_MODEL
         else:
+            self._stronger_model = None
             self._escalation_label = "the same model (strategy-change note)" 
         self._pending: Optional[dict[str, Any]] = None
         self._cancel_requested = False
@@ -780,7 +784,7 @@ class AgentLoop:
                 expectation_note=expectation_note,
                 window_title=_window_title(snapshot),
                 image_b64=view.image_b64,
-                model=self._stronger_model if (bool(getattr(self._config, 'use_cloud_llm', False)) if self._config is not None else False) else None,
+                model=self._stronger_model,
                 user_facts=facts_ctx,
             )
         except (PlannerBudgetExceeded, RateLimitError):

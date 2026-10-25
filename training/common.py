@@ -262,7 +262,16 @@ class CheckpointManager:
         ]
         if not ckpts:
             return None
-        return max(ckpts, key=lambda p: (p / "meta.json").stat().st_mtime)
+        def _sort_key(p: Path):
+            try:
+                step_num = int(p.name.rsplit("_", 1)[-1])
+            except ValueError:
+                step_num = -1
+            stat = (p / "meta.json").stat()
+            mtime_ns = getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1e9))
+            return (step_num, mtime_ns)
+
+        return max(ckpts, key=_sort_key)
 
     def load_latest_checkpoint_meta(self) -> Optional[Dict[str, Any]]:
         latest = self.find_latest_checkpoint()
