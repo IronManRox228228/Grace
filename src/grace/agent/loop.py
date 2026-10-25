@@ -157,16 +157,24 @@ class AgentLoop:
         start_grounding_backend=None,
         config: Optional[Any] = None,
         memory_store: Optional[Any] = None,
+        run_capture: Optional[Any] = None,
     ):
         self._config = config
         self._memory_store = memory_store
+        self._run_capture = run_capture
         self._gemma = gemma
         self._vision_llm = vision_llm or gemma
         self._dispatcher = dispatcher
         self._perception = perception or PerceptionEngine()
         self._ws_server = ws_server
         self._speaker = None
-        self._planner = planner or Planner(gemma, max_calls=_config_int("planner_max_calls_per_goal", 0, config=config))
+        self._planner = planner or Planner(
+            gemma,
+            max_calls=_config_int("planner_max_calls_per_goal", 0, config=config),
+            run_capture=run_capture,
+        )
+        if getattr(self._planner, "run_capture", None) is None and run_capture is not None:
+            self._planner.run_capture = run_capture
         coord_format = _config_str("grounder_coordinate_format", "0-1000", config=config)
         self._grounder = grounder or Grounder(
             self._vision_llm,
@@ -446,7 +454,24 @@ class AgentLoop:
             f"({'unlimited' if not limit or limit <= 0 else f'max {limit}'} steps, "
             f"{f'{self._max_seconds}s' if self._max_seconds > 0 else 'no time limit'})"
         )
-        return await self._continue(memory)
+        loop_start_time = time.monotonic()
+        res = await self._continue(memory)
+        if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
+            model_name = (
+                getattr(self._config, "llama_model_path", "")
+                or getattr(self._config, "llm_model", "")
+                or "default"
+            )
+            tier_name = getattr(self._config, "hardware_tier", "") or "default"
+            self._run_capture.record_summary(
+                goal=user_goal,
+                status=res.get("status", "unknown"),
+                step_count=len(memory.steps_taken),
+                total_time=round(time.monotonic() - loop_start_time, 3),
+                model=model_name,
+                tier=tier_name,
+            )
+        return res
 
     async def _continue(
         self,
@@ -479,6 +504,7 @@ class AgentLoop:
                 return self._timeout_result(memory)
 
             step_no = memory.current_iteration + 1
+            step_start_time = time.monotonic()
 
             async with stage(f"observe#{step_no}"):
                 snapshot = await self._observe()
@@ -487,6 +513,8 @@ class AgentLoop:
             # shown and what counts as "the view changed", and deriving those
             # from two separate renderings is how they drift apart.
             view = observe_for_planner(snapshot)
+            if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
+                self._run_capture.record_screenshot(step_no=step_no, snapshot=snapshot, view=view)
 
             # A changed view means the loop has learned something, so nothing it
             # tried before is a repeat any more.
@@ -520,6 +548,7 @@ class AgentLoop:
                         image_b64=view.image_b64,
                         hide_tree=hide_tree,
                         user_facts=facts_ctx,
+                        step_no=step_no,
                     )
                     plan_stage.detail(
                         f"{step.action if step else 'unparsed'} "
@@ -649,9 +678,14 @@ class AgentLoop:
             except Exception:
                 pass
 
+            grounded_point = None
             if step.needs_grounding or rung == "reground":
                 async with stage(f"ground#{step_no}"):
                     await self._ground(step, snapshot, force=(rung == "reground"))
+                    if step.params.get("x") is not None and step.params.get("y") is not None:
+                        grounded_point = (step.params["x"], step.params["y"])
+            elif step.params.get("x") is not None and step.params.get("y") is not None:
+                grounded_point = (step.params["x"], step.params["y"])
 
             # Pin element IDs to the snapshot the planner saw
             if snapshot and getattr(snapshot, "graph", None) is not None:
@@ -687,6 +721,21 @@ class AgentLoop:
             # Executed before the completion check so a final step that also
             # performs an action is never skipped.
             exec_result = await self._dispatch(step, memory)
+            step_end_time = time.monotonic()
+            if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
+                self._run_capture.record_step(
+                    step_no=step_no,
+                    action=step.action,
+                    params=step.params,
+                    grounded_point=grounded_point,
+                    result=exec_result,
+                    snapshot=snapshot,
+                    timings={
+                        "start": step_start_time,
+                        "end": step_end_time,
+                        "duration": round(step_end_time - step_start_time, 3),
+                    },
+                )
 
             # Verification of action effect
             inner = exec_result.get("result") if isinstance(exec_result.get("result"), dict) else {}

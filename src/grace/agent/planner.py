@@ -178,12 +178,13 @@ Respond with ONLY one JSON object, no code fences, no commentary:
 class Planner:
     """Wraps the cloud model with a per-goal call budget and JSON parsing."""
 
-    def __init__(self, llm, max_calls: int = DEFAULT_MAX_CALLS):
+    def __init__(self, llm, max_calls: int = DEFAULT_MAX_CALLS, run_capture: Optional[Any] = None):
         self._llm = llm
         # 0 or negative disables the cap entirely.
         self._max_calls = max_calls if max_calls and max_calls > 0 else math.inf
         self._calls = 0
         self._system_prompt = get_planner_system_prompt()
+        self.run_capture = run_capture
 
     @property
     def is_unlimited(self) -> bool:
@@ -272,6 +273,7 @@ class Planner:
         hide_tree: bool = False,
         user_facts: str = "",
         available_secrets: Optional[list[str]] = None,
+        step_no: Optional[int] = None,
     ) -> Optional[PlannedStep]:
         """Ask for the next step. Returns None if the model gave nothing usable.
 
@@ -314,6 +316,13 @@ class Planner:
             # output tokens.
             max_tokens=8192,
         )
+        if getattr(self, "run_capture", None) and self.run_capture.is_enabled:
+            call_step = step_no if step_no is not None else self._calls
+            self.run_capture.record_planner(
+                step_no=call_step,
+                prompt=prompt,
+                raw=raw or "",
+            )
         if not raw:
             logger.warning("Planner returned an empty response")
             return None

@@ -113,13 +113,19 @@ class GraceApp:
     Wires all components together and runs the main event loop.
     """
 
-    def __init__(self, tts_off: bool = False):
+    def __init__(self, tts_off: bool = False, capture_dir: Optional[Any] = None):
         self.config = Config()
         self._running = False
         self._llama_process: Optional[subprocess.Popen] = None
         self._audio_queue: Optional[queue.Queue] = None
         self._wake_event: Optional[asyncio.Event] = None
         self._last_spoken_text: str = ""
+
+        # Run capture (grace-prompts/run-capture.md)
+        from grace.harness.run_capture import RunCapture
+        self._run_capture = RunCapture(run_dir=capture_dir, enabled=bool(capture_dir))
+        if self._run_capture.is_enabled:
+            self._run_capture.start_logging()
 
         # Tier Detection & Central Thread Budget (PLAN §2, §4, Task 08)
         from grace.tier import detect_hardware_tier, HardwareTier
@@ -287,6 +293,7 @@ class GraceApp:
             ws_server=self.ws_server,
             vision_llm=self.vision_llm,
             config=self.config,
+            run_capture=self._run_capture,
         )
 
         # Persistent memory store (PLAN §12, Task 16)
@@ -1555,6 +1562,7 @@ class GraceApp:
         corrections before calling this; typed input needs none. There is
         no other gate: whatever route this takes, it is the only route."""
         self._last_raw_transcript = transcript
+        turn_start_time = time.monotonic()
 
         clean_transcript = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
 
@@ -1623,6 +1631,13 @@ class GraceApp:
             await self.ws_server.emit({"type": "UnderstandingFinished"})
             complexity = TaskComplexity.FAST_PATH
             trace.mark_event(f"route_{complexity.value}")
+
+        if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
+            self._run_capture.record_intent(
+                raw_output=intent_json or "",
+                intent=intent,
+                route=complexity.value,
+            )
             log.info(f"Fast-path executing tool '{intent.tool}' with params={intent.params}")
             async with trace.stage("exec"):
                 result = await self.dispatcher.execute(intent)
@@ -1691,6 +1706,13 @@ class GraceApp:
         complexity = CapabilityRouter.classify(transcript, intent)
         trace.mark_event(f"route_{complexity.value}")
 
+        if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
+            self._run_capture.record_intent(
+                raw_output=intent_json or "",
+                intent=intent,
+                route=complexity.value,
+            )
+
         if complexity == TaskComplexity.AGENTIC_GOAL:
             log.info(f"Routing goal '{transcript}' to Agentic ReAct Loop...")
             if intent and intent.tool in ("open_app", "cua_launch"):
@@ -1740,6 +1762,18 @@ class GraceApp:
                 async with trace.stage("speak"):
                     await self._speak_response(response_text)
                 trace.mark_event("spoken_reply_done")
+
+        if getattr(self, "_run_capture", None) and self._run_capture.is_enabled and not self._run_capture.has_summary:
+            model_name = getattr(self.config, "llama_model_path", "") or getattr(self.config, "llm_model", "")
+            tier_name = getattr(self.config, "hardware_tier", "")
+            self._run_capture.record_summary(
+                goal=transcript,
+                status="complete",
+                step_count=0,
+                total_time=round(time.monotonic() - turn_start_time, 3),
+                model=model_name,
+                tier=tier_name,
+            )
 
         await self.ws_server.emit({"type": "ConversationFinished"})
         return True
@@ -1921,6 +1955,7 @@ class GraceApp:
             transcript = self.corrections.apply(transcript)
 
         self._last_raw_transcript = transcript
+        turn_start_time = time.monotonic()
 
         clean_transcript = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
 
@@ -2077,6 +2112,9 @@ class GraceApp:
             log.info(f"Shutdown: closing session tape {recorder.dir}")
             recorder.close()
 
+        if getattr(self, "_run_capture", None):
+            self._run_capture.close()
+
         log.info("Grace stopped.")
 
 
@@ -2093,6 +2131,10 @@ def main():
     parser.add_argument(
         "--no-tts", action="store_true",
         help="Run without speech output (same behavior, silent).",
+    )
+    parser.add_argument(
+        "--capture-run", nargs="?", const="", default=None, metavar="DIR",
+        help="Capture full run data (log, screenshots, planner prompts/raw, step outcomes, summary) to DIR (default: runs/<timestamp>/).",
     )
     parser.add_argument(
         "--save-secret", default=None, metavar="NAME",
@@ -2196,7 +2238,19 @@ def main():
             print(f"No secret found with name '{args.forget_secret}'.")
             import sys; sys.exit(1)
 
-    app = GraceApp(tts_off=args.no_tts)
+    capture_dir = None
+    if args.capture_run is not None:
+        if args.capture_run == "":
+            from datetime import datetime
+            from pathlib import Path
+            repo_root = Path(__file__).resolve().parent.parent.parent
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            capture_dir = repo_root / "runs" / timestamp
+        else:
+            from pathlib import Path
+            capture_dir = Path(args.capture_run).resolve()
+
+    app = GraceApp(tts_off=args.no_tts, capture_dir=capture_dir)
     try:
         asyncio.run(app.start(initial_text=args.text))
     except KeyboardInterrupt:
