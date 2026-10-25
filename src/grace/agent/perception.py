@@ -379,6 +379,48 @@ class Observation:
         return self.mode == OBSERVABILITY_BLIND
 
 
+
+
+def extract_browser_url(snapshot: Any) -> Optional[str]:
+    """Read the browser's current URL from the address bar edit control with frame=chrome."""
+    if snapshot is None:
+        return None
+    graph = getattr(snapshot, "graph", None)
+    elements = None
+    if graph is not None:
+        elements = getattr(graph, "elements", None)
+    if elements is None:
+        elements = getattr(snapshot, "ui_elements", None)
+    if elements is None and isinstance(snapshot, dict):
+        elements = snapshot.get("elements") or snapshot.get("ui_elements")
+    if not elements:
+        return None
+
+    def _get(el, attr, default=""):
+        if isinstance(el, dict):
+            return el.get(attr, default)
+        return getattr(el, attr, default)
+
+    for el in elements:
+        frame = _get(el, "frame", "")
+        role = str(_get(el, "role", "") or _get(el, "control_type", "")).lower()
+        if frame == "chrome" and role in ("edit", "combobox"):
+            name = str(_get(el, "name", "") or "").lower()
+            val = str(_get(el, "value", "") or "").strip()
+            if "address" in name and val:
+                return val
+
+    for el in elements:
+        frame = _get(el, "frame", "")
+        role = str(_get(el, "role", "") or _get(el, "control_type", "")).lower()
+        if frame == "chrome" and role in ("edit", "combobox"):
+            val = str(_get(el, "value", "") or "").strip()
+            if val:
+                return val
+
+    return None
+
+
 def observe_for_planner(snapshot: "ScreenSnapshot", is_single: bool = False) -> Observation:
     """Choose an observation that matches what this window will support.
 

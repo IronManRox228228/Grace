@@ -276,14 +276,20 @@ class Planner:
         hide_tree: bool = False,
         user_facts: str = "",
         available_secrets: Optional[list[str]] = None,
+        page_url: Optional[str] = None,
     ) -> str:
         sections = [f"### Goal\n{goal}"]
         if user_facts:
             sections.append(f"### What you know about the user\n{wrap_untrusted(user_facts)}")
         if available_secrets:
             sections.append(f"### Saved secret passwords available to type by name\n" + ", ".join(available_secrets))
-        if window_title:
-            sections.append(f"### Active window\n{window_title}")
+        if window_title or page_url:
+            win_lines = []
+            if window_title:
+                win_lines.append(str(window_title))
+            if page_url:
+                win_lines.append(f"Page URL: {page_url}")
+            sections.append(f"### Active window\n" + "\n".join(win_lines))
         # Not "interactive elements": in blind mode this section is a legend for
         # a marked screenshot, and labelling it as a list of elements told the
         # model to look for a list that was not there.
@@ -334,6 +340,7 @@ class Planner:
         user_facts: str = "",
         available_secrets: Optional[list[str]] = None,
         step_no: Optional[int] = None,
+        page_url: Optional[str] = None,
     ) -> Optional[PlannedStep]:
         """Ask for the next step. Returns None if the model gave nothing usable.
 
@@ -356,6 +363,7 @@ class Planner:
             hide_tree=hide_tree,
             user_facts=user_facts,
             available_secrets=available_secrets,
+            page_url=page_url,
         )
 
         if hide_tree:

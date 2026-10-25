@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 from grace.agent.grounder import Grounder, describe_target, scale_to_screen
 from grace.agent.memory import AgentMemory
-from grace.agent.perception import PerceptionEngine, observe_for_planner
+from grace.agent.perception import PerceptionEngine, observe_for_planner, extract_browser_url
 from grace.agent.planner import Planner, PlannedStep, PlannerBudgetExceeded, parse_planned_step
 from grace.agent.safety import SafetyGuard
 from grace.automation.computer_use import normalize_title
@@ -506,6 +506,7 @@ class AgentLoop:
         last_observation: Optional[str] = None
         attempt_history: list[PlannedStep] = []
         failed_history: list[PlannedStep] = []
+        last_url: Optional[str] = None
         screen_still_loading = False
 
         while not memory.is_completed and not memory.is_exceeded:
@@ -542,6 +543,9 @@ class AgentLoop:
             # Built once and reused: the mode decides both what the planner is
             # shown and what counts as "the view changed", and deriving those
             # from two separate renderings is how they drift apart.
+            current_url = extract_browser_url(snapshot)
+            url_before = last_url
+            last_url = current_url
             view = observe_for_planner(snapshot, is_single=self._fleet_config.is_single)
             if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
                 self._run_capture.record_screenshot(step_no=step_no, snapshot=snapshot, view=view)
@@ -570,6 +574,8 @@ class AgentLoop:
                 repeat_count=last_repeat_count,
                 tool_error_count=last_tool_error_count,
                 screen_still_loading=screen_still_loading,
+                url_before=url_before,
+                url_now=current_url,
             )
 
             try:
@@ -587,6 +593,7 @@ class AgentLoop:
                         hide_tree=hide_tree,
                         user_facts=facts_ctx,
                         step_no=step_no,
+                        page_url=current_url,
                     )
                     plan_stage.detail(
                         f"{step.action if step else 'unparsed'} "
@@ -1135,6 +1142,8 @@ class AgentLoop:
         tool_error_count: int = 0,
         screen_still_loading: bool = False,
         is_single: Optional[bool] = None,
+        url_before: Optional[str] = None,
+        url_now: Optional[str] = None,
     ) -> str:
         """Report the previous step's stated expectation against what happened.
 
@@ -1230,6 +1239,14 @@ class AgentLoop:
         title = _window_title(snapshot)
         if title:
             lines.append(f"The active window is now: {title}")
+
+        if url_now is None and snapshot is not None:
+            url_now = extract_browser_url(snapshot)
+        if url_before and url_now:
+            lines.append(
+                f"URL before: {url_before} / URL now: {url_now} "
+                f"(note: some sites change content without changing the URL)"
+            )
 
         graph = getattr(snapshot, "graph", None)
         focused = graph.focused() if graph is not None else None

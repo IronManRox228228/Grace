@@ -96,7 +96,15 @@ def _screen_state() -> Optional[dict[str, Any]]:
         blind = not len(graph)
 
     focused = graph.focused()
-    return {
+    url = None
+    for el in getattr(graph, "elements", []) or []:
+        if getattr(el, "frame", "") == "chrome" and str(getattr(el, "role", "")).lower() in ("edit", "combobox"):
+            val = getattr(el, "value", "") or ""
+            if val.strip():
+                url = val.strip()
+                break
+
+    state = {
         "window": getattr(graph.window, "title", "") or "",
         "elements": len(graph),
         "focus_id": focused.id if focused is not None else None,
@@ -104,6 +112,9 @@ def _screen_state() -> Optional[dict[str, Any]]:
         "focus_value": focused.value if focused is not None else "",
         "blind": blind,
     }
+    if url:
+        state["url"] = url
+    return state
 
 
 def _settled_state() -> Optional[dict[str, Any]]:
@@ -136,6 +147,11 @@ def _change_verdict(
         changes.append(f"Window changed to '{after['window']}'")
     else:
         unchanged.append("Window title unchanged")
+
+    # URL change
+    if before.get("url") and after.get("url"):
+        if after["url"] != before["url"]:
+            changes.append(f"URL changed to '{after['url']}'")
 
     # Focus
     if after["focus_id"] != before["focus_id"]:
