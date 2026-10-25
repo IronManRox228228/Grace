@@ -334,3 +334,38 @@ def format_tools_for_prompt() -> str:
             lines.append("Parameters: None")
         lines.append("")
     return "\n".join(lines)
+
+
+# Known sites for the "open X in my browser" shortcut: the URL is opened directly
+# instead of driving the browser's address bar through the agent loop.
+SITE_URLS: dict[str, str] = {
+    "youtube": "https://www.youtube.com",
+    "youtube.com": "https://www.youtube.com",
+    "youtube music": "https://music.youtube.com",
+    "music.youtube.com": "https://music.youtube.com",
+    "google": "https://www.google.com",
+    "google.com": "https://www.google.com",
+    "gmail": "https://mail.google.com",
+    "gmail.com": "https://mail.google.com",
+    "reddit": "https://www.reddit.com",
+    "reddit.com": "https://www.reddit.com",
+    "github": "https://github.com",
+    "github.com": "https://github.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "x.com": "https://x.com",
+    "amazon": "https://www.amazon.com",
+    "amazon.com": "https://www.amazon.com",
+    "wikipedia": "https://www.wikipedia.org",
+    "wikipedia.org": "https://www.wikipedia.org",
+    "netflix": "https://www.netflix.com",
+    "spotify": "https://open.spotify.com",
+    "chatgpt": "https://chatgpt.com",
+    "bing": "https://www.bing.com",
+    "duckduckgo": "https://duckduckgo.com",
+}
+
+
+def site_url(site: str) -> Optional[str]:
+    """Resolve a spoken site name to a browser URL, or None if unknown."""
+    return SITE_URLS.get((site or "").strip().lower())

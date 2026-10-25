@@ -1,11 +1,18 @@
 """Test intent parser."""
 
-import sys
+import asyncio
 import os
+import types
+from unittest.mock import MagicMock
+
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from grace.intent.parser import IntentParser, Intent, IntentParseError
+from grace.intent.prompt import get_system_prompt
+from grace.intent.tools import site_url
+from grace.main import GraceApp
 
 
 class TestIntentParser:
@@ -132,3 +139,121 @@ class TestIntentParser:
         intent = self.parser.parse(json_str)
         assert intent.tool == "open_app"
         assert "tool" not in intent.params
+
+
+class TestSiteUrl:
+    """Known-site URL resolution for the "open X in my browser" shortcut."""
+
+    def test_youtube_music_resolves_to_music_url(self):
+        assert site_url("youtube music") == "https://music.youtube.com"
+
+    def test_site_url_is_case_insensitive_and_trims(self):
+        assert site_url("  YouTube Music  ") == "https://music.youtube.com"
+        assert site_url("YOUTUBE") == "https://www.youtube.com"
+
+    def test_unknown_site_returns_none(self):
+        assert site_url("no such site xyzzy") is None
+        assert site_url("") is None
+
+
+class TestIntentPromptKeepsBrowserUrl:
+    def test_prompt_guides_open_app_with_url_for_browser(self):
+        prompt = get_system_prompt()
+        assert "open_app" in prompt
+        assert "url" in prompt
+        assert "address bar" in prompt
+
+
+class _FakeWS:
+    def __init__(self):
+        self.emitted = []
+
+    async def emit(self, event):
+        self.emitted.append(event)
+
+
+class _FakeDispatcher:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, intent, confirmed=False):
+        self.calls.append(intent)
+        return {
+            "status": "ok",
+            "text": f"I've opened {intent.params.get('name')} in your browser.",
+        }
+
+
+class _Stage:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *args):
+        return False
+
+
+class _Trace:
+    def stage(self, name):
+        return _Stage()
+
+
+class _Stub:
+    def __init__(self):
+        self.ws_server = _FakeWS()
+        self.dispatcher = _FakeDispatcher()
+        self.spoken = None
+
+    async def _speak_response(self, text):
+        self.spoken = text
+
+
+class TestBrowserShortcut:
+    """Task 12: "open X in my browser" opens the site URL directly, before the
+    agent loop, so it never drives the address bar."""
+
+    def _make_stub(self):
+        return _Stub()
+
+    def test_shortcut_opens_site_url_directly(self):
+        stub = self._make_stub()
+        method = types.MethodType(GraceApp._open_site_in_browser_shortcut, stub)
+        result = asyncio.run(method(_Trace(), "open youtube music in my browser"))
+
+        assert result is True
+        assert len(stub.dispatcher.calls) == 1
+        intent = stub.dispatcher.calls[0]
+        assert intent.tool == "open_app"
+        assert intent.params["name"] == "youtube music"
+        assert intent.params["url"] == "https://music.youtube.com"
+        # The shortcut answers directly instead of running the agent loop.
+        assert stub.spoken is not None
+        assert any(e["type"] == "ConversationFinished" for e in stub.ws_server.emitted)
+
+    def test_shortcut_unknown_site_falls_through(self):
+        stub = self._make_stub()
+        method = types.MethodType(GraceApp._open_site_in_browser_shortcut, stub)
+        result = asyncio.run(method(_Trace(), "open no such site xyzzy in my browser"))
+
+        assert result is None  # fall through to normal routing
+        assert stub.dispatcher.calls == []
+
+    def test_shortcut_only_matches_whole_browser_request(self):
+        stub = self._make_stub()
+        method = types.MethodType(GraceApp._open_site_in_browser_shortcut, stub)
+        # Multi-step: opens the site, then searches - must reach the agent loop,
+        # not be shortcut to just opening the site.
+        result = asyncio.run(
+            method(
+                _Trace(),
+                "open youtube music in my browser, search for the song signal by home, and play it",
+            )
+        )
+        assert result is None
+        assert stub.dispatcher.calls == []
+
+    def test_shortcut_does_not_match_plain_open_app(self):
+        stub = self._make_stub()
+        method = types.MethodType(GraceApp._open_site_in_browser_shortcut, stub)
+        result = asyncio.run(method(_Trace(), "open calculator"))
+        assert result is None
+        assert stub.dispatcher.calls == []

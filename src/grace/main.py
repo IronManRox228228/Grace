@@ -1507,6 +1507,45 @@ class GraceApp:
                 return f"{base.rstrip()}\n\n### What you know about the user\n{wrap_untrusted(facts)}\n"
         return base
 
+    async def _open_site_in_browser_shortcut(self, trace, transcript: str) -> Optional[bool]:
+        """Shortcut: "open X in my browser" opens the site URL directly.
+
+        Returns True when the shortcut handled the request (caller returns),
+        None when this is not a browser-shortcut request (fall through to normal
+        routing). Only matches when the whole request is the shortcut, so
+        multi-step requests such as "open youtube music..., search for ...,
+        and play it" still reach the agent loop.
+        """
+        m = re.fullmatch(
+            r"\s*open\s+(.+?)\s+in\s+(?:my|the)\s+browser\s*", transcript, re.IGNORECASE
+        )
+        if not m:
+            return None
+        from grace.intent.tools import site_url
+
+        url = site_url(m.group(1))
+        if not url:
+            return None  # unknown site - fall through to normal routing
+
+        site = m.group(1).strip()
+        log.info(f"Browser shortcut: open {site} -> {url}")
+        intent = Intent(tool="open_app", params={"name": site, "url": url})
+        await self.ws_server.emit({"type": "UnderstandingStarted", "label": "Opening site..."})
+        try:
+            async with trace.stage("exec"):
+                result = await self.dispatcher.execute(intent)
+        except Exception as e:
+            log.error(f"Browser shortcut failed for {site}: {e}")
+            await self._speak_response(f"I couldn't open {site}.")
+            await self.ws_server.emit({"type": "ConversationFinished"})
+            return True
+        await self.ws_server.emit({"type": "UnderstandingFinished"})
+        response_text = result.get("text") or f"I've opened {site} in your browser."
+        if response_text:
+            await self._speak_response(response_text)
+        await self.ws_server.emit({"type": "ConversationFinished"})
+        return True
+
     async def _route_transcript(self, trace, transcript: str) -> bool:
         """Everything after a final transcript exists, identical for a
         heard string and a typed one: the stop/repeat reflexes, answers to
@@ -1559,6 +1598,12 @@ class GraceApp:
         if mem_handled is not None:
             await self.ws_server.emit({"type": "ConversationFinished"})
             return mem_handled
+
+        # Task 12 shortcut: "open X in my browser" opens the site URL directly
+        # instead of driving the browser's address bar through the agent loop.
+        shortcut = await self._open_site_in_browser_shortcut(trace, transcript)
+        if shortcut is not None:
+            return shortcut
 
         # Task 13 Decision Ladder Rung 1: Pattern fast-path (no model call required)
         ladder_fast_path = None
