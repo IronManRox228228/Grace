@@ -14,6 +14,7 @@ configurable timeout (default 3000ms), it proceeds anyway and notes
 import asyncio
 import inspect
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Sequence, Union
@@ -124,6 +125,10 @@ class ScreenSettler:
 
     def _default_sample(self) -> tuple[bytes, Optional[int]]:
         """Live capture: downscaled 64x64 grayscale desktop frame + fast UIA count."""
+        # Never touch the real desktop/display during tests (RULES.md hard constraint)
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            return b"\x00" * 4096, 0
+
         pixels = b""
         try:
             import mss
