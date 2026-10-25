@@ -1932,3 +1932,19 @@ Implementation of Cockpit 2: the model judges its own progress; the harness repo
   - `test_agent_loop.py::TestWallClockBudget::test_the_default_is_not_unlimited` fails because `.env` sets `AGENT_MAX_SECONDS=0`.
   - `test_ui_inspector.py::TestUIInspector::test_click_mismatch_names_the_resolved_element` fails on a clean checkout too. It asserts `status == "element_not_found"` and the click result has no `status` key (cockpit-1 R10 change).
   - The known `[agentic_two_step]` VAD test passed this run.
+
+## Cockpit 4
+
+- Commits: `4db20fa` covers (1a sign-in, 1b terminal, plus the unsourced email/phone refusal); `6f9709d` 2a scroll position; `2cca140` 2b off-screen elements; `21906fc` 3a `cua_drag` coordinates and path; `16e38e0` 3b `open_app`; `3f1aaf9` 3c `search_files`; `4b9ad13` item 4 clean-up. 1a and 1b share one module and one commit.
+- 1a/1b: `agent/context_covers.py` (`evaluate_context`), called by `AgentLoop` next to `SafetyGuard.evaluate`.
+  - Sign-in screens (URL, title or a password field): identity clicks and `cua_type_text` / `cua_set_value` stop the goal with status `needs_user_input` and the spoken question. Title patterns apply to browser-like windows only; a password field counts anywhere. A goal that asks to sign in stands the cover down.
+  - Unsourced email or phone number in typed text is refused with a fact; sources are the goal, screen text, window title and user facts.
+  - Terminals (class, process, or VS Code with focus in its terminal): `cua_type_text`, `cua_set_value` and Enter / Ctrl+V style keys go through the existing yes/no confirmation, prompt "Run this in the terminal: '<text>'? Say yes or no."
+- 2a: `cua_scroll` reads UIA `ScrollPattern` at the scroll point (or nearest scrollable ancestor) before and after; message gains `Scroll position 100% -> 100% (at the bottom)`. Omitted when unavailable.
+- 2b: `_click_at` returns `status: element_offscreen` with the fact when the point is outside every monitor (`_monitor_rects`). Unknown monitors never block.
+- 3a: `cua_drag` takes `x,y -> to_x,to_y` or `path` (0-1000 in single mode, converted in the loop); executed by `Win32Driver.drag_path` (SendInput down, moves, up). Element-id drags still use the old route.
+- 3b: `open_app` ignores `url` when `name` is installed (`AppIndexer.is_installed`) unless the goal says browser/web/online (`Dispatcher.set_goal`, set by `main.py`). After any successful launch it waits up to 3 s for the window and activates it via `cua_activate`, reporting "Opened X; it is now in front." or "...could not be brought to the front." `_activate_hwnd` does `SW_RESTORE` first on an iconic window.
+- 3c: `tools/file_search.py`. Windows Search index first (OLE DB, `SystemIndex`), then scandir over profile folders and the other fixed drives' top two levels; skip list, 20 results / 15 s, says when it stopped early; folders included. Matching: every query word must appear in the name (separators `- _ .` and spaces). Relaxed rule: if nothing matches all words, words that match no candidate are dropped while at least two remain.
+- Item 4: wall-clock default test now removes `AGENT_MAX_SECONDS` from the environment instead of reading `.env`; `test_click_mismatch_names_the_resolved_element` now asserts the click happens with the mismatch note; `.env.example` documents `AGENT_MAX_SECONDS=0`. The `[agentic_two_step]` VAD test: the leaking state was the module-level secure-desktop mocks (fixed earlier by the autouse reset fixture in `tests/test_secure_desktop.py`); it passed in this serial run and I found no other leaking state.
+- Other tests changed: `tests/integration/test_modality_coherence.py` allows `cua_drag` to declare coordinates; `tests/test_dispatcher.py` uses a stub app index so the `name` + `url` case never touches the real disk.
+- Tests: full serial run 1536 passed, 0 failed, 1 skipped; `cargo test --workspace` all passed.
