@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+import re
 import base64
 import csv
 import io
@@ -12,6 +14,8 @@ from grace.automation.dpi_helper import DPIHelper
 DPIHelper.ensure_dpi_aware()
 
 logger = logging.getLogger("grace.computer_use")
+
+_BARE_HOST_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+(/\S*)?$", re.IGNORECASE)
 
 #: Zero-width and format characters Edge Beta embeds in window titles
 #: (U+200B–U+200D, U+2060, U+FEFF). Raw string comparison of titles that
@@ -1277,9 +1281,13 @@ class ComputerUse:
         if app.startswith("\\\\") or app.startswith("//"):
             return {"ok": False, "action": "launch", "message": f"Refusing a network path: {app}"}
 
+        if _BARE_HOST_RE.match(app):
+            app = f"https://{app}"
+
         lower = app.lower()
-        if "://" in lower:
-            if not lower.startswith(("http://", "https://")):
+        if "://" in lower or ":" in app:
+            parsed = urlparse(app)
+            if parsed.scheme.lower() not in ("http", "https"):
                 return {
                     "ok": False, "action": "launch",
                     "message": f"Refusing '{app}': only http/https links are allowed.",

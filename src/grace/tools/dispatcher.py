@@ -112,6 +112,9 @@ _WEBSITE_ALIASES: dict[str, str] = {
 }
 
 
+_BARE_HOST_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+(/\S*)?$", re.IGNORECASE)
+
+
 def _validated_http_url(value: str) -> str:
     """Normalise and validate a browser-open target: http(s) only, or "".
 
@@ -123,7 +126,9 @@ def _validated_http_url(value: str) -> str:
     v = (value or "").strip()
     if not v:
         return ""
-    if v.lower().startswith("www."):
+    if _BARE_HOST_RE.match(v):
+        v = f"https://{v}"
+    elif v.lower().startswith("www."):
         v = f"https://{v}"
     parsed = urlparse(v)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:

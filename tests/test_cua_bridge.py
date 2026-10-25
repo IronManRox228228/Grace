@@ -95,6 +95,36 @@ class TestLaunchValidatesTheAppName:
         assert res["ok"] is True
         assert stub.calls == ["notepad"]
 
+    def test_bare_domain_is_prepended_https(self):
+        stub = _StubAppIndexer({'status': 'ok', 'text': 'opened'})
+        cu = ComputerUse()
+        cu.set_app_indexer(stub)
+        res = cu._launch({'app': 'music.youtube.com'})
+        assert res['ok'] is True
+        assert stub.calls == ['https://music.youtube.com']
+
+    def test_bare_domain_with_path_is_prepended_https(self):
+        stub = _StubAppIndexer({'status': 'ok', 'text': 'opened'})
+        cu = ComputerUse()
+        cu.set_app_indexer(stub)
+        res = cu._launch({'app': 'youtube.com/watch?v=x'})
+        assert res['ok'] is True
+        assert stub.calls == ['https://youtube.com/watch?v=x']
+
+    def test_refuses_javascript_scheme(self):
+        cu = ComputerUse()
+        cu.set_app_indexer(_StubAppIndexer())
+        res = cu._launch({'app': 'javascript:alert(1)'})
+        assert res['ok'] is False
+        assert cu._app_indexer.calls == []
+
+    def test_refuses_ms_settings_scheme(self):
+        cu = ComputerUse()
+        cu.set_app_indexer(_StubAppIndexer())
+        res = cu._launch({'app': 'ms-settings:'})
+        assert res['ok'] is False
+        assert cu._app_indexer.calls == []
+
     def test_an_http_url_is_allowed_through(self):
         stub = _StubAppIndexer({"status": "ok", "text": "opened"})
         cu = ComputerUse()

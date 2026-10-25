@@ -196,3 +196,43 @@ class TestOpenAppUrlSafety:
         result = asyncio.run(dispatcher.execute(intent))
         assert result["status"] == "error"
         assert calls == []
+
+    def test_bare_domain_opens_https(self, monkeypatch):
+        import webbrowser
+        calls = []
+        monkeypatch.setattr(webbrowser, 'open', lambda u: calls.append(u))
+        dispatcher = Dispatcher(computer_use=None)
+        intent = Intent(tool='open_app', params={'name': 'YouTube Music', 'url': 'music.youtube.com'})
+        result = asyncio.run(dispatcher.execute(intent))
+        assert result['status'] == 'ok'
+        assert calls == ['https://music.youtube.com']
+
+    def test_bare_domain_with_path_opens_https(self, monkeypatch):
+        import webbrowser
+        calls = []
+        monkeypatch.setattr(webbrowser, 'open', lambda u: calls.append(u))
+        dispatcher = Dispatcher(computer_use=None)
+        intent = Intent(tool='open_app', params={'url': 'youtube.com/watch?v=x'})
+        result = asyncio.run(dispatcher.execute(intent))
+        assert result['status'] == 'ok'
+        assert calls == ['https://youtube.com/watch?v=x']
+
+    def test_refuses_ms_settings_scheme(self, monkeypatch):
+        import webbrowser
+        calls = []
+        monkeypatch.setattr(webbrowser, 'open', lambda u: calls.append(u))
+        dispatcher = Dispatcher(computer_use=None)
+        intent = Intent(tool='open_app', params={'url': 'ms-settings:'})
+        result = asyncio.run(dispatcher.execute(intent))
+        assert result['status'] == 'error'
+        assert calls == []
+
+    def test_refuses_javascript_scheme(self, monkeypatch):
+        import webbrowser
+        calls = []
+        monkeypatch.setattr(webbrowser, 'open', lambda u: calls.append(u))
+        dispatcher = Dispatcher(computer_use=None)
+        intent = Intent(tool='open_app', params={'url': 'javascript:alert(1)'})
+        result = asyncio.run(dispatcher.execute(intent))
+        assert result['status'] == 'error'
+        assert calls == []
