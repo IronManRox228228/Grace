@@ -430,7 +430,12 @@ class ComputerUse:
             window_bounds = (int(bounds[0]), int(bounds[1]), int(bounds[2]), int(bounds[3]))
 
         wanted_title = window.get("title") or params.get("window_title")
-        if wanted_title or window_raw:
+        has_named_window = bool(
+            wanted_title
+            or window.get("id")
+            or (isinstance(window_raw, str) and window_raw.strip())
+        )
+        if has_named_window:
             wanted_norm = normalize_title(str(wanted_title or "")).strip()
             actual = normalize_title(_foreground_title())
             is_fg = bool(wanted_norm and actual and (wanted_norm.lower() in actual.lower() or actual.lower() in wanted_norm.lower()))
