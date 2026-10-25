@@ -1546,3 +1546,38 @@ The failures cited in previous logs plus escalation regressions were diagnosed a
   `1312 passed, 1 skipped, 2 warnings in 273.84s (0:04:33)` — **0 failed**.
 - **Rust (`cargo test --workspace`):**
   `test result: ok. 21 passed`, `10 passed`, `2 passed`, `2 passed`, `2 passed`, `175 passed`, `2 passed`, `27 passed` — **all workspace crates passed, 0 failed**.
+
+---
+
+## Run capture
+
+Scope: address all items from `run-capture.md` to replace brittle `scripts/real_run.ps1` with in-process run capture.
+
+### 1. In-process `--capture-run [DIR]` — DONE
+
+Commit `c8747b2` `feat(harness): in-process --capture-run for real-desktop runs` — pushed to `origin/main`.
+
+- **Design:** Added `RunCapture` (`src/grace/harness/run_capture.py`) that acts as a no-op with zero overhead when disabled.
+  When enabled via `--capture-run [DIR]` (default `runs/<yyyy-MM-dd_HH-mm-ss>/` under repo root), Grace writes:
+  - `log.txt`: root logger captured with `RedactingFileHandler` at INFO UTF-8 format identical to console.
+  - `step_NNN/screenshot.png`: exact image sent to planner (downscaled).
+  - `step_NNN/screenshot_meta.json`: original size, sent size, downscale ratio.
+  - `step_NNN/planner_raw.txt`: unparsed model output.
+  - `step_NNN/planner_prompt.txt`: prompt text without base64 image bytes.
+  - `step_NNN/step.json`: action, sanitized params, grounded click point in screen pixels, result, element count and sources, window title/hwnd, timings.
+  - `intent.json`: raw output, parsed intent, route.
+  - `summary.json`: goal, final status, step count, total duration, model, tier, short git commit.
+- **Privacy:** Applied recursive redaction (`redact_string`, `redact_data`) across all files. Password fields are reported only as filled/empty. Secret-vault values are stripped, and `--save-secret` exits prior to any capture initialization.
+- **Tests:** `tests/test_run_capture.py`: verified disabled capture writes nothing, 2-step mocked agent run writes all files with exact content, recursive redaction holds, and vault secret value never appears in captured files.
+
+### 2. Wrapper rewrite `scripts/real_run.ps1` — DONE
+
+Commit `86268f2` `fix(scripts): real_run.ps1 wraps --capture-run` — pushed to `origin/main`.
+
+- **Fix:** Rewrote `scripts/real_run.ps1` as a thin wrapper:
+  - Resolves repo root once via `$repoRoot = Split-Path -Parent $PSScriptRoot`.
+  - Resolves `$graceExe` relative to `$repoRoot`.
+  - Runs `venv\Scripts\grace.exe --text $Request --no-tts --capture-run <dir>` in foreground with live console output.
+  - Removed all WebSocket client code and broken unclosed file handles.
+- **Tests:** `tests/test_real_run_script.py` validates path resolution, absence of WebSocket client, and required CLI flags.
+
