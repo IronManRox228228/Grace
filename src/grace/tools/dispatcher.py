@@ -561,6 +561,8 @@ class Dispatcher:
             return {"status": "error", "error": str(e), "text": f"I couldn't close {display_name}. {e}"}
 
     async def _search_files(self, params: dict) -> dict:
+        from grace.tools import file_search
+
         query = params.get("query", "")
         if not query:
             return {"status": "error", "error": "Missing 'query' parameter"}
@@ -572,41 +574,44 @@ class Dispatcher:
 
         self._last_search_results = []
 
+        words = file_search.query_words(query)
+        if not words:
+            return {"status": "error", "error": "Invalid query after sanitization"}
+
         try:
-            user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
-            docs_dir = os.path.join(user_profile, "Documents")
-            extensions = {'.pdf', '.docx', '.txt', '.xlsx'}
-            q_lower = query.lower()
+            results: list = []
+            stopped = None
+            source = "the Windows Search index"
+            try:
+                results = await asyncio.to_thread(file_search.search_index, words)
+            except Exception as e:
+                logger.info(f"search_files: Windows Search index unavailable ({e}); scanning folders")
+            if not results:
+                source = "a scan of your folders"
+                results, stopped = await asyncio.to_thread(
+                    file_search.walk_search, file_search.default_walk_roots(), words
+                )
 
-            def _search():
-                if not os.path.exists(docs_dir):
-                    return []
-                matches = []
-                for p in Path(docs_dir).rglob("*"):
-                    try:
-                        if p.suffix.lower() in extensions and q_lower in p.name.lower():
-                            matches.append(str(p))
-                            if len(matches) >= 10:
-                                break
-                    except (PermissionError, OSError):
-                        continue
-                return matches
+            self._last_search_results = [path for path, _ in results]
 
-            self._last_search_results = await asyncio.to_thread(_search)
-
-            if self._last_search_results:
-                result_list = "\n".join(f"  {i+1}. {path}" for i, path in enumerate(self._last_search_results))
+            if results:
+                lines = "\n".join(
+                    f"  {i+1}. {path} ({'folder' if is_folder else 'file'})"
+                    for i, (path, is_folder) in enumerate(results)
+                )
+                text = f"Here are the matching files and folders (from {source}):\n{lines}"
+                if stopped:
+                    text += f"\nThe search {stopped}, so there may be more."
                 return {
                     "status": "ok",
-                    "text": f"Here are the matching files:\n{result_list}",
+                    "text": text,
                     "files": self._last_search_results,
+                    "results": [{"path": p, "is_folder": f} for p, f in results],
                 }
-            else:
-                return {
-                    "status": "ok",
-                    "text": f"I couldn't find any files matching '{query}'.",
-                    "files": [],
-                }
+            text = f"I couldn't find any files or folders matching '{query}'."
+            if stopped:
+                text += f" The search {stopped}."
+            return {"status": "ok", "text": text, "files": [], "results": []}
         except Exception as e:
             return {"status": "error", "error": str(e), "text": f"Search failed: {e}"}
 

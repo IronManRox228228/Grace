@@ -191,9 +191,17 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
     ),
     ToolDefinition(
         name="search_files",
-        description="Search for files and documents across the local filesystem matching a query keyword.",
+        description=(
+            "Find files and folders by NAME (not contents). Every word of the query must "
+            "appear in the name, in any order, ignoring case; '-', '_' and '.' count as "
+            "spaces. Searches the Windows Search index first; if that finds nothing, scans "
+            "Desktop, Documents, Downloads, Pictures, Music and Videos, then the top two "
+            "levels of other fixed drives (skipping venv, node_modules, .git, AppData and "
+            "Windows), stopping at 20 results or 15 seconds. Returns paths and whether each "
+            "is a folder."
+        ),
         params=[
-            ToolParam("query", "Search phrase or filename pattern", True, None, "str"),
+            ToolParam("query", "Words from the file or folder name, e.g. 'qwen 3.6 35b model'", True, None, "str"),
         ],
         is_system=True,
     ),
