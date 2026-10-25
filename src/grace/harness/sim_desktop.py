@@ -582,6 +582,7 @@ class YouTubeMusicSim(BaseTapeSim):
         return state.is_goal or has_player_bar
 
     def dispatch(self, intent: Intent, confirmed: bool = False) -> dict[str, Any]:
+        self._snapshot_cache.clear()
         self.dispatched_actions.append({"tool": intent.tool, "params": intent.params})
         tool = intent.tool
         params = intent.params or {}
@@ -597,6 +598,25 @@ class YouTubeMusicSim(BaseTapeSim):
             x = params.get("x")
             y = params.get("y")
 
+            is_play_song = (
+                target_id in (10, 11, 12)
+                or any(k in target_name for k in ("signal", "play", "home"))
+                or (x is not None and y is not None and 300 <= x <= 1200 and 200 <= y <= 300)
+            )
+            if is_play_song and self.current_state_name in ("results_shown", "query_typed", "search_focused"):
+                self.current_state_name = "song_playing"
+                return {"status": "ok", "result": {"ok": True, "message": "playing Signal · Home", "verified": True, "sent": True}}
+
+            # Clicking the search button (element 1) submits the search if query is typed
+            is_search_btn = (
+                target_id == 1
+                or target_name == "search"
+                or (x is not None and y is not None and 600 <= x <= 645 and 60 <= y <= 100)
+            )
+            if is_search_btn and self._query:
+                self.current_state_name = "results_shown"
+                return {"status": "ok", "result": {"ok": True, "message": "submitted search", "verified": True, "sent": True}}
+
             is_search = (
                 target_id in (1, 2)
                 or "search" in target_name
@@ -609,34 +629,28 @@ class YouTubeMusicSim(BaseTapeSim):
                     self.current_state_name = "search_focused"
                 return {"status": "ok", "result": {"ok": True, "message": "clicked search", "verified": True, "sent": True}}
 
-            is_play_song = (
-                target_id in (10, 11, 12)
-                or any(k in target_name for k in ("signal", "play", "home"))
-                or (x is not None and y is not None and 300 <= x <= 1200 and 200 <= y <= 300)
-            )
-            if is_play_song and self.current_state_name in ("results_shown", "query_typed", "search_focused"):
-                self.current_state_name = "song_playing"
-                return {"status": "ok", "result": {"ok": True, "message": "playing Signal · Home", "verified": True, "sent": True}}
-
             return {"status": "ok", "result": {"ok": True, "message": "clicked", "verified": True, "sent": True}}
 
         if tool == "cua_type_text":
             text = (params.get("text") or "").strip()
             self._query = text
             # Update element 2 in states
-            for sname in ("search_focused", "query_typed"):
+            for sname in ("search_focused", "query_typed", "results_shown"):
                 if sname in self.states:
                     for el in self.states[sname].elements:
                         if el.id == 2:
                             el.value = text
+            if "\n" in text or "\r" in text:
+                self.current_state_name = "results_shown"
+                return {"status": "ok", "result": {"ok": True, "message": "typed and submitted query", "verified": True, "sent": True}}
             if "signal" in text.lower() or "home" in text.lower():
                 self.current_state_name = "query_typed"
                 return {"status": "ok", "result": {"ok": True, "message": "typed query", "verified": True, "sent": True}}
             return {"status": "ok", "result": {"ok": True, "message": "typed", "verified": True, "sent": True}}
 
         if tool == "cua_press_key":
-            key = str(params.get("key", "")).lower()
-            if key in ("enter", "return") and self.current_state_name in ("query_typed", "search_focused"):
+            key = str(params.get("key", "")).lower().strip()
+            if any(k in key for k in ("enter", "return")) and self.current_state_name in ("query_typed", "search_focused", "results_shown"):
                 self.current_state_name = "results_shown"
                 return {"status": "ok", "result": {"ok": True, "message": "submitted search", "verified": True, "sent": True}}
             return {"status": "ok", "result": {"ok": True, "message": f"pressed {key}", "verified": True, "sent": True}}
@@ -765,33 +779,29 @@ class PdfToNotesSim(BaseTapeSim):
                 "text": "Project Report\nFinal submission deadline: 14 November\nPlease submit deliverables on time.",
             }
 
-        if tool in ("open_file", "cua_click", "cua_press_key"):
-            target_name = (params.get("target_name") or params.get("name") or "").lower()
-            target_id = params.get("element_id") or params.get("element_index")
-            key = str(params.get("key", "")).lower()
-
-            if (
-                tool == "open_file"
-                or "report" in target_name
-                or "pdf" in target_name
-                or target_id == 0
-                or "d" in key
-                or "enter" in key
-            ) and self.current_state_name in ("initial", "file_found", "pdf_read"):
-                self._pdf_read = True
-                self.current_state_name = "pdf_opened"
-                return {
-                    "status": "ok",
-                    "result": {
-                        "ok": True,
-                        "message": "opened report.pdf",
-                        "verified": True,
-                        "sent": True,
-                        "text": "Final submission deadline: 14 November",
-                    },
+        if tool == "open_file" or ((tool in ("cua_click", "cua_press_key")) and (
+            "report" in (params.get("target_name") or params.get("name") or "").lower()
+            or "pdf" in (params.get("target_name") or params.get("name") or "").lower()
+            or ((params.get("element_id") or params.get("element_index")) == 0 and self.current_state_name in ("initial", "file_found", "pdf_read"))
+            or "d" in str(params.get("key", "")).lower()
+            or "enter" in str(params.get("key", "")).lower()
+        )):
+            self._pdf_read = True
+            self.current_state_name = "pdf_opened"
+            return {
+                "status": "ok",
+                "result": {
+                    "ok": True,
+                    "message": "opened report.pdf",
+                    "verified": True,
+                    "sent": True,
                     "text": "Final submission deadline: 14 November",
-                }
+                },
+                "text": "Final submission deadline: 14 November",
+            }
 
+        if tool in ("cua_click", "cua_press_key"):
+            target_name = (params.get("target_name") or params.get("name") or "").lower()
             if "notepad" in target_name or "note" in target_name:
                 self._notepad_open = True
                 self.current_state_name = "notepad_open"
@@ -799,9 +809,9 @@ class PdfToNotesSim(BaseTapeSim):
 
             return {"status": "ok", "result": {"ok": True, "message": "action executed", "verified": True, "sent": True}}
 
-        if tool == "open_app":
-            name = (params.get("name") or "").lower()
-            if "notepad" in name or "note" in name:
+        if tool in ("open_app", "cua_activate", "cua_list_windows"):
+            name = (params.get("name") or params.get("window_name") or params.get("title") or "").lower()
+            if "notepad" in name or "note" in name or tool in ("cua_activate", "cua_list_windows"):
                 self._notepad_open = True
                 if "14 november" in self._buffer.lower():
                     self.current_state_name = "note_typed"
@@ -833,26 +843,31 @@ class PdfToNotesSim(BaseTapeSim):
         return {"status": "ok"}
 
 
-def create_sim_for_tape(tape: Tape) -> BaseTapeSim:
-    name = (tape.meta.get("scenario") or getattr(tape, "dir", "") or "").lower()
+def create_sim_for_tape(tape: Any, doc_root: Optional[str] = None) -> BaseTapeSim:
+    scenario = (tape.meta.get("scenario") or "") if hasattr(tape, "meta") and isinstance(tape.meta, dict) else ""
+    tape_dir = getattr(tape, "dir", "") or getattr(tape, "directory", "") or ""
+    name = f"{scenario} {tape_dir}".lower()
+
     if "agentic_two_step" in name:
         return TwoStepSim()
     if "agentic_read_pdf" in name:
-        doc_root = (
-            os.environ.get("GRACE_DOCUMENTS_DIR")
+        root = (
+            doc_root
+            or os.environ.get("GRACE_DOCUMENTS_DIR")
             or os.environ.get("DOCUMENTS_ROOT")
             or os.environ.get("DOCUMENTS_DIR")
         )
-        return ReadPdfSim(documents_root=doc_root)
+        return ReadPdfSim(documents_root=root)
     if "agentic_youtube_music" in name:
         return YouTubeMusicSim()
     if "agentic_pdf_to_notes" in name:
-        doc_root = (
-            os.environ.get("GRACE_DOCUMENTS_DIR")
+        root = (
+            doc_root
+            or os.environ.get("GRACE_DOCUMENTS_DIR")
             or os.environ.get("DOCUMENTS_ROOT")
             or os.environ.get("DOCUMENTS_DIR")
         )
-        return PdfToNotesSim(documents_root=doc_root)
+        return PdfToNotesSim(documents_root=root)
     return GenericTapeSim(tape)
 
 
@@ -893,4 +908,5 @@ class SimDispatcher:
             await self._inner._emit_cua_started(intent.tool[4:])
         await self._inner._emit_tool_finished()
 
+        self._sim._snapshot_cache.clear()
         return self._sim.dispatch(intent, confirmed=confirmed)

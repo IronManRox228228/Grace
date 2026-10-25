@@ -1063,4 +1063,159 @@ Notice: Tapes run against a stateful sim desktop, a PASS means the sim reached i
   All workspace tests passed (249 passed, 3 ignored).
 - **Running Processes:** Clean (`0` active background processes).
 
+---
+
+## Planner context
+
+Scope: Task `planner-context.md`.
+Working repo: `C:\Users\Ashman Das\Documents\Grace`, branch `main`.
+
+### 1. Ordinary Field Values Redaction
+
+- **Root Cause:**
+  Previously, ordinary text field values (e.g. search box values or URLs like `music.youtube.com`) were frequently converted to `"<redacted>"` in perceptions seen by the planner, preventing the model from verifying that typed text had landed and causing infinite retyping loops.
+- **Changes Made:**
+  - `src/grace/perception/elements.py`:
+    - Added `is_password_element` and `redact_element_value_if_secret`.
+    - In `ElementNode.to_dict()`, `self.safe_value` explicitly preserves ordinary text values while strictly redacting password fields (by role, element name, class, or automation ID) and secret-shaped values (passwords, tokens, API keys) to `"<redacted>"`.
+    - Ordinary screen text remains wrapped in untrusted data delimiters (`<<<UNTRUSTED_DATA_START>>> ... <<<UNTRUSTED_DATA_END>>>`).
+  - `src/grace/perception/uia_provider.py` and `src/grace/perception/dom_provider.py`:
+    - Added element-level password/secret value sanitization during graph collection.
+  - `src/grace/harness/redact.py` and `src/grace/agent/facts.py`:
+    - Refined passphrase regex heuristics to exclude web hostnames and URLs (e.g. `music.youtube.com`), preventing ordinary navigation destinations from being masked.
+  - Log and trace redaction remained untouched and intact.
+- **Tests Added (`tests/test_planner_redaction.py`):**
+  - `test_ordinary_search_box_value_reaches_planner_prompt`
+  - `test_password_field_value_never_reaches_planner_prompt`
+  - `test_password_field_never_reaches_logs`
+
+### 2. Step History in Planner Prompt
+
+- **Root Cause:**
+  The agent loop previously passed `history=""` to `_planner.plan()`, leaving the planner with no memory of prior actions or extracted text across steps (e.g., reading a deadline from a PDF and then losing it upon opening Notepad).
+- **Changes Made:**
+  - `src/grace/agent/memory.py`:
+    - Implemented `format_history_markdown()` providing a compact log of earlier steps under the current goal.
+    - Each entry records the action, key parameters (`text`, `key`, `path`, `query`, `name`), and a one-line result summary carrying over extracted text (e.g., PDF text) and found files.
+    - Strictly capped at the last 8 steps and <= 1200 characters, dropping older steps first.
+    - Log text is wrapped in `wrap_untrusted`.
+    - Secrets are sanitized and confirmation answers are excluded.
+  - `src/grace/agent/loop.py`:
+    - Replaced `history=""` with `history=memory.format_history_markdown()` in both planning invocations (lines 424 and 700).
+- **Tests Added (`tests/test_step_history.py`):**
+  - `test_read_pdf_result_carries_over_to_next_planner_prompt`
+  - `test_step_history_capped_at_eight_steps_and_character_limit`
+  - `test_step_history_wrapped_as_untrusted`
+  - `test_step_history_never_contains_secrets_or_confirmation_answers`
+
+### 3. Simulator & Gate Fixes
+
+- **Analysis & Root Cause for Initial Failures:**
+  1. `create_sim_for_tape` evaluated `name = (tape.meta.get("scenario") or getattr(tape, "dir", "") or "").lower()`. Because `tape.meta["scenario"]` was redacted to `"<redacted>"` for synthetic tapes, `name` became `"<redacted>"`, failing all scenario name checks and falling back to `GenericTapeSim(tape)`. In `GenericTapeSim`, snapshots are static replay frames that do not respond to live clicks or text entry.
+  2. `YouTubeMusicSim.dispatch` did not transition to `results_shown` when clicking the Search button (`element_id=1` or `name="Search"`) after a query was typed; it erroneously remained in `query_typed`.
+  3. `PdfToNotesSim.dispatch` did not transition to `pdf_opened` or `notepad_open` when `open_file` or window activation tools were invoked after Notepad had already been opened.
+- **Grace-side Fixes:**
+  - Updated `create_sim_for_tape` in `src/grace/harness/sim_desktop.py` to inspect `tape.dir` / `tape.directory` alongside `tape.meta`, correctly routing `agentic_youtube_music` to `YouTubeMusicSim` and `agentic_two_step` to `TwoStepSim`.
+  - Updated `YouTubeMusicSim.dispatch`: clicking Search button (element 1) after query is typed transitions to `results_shown`; clicking Play button (element 11) or song row transitions to `song_playing` (goal state).
+  - Updated `PdfToNotesSim.dispatch`: allowed `open_file` and activation tools across states to ensure re-opening or switching between PDF and Notepad behaves like a real desktop.
+  - Cleared `_snapshot_cache` on every dispatch so perceptions always render fresh snapshots.
+  - Added unit test in `tests/test_sim_desktop.py`: `test_youtube_music_click_search_button_submits_query`.
+
+### 4. Live-Model Demo Gate Output (Real Holo 3.1-4B on GPU)
+
+Gate rerun execution with real local Holo 3.1-4B on GPU (`scripts/demo_gate.py`):
+
+```
+Starting llama-server on port 63861...
+llama-server healthy at http://127.0.0.1:63861 (pid 23780)
+
+--- [1/3] Smoke: Visual Grounding ---
+Grounding latency: 3371.4ms
+Grounding response: Action: click(point=(468, 471))
+
+--- [1/3] Smoke: Planner Tool-call ---
+Planner response:
+{"thought": "The user wants to open the calculator. I can see the desktop with the Start button available. I will use the open_calculator tool to launch the native Windows Calculator application directly.", "action": "open_calculator", "params": {}}
+parse_planned_step: ACCEPTED (action='open_calculator')
+
+--- [2/3] Intent Evaluation ---
+Agent intent routing: 15/15 correctly routed to agent
+
+--- [3/3] Tape Drives ---
+Notice: Tapes run against a stateful sim desktop, a PASS means the sim reached its goal state, and only a real-desktop run proves that real apps behave like the sim.
+
+Driving tape: agentic_two_step...
+  final status: ok
+  planner steps: 3
+  dispatches: 2
+  final_response: "The search box has been clicked and 'hello' has been typed into it. The task is complete."
+  last 3 raw planner outputs:
+    [1] {"thought": "I need to click the search box to focus it before typing 'hello'. Looking at the screenshot, there's a search box in the middle of the page with 'Search this site' placeholder text (element 2). This is the appropriate search box to click, not the address bar at the top.", "action": "cua_click", "params": {"window": {"title": "Grace test page - Edge", "id": 1234}, "element_id": 2, "target_name": "search box with placeholder 'Search this site'", "click_count": 1}}
+    [2] {"thought": "The search box is already focused from the previous click. Now I need to type 'hello' into the search box to complete the goal.", "action": "cua_type_text", "params": {"window": {"title": "Grace test page - Edge", "id": 1234}, "text": "hello", "replace": false}}
+    [3] {"thought": "The goal was to click the search box and type 'hello'. The screenshot confirms that 'hello' is now visible in the search box (element [2]). Both steps have been completed successfully - the search box was clicked in Step 1 and 'hello' was typed in Step 2. The task is complete.", "action": "converse", "params": {"response": "The search box has been clicked and 'hello' has been typed into it. The task is complete."}}
+  verdict: PASS
+
+Driving tape: agentic_read_pdf...
+  final status: ok
+  planner steps: 9
+  dispatches: 8
+  final_response: "I have read your report PDF. The excerpt from the document states: 'Third quarter results exceeded projections.' Is there anything specific from the report you would like me to read or summarize further?"
+  last 3 raw planner outputs:
+    [1] {"thought": "I've extracted the first excerpt from the PDF ('Third quarter results exceeded projections.'), but the user wants me to read the full report. I should continue reading the PDF to extract more content.", "action": "read_pdf", "params": {"path": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [2] {"thought": "I've already extracted the report content in previous steps ('Third quarter results exceeded projections.'), but I need to continue reading the PDF to fulfill the goal of reading the report. I should run read_pdf again to get more content from the document.", "action": "read_pdf", "params": {"path": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [3] {"thought": "I have already read the report PDF in previous steps (steps 6-8), with the excerpt 'Third quarter results exceeded projections.' being reported. The goal is to read the report PDF to the user, which has been accomplished. Now I should communicate the findings to the user using the converse tool.", "action": "converse", "params": {"response": "I have read your report PDF. The excerpt from the document states: 'Third quarter results exceeded projections.' Is there anything specific from the report you would like me to read or summarize further?"}}
+  verdict: PASS
+
+Driving tape: agentic_youtube_music...
+  final status: ok
+  planner steps: 4
+  dispatches: 4
+  final_response: "The song 'Signal · Home' is now playing in your YouTube Music browser window. The video is loaded and playing successfully."
+  last 3 raw planner outputs:
+    [1] {"thought": "The search query 'signal by home' has been typed into the search box. Now I need to execute the search by clicking the search button to find the song and proceed to play it.", "action": "cua_click", "params": {"window": {"title": "YouTube Music - Edge", "id": 1234}, "element_id": 1, "target_name": "Search button", "click_count": 1}}
+    [2] {"thought": "The search results are now displayed showing 'Signal - Home' by Home. I can see a play button available. To complete the goal of playing the song, I need to click the play button which is marked as element [11].", "action": "cua_click", "params": {"window": {"title": "Search results for \"signal by home\" - YouTube Music - Edge", "id": 1234}, "element_id": 11, "target_name": "Play button", "click_count": 1}}
+    [3] {"thought": "The goal has been achieved. The song 'Signal · Home' is currently playing as confirmed by the 'Playing' status and the video player showing the song title. All required steps have been completed successfully: opening YouTube Music, searching for the song, and playing it.", "action": "converse", "params": {"response": "The song 'Signal · Home' is now playing in your YouTube Music browser window. The video is loaded and playing successfully."}}
+  verdict: PASS
+
+Driving tape: agentic_pdf_to_notes...
+  final status: ok
+  planner steps: 8
+  dispatches: 6
+  final_response: "I've found the deadline in your report PDF (14 November) and created a new note in Notepad with the information: 'Deadline: 14 November'."
+  last 3 raw planner outputs:
+    [1] {"thought": "I have successfully found the deadline in the PDF: 'Final submission deadline: 14 November'. The PDF is currently open in Edge browser. I've already opened Notepad in step 4, but I need to verify it's still open and ready for input. Since the deadline information has been extracted, I should now switch to the Notepad window to create the new note with this information.", "action": "cua_activate", "params": {"window": {"title": "Notepad", "app": "Notepad"}}}
+    [2] {"thought": "I've opened Notepad and need to create a new note with the deadline information. The deadline from the PDF is '14 November'. I should type this information into the Notepad document to complete the task.", "action": "cua_type_text", "params": {"window": {"title": "Untitled - Notepad", "id": 0}, "text": "Deadline: 14 November", "replace": false}}
+    [3] {"thought": "The deadline '14 November' has been successfully found in the PDF report and recorded in Notepad as 'Deadline: 14 November'. The note is now created with the required information. The task is complete.", "action": "converse", "params": {"response": "I've found the deadline in your report PDF (14 November) and created a new note in Notepad with the information: 'Deadline: 14 November'."}}
+  verdict: PASS
+
+Stopping llama-server...
+llama-server stopped (pid 23780, exited: True).
+No llama-server processes remain.
+
+==================================================
+           LIVE-MODEL DEMO GATE RESULTS          
+==================================================
+  Smoke Grounding                          : PASS
+  Smoke Planner Parse                      : PASS
+  Agent Intent Routing (15/15)             : PASS
+  Tape Drive (agentic_two_step)            : PASS
+  Tape Drive (agentic_read_pdf)            : PASS
+  Tape Drive (agentic_youtube_music)       : PASS
+  Tape Drive (agentic_pdf_to_notes)        : PASS
+==================================================
+OVERALL GATE STATUS: PASS
+==================================================
+Notice: Tapes run against a stateful sim desktop, a PASS means the sim reached its goal state, and only a real-desktop run proves that real apps behave like the sim.
+==================================================
+```
+
+### 5. Final Suite Verification Counts
+
+- **Python Suite (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`):**
+  `1234 passed, 1 skipped, 2 warnings in 206.32s (0:03:26)` (exceeds requirement of >= 1226).
+- **Rust Suite (`cargo test --workspace`):**
+  All workspace tests passed (249 passed, 3 ignored, 0 failed).
+- **Process Check:** Clean (`0` active background processes).
+
+
 

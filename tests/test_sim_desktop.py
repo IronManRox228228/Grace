@@ -218,6 +218,23 @@ class TestYouTubeMusicSim:
         assert any(e.container == "Player bar" and "signal · home" in (e.name or e.value or "").lower()
                    for e in snap.graph.elements)
 
+    def test_youtube_music_click_search_button_submits_query(self):
+        sim = YouTubeMusicSim()
+        sim.dispatch(Intent(tool="cua_click", params={"element_id": 2}))
+        sim.dispatch(Intent(tool="cua_type_text", params={"text": "signal by home"}))
+        assert sim.current_state_name == "query_typed"
+
+        # Clicking element 1 (Search button) submits search
+        res = sim.dispatch(Intent(tool="cua_click", params={"element_id": 1}))
+        assert res.get("status") == "ok"
+        assert sim.current_state_name == "results_shown"
+
+        # Clicking Play reaches goal
+        res2 = sim.dispatch(Intent(tool="cua_click", params={"element_id": 11}))
+        assert res2.get("status") == "ok"
+        assert sim.current_state_name == "song_playing"
+        assert sim.is_goal_state()
+
     def test_wrong_action_changes_nothing(self):
         sim = YouTubeMusicSim()
         # Click an unrelated element (e.g. element 5 "Library")
