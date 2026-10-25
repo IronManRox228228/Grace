@@ -566,7 +566,7 @@ class AgentLoop:
             )
 
             try:
-                hide_tree = self._fleet_config.is_fleet
+                hide_tree = False  # Fleet mode always sees element list (cockpit-1)
                 facts_ctx = memory.format_user_facts_markdown() if hasattr(memory, "format_user_facts_markdown") else ""
                 async with stage(f"plan#{step_no}") as plan_stage:
                     step = await self._planner.plan(

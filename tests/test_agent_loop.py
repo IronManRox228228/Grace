@@ -419,8 +419,7 @@ class TestEscalationLadder:
         assert loop._ground.await_count == 0
 
     def test_a_repeat_is_regrounded(self):
-        # Rung 2: the element the plan named resolved and clicking it did
-        # nothing, so stop trusting the tree and ask the pixels.
+        # Rung 2: repetition of a named target escalates to reground
         from grace.perception.elements import ElementNode
         from grace.perception.element_graph import ElementGraph
         from grace.fleet import build_gpu_single_preset
@@ -428,13 +427,14 @@ class TestEscalationLadder:
         el = ElementNode(id=3, role="button", name="Open", rect=(0, 0, 10, 10), center=(5, 5))
         graph = ElementGraph(elements=[el])
 
-        loop, _, _ = make_loop([self.CLICK] * 6)
+        click_name = '{"action": "cua_click", "params": {"target_name": "Open"}, "expect": "the message opens"}'
+        loop, _, _ = make_loop([click_name] * 6)
         loop._fleet_config = build_gpu_single_preset()
         loop._ground = AsyncMock()
         freeze_screen(loop, graph=graph)
         asyncio.run(loop.run(user_goal="open the message"))
         assert loop._ground.await_count >= 1
-        assert loop._ground.await_args.kwargs.get("force") is True
+        assert any(c.kwargs.get("force") is True for c in loop._ground.await_args_list)
 
     def test_regrounding_drops_the_element_id(self):
         # The executor resolves the graph first, so leaving element_id in place

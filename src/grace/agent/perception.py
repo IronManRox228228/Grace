@@ -404,7 +404,7 @@ def observe_for_planner(snapshot: "ScreenSnapshot", is_single: bool = False) -> 
 
     import base64
 
-    if is_single and snapshot.png_bytes:
+    if is_single and isinstance(getattr(snapshot, "png_bytes", None), (bytes, bytearray)) and snapshot.png_bytes:
         return Observation(
             markdown=snapshot.to_markdown(),
             image_b64=base64.b64encode(snapshot.png_bytes).decode("ascii"),
