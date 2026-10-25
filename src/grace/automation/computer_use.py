@@ -480,7 +480,18 @@ class ComputerUse:
         # result was passed to resolve() and never read, and then build a fresh
         # CoordinateResolver whose own new UIInspector triggered a *third* walk
         # with renumbered ids. Two full observations per click, for nothing.
-        graph_target = self._resolve_from_graph(params, element_index, target_name)
+        #
+        # A point in the params (the grounder's answer, or an explicit one) is
+        # the more specific instruction: with no shown element id, resolving
+        # target_name through the graph first would click whichever element's
+        # text merely contains the word ("Play" -> "Play next") and discard
+        # the point. So the name is not used to look anything up in that case.
+        pixel_given = params.get("x") is not None and params.get("y") is not None
+        pixel_first = pixel_given and element_index is None
+        graph_target = (
+            None if pixel_first
+            else self._resolve_from_graph(params, element_index, target_name)
+        )
         if graph_target is not None:
             from grace.perception.elements import NAME_MATCH_THRESHOLD, name_match_score
             # R10: never click an element whose text does not plausibly match
@@ -513,7 +524,7 @@ class ComputerUse:
         resolver = CoordinateResolver()
         resolved = resolver.resolve(
             element_index=element_index,
-            target_name=target_name,
+            target_name=None if pixel_first else target_name,
             relative_to=relative_to,
             direction=direction,
             x=x,

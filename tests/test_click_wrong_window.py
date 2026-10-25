@@ -124,7 +124,7 @@ class TestClickWrongWindow:
     async def test_agent_loop_switches_focus_for_dict_window(self):
         """When planned step has dict window target differing from current window, AgentLoop activates it."""
         plan_json = '{"thought": "click bar", "action": "cua_click", "params": {"window": {"title": "Microsoft Edge", "id": 1234}, "target_name": "Address bar"}}'
-        loop, gemma, dispatcher = make_loop([plan_json, '{"thought": "done", "action": "done", "params": {}}'])
+        loop, gemma, dispatcher = make_loop([plan_json, '{"thought": "done", "action": "done", "params": {}, "is_completed": true}'])
 
         res = await loop.run("test goal")
 
