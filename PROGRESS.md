@@ -1581,3 +1581,63 @@ Commit `86268f2` `fix(scripts): real_run.ps1 wraps --capture-run` — pushed to 
   - Removed all WebSocket client code and broken unclosed file handles.
 - **Tests:** `tests/test_real_run_script.py` validates path resolution, absence of WebSocket client, and required CLI flags.
 
+
+
+---
+
+## Real-desktop retest 3
+
+Session addressing all 7 findings from `real-desktop-3.md` following real-desktop retest with Holo3.1-4B launched from a background shell.
+
+### Items and Commits
+
+1. **Item 1: Pre-exec visibility to planner & browser activation**
+   - **Commit:** `bf3c535` `fix(agent): record pre-exec as step 0 and activate browser after pre-exec`
+   - **Fix:** Recorded pre-execution tool invocations (`open_app` etc.) in `AgentMemory` as step 0 (`step_no=0`) and passed `pre_exec_step` to `AgentLoop.run()`. Added `"url"` to key parameter keys rendered in step history markdown. After successful `open_app` with a URL in `main.py`, added `_wait_and_activate_browser()` polling up to 3 seconds for the browser window to appear or change title and activating it before initial perception.
+   - **Tests:** `tests/test_pre_exec_visibility.py` verified step 0 formatting in memory history, presence in the planner's prompt, and browser activation timing.
+
+2. **Item 2: Window activation fallback techniques (2 -> 3 -> 5 -> 4), transient 0 handling, and diagnostic script**
+   - **Commit:** `06dbf43` `fix(automation): fallback activation techniques 2-3-5-4 with verification and transient 0 handling`
+   - **Diagnostic Script:** Created `scripts/diag_activate.py <title-substring>` trying techniques 1..6 and reporting verification results 300ms later in a markdown table.
+   - **Exact command for the user to run `scripts/diag_activate.py`:**
+     ```powershell
+     python scripts/diag_activate.py <title-substring>
+     ```
+     *(Example: `python scripts/diag_activate.py "YouTube Music"` from a background shell)*
+   - **Fix:** In `src/grace/automation/computer_use.py`, routed window activations through `_activate_hwnd()`, trying techniques 2 (`AttachThreadInput` + `SetForegroundWindow` + `BringWindowToTop`) -> 3 (synthetic Alt tap + `SetForegroundWindow`) -> 5 (`SwitchToThisWindow`) -> 4 (`ShowWindow(SW_MINIMIZE)` then `SW_RESTORE`). Re-polls transient 0 (`GetForegroundWindow() == 0`) for up to 500ms before declaring failure. Returns `ok: False` when activation is unverified (never reports `ok: True, verified: False`). Title matching skips empty titles and prioritizes normalized exact matches, then longest substring matches.
+   - **Tests:** `tests/test_window_activation.py` covering fallback order, transient 0 resolution, and unverified activation returning `ok: False`.
+
+3. **Item 3: Hallucinated window IDs**
+   - **Commit:** `6beefad` `fix(automation): ignore hallucinated window ids and list open windows on mismatch`
+   - **Fix:** In `ComputerUse._activate()`, validated window `id` against live window handles. If unknown, the fake id is ignored and matching falls back to normalized title. If neither matches, returns an error listing open windows (title and id, capped at 8).
+   - **Tests:** Added tests in `tests/test_window_activation.py` verifying fallback to title on unknown id and error with open window list when neither matches.
+
+4. **Item 4: Refusing click on wrong window**
+   - **Commits:** `401b153` `fix(automation): refuse click when named window is not verified foreground`, `a59f32c` `fix(main, automation): correct fast-path capture scope and gate click activation on named window`
+   - **Fix:** In `src/grace/automation/computer_use.py` (`_click`), when a target window is named (title or id), checks foreground verification. If not in foreground, attempts activation; if still unverified after activation, refuses the click with `status: "wrong_window"`. `_wrong_window` refuses when foreground is empty/unverified rather than returning `None`. In `src/grace/agent/loop.py`, supported dict window targets for harness app switching focus.
+   - **Tests:** `tests/test_click_wrong_window.py` verifying click refused when unverified foreground, proceed when verified foreground, refuse on empty foreground, and loop focus switching.
+
+5. **Item 5: Full raw planner logging and error reason on unparseable plan**
+   - **Commit:** `f2b6867` `fix(planner): log full raw planner output at debug and 300-char head with error reason at warning`
+   - **Fix:** In `src/grace/agent/planner.py`, logged full raw model output at DEBUG level. Added `parse_planned_step_with_reason()` returning specific parse failure reasons (JSON decode error with line/col, missing action, syntax error in call arguments). When unparseable, logged 300-character head with error reason at WARNING.
+   - **Tests:** `tests/test_planner.py::TestPlannerCalls::test_unparseable_plan_logs_debug_and_warning_with_reason`.
+
+6. **Item 6: Distinguish Whisper memory allocation failure from not-found**
+   - **Commit:** `b868171` `fix(stt): distinguish whisper memory allocation failure from not-found and skip hf fallback`
+   - **Fix:** In `src/grace/stt/whisper_stream.py`, added memory error detection (`MemoryError`, `mkl_malloc`, `failed to allocate memory`, `out of memory`). On memory errors, logs error without falling back to HuggingFace cache and re-raises. Distinguishes `Whisper not found under` from `Whisper failed to load under`.
+   - **Tests:** `tests/test_whisper_model_path.py::TestDownloadRoot::test_memory_error_does_not_fall_back_to_hf_cache`.
+
+7. **Item 7: Remove fake numeric window id from tool schema**
+   - **Commit:** `9110b6f` `fix(schema): remove fake numeric id example from tool description`
+   - **Fix:** In `src/grace/intent/tools.py` (`cua_click`), changed `window` description from `{'title': 'Edge', 'id': 1234}` to `{'title': 'Edge'}; id only if copied from cua_list_windows`.
+   - **Tests:** `tests/test_tool_schema_no_fake_id.py` verifying no tool description contains literal numeric window ids.
+
+### Suite Verification Counts
+
+- **Python (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`):**
+  - Before: `1312 passed, 1 skipped`
+  - After: `1332 passed, 1 skipped, 1 warning in 264.79s` — **0 failed** (+20 tests passed).
+- **Rust (`cargo test --workspace`):**
+  - `21 passed`, `10 passed`, `2 passed`, `2 passed`, `175 passed`, `2 passed`, `27 passed` — **all workspace crates passed, 0 failed**.
+- **Files to download:** None.
+- **Tapes generated/diffed:** None.
