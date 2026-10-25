@@ -1200,27 +1200,55 @@ class ComputerUse:
         import win32con
 
         window = _normalize_window(params.get("window"))
-        hwnd = params.get("hwnd") or params.get("id") or window.get("id") or window.get("hwnd")
+        raw_hwnd = params.get("hwnd") or params.get("id") or window.get("id") or window.get("hwnd")
         window_title = normalize_title(
             params.get("window_title") or params.get("title") or window.get("title") or window.get("app") or params.get("app", "")
         )
         if isinstance(params.get("window"), str) and not window_title:
             window_title = normalize_title(params.get("window"))
 
-        if hwnd:
-            try:
-                if win32gui.IsWindow(hwnd):
-                    target_title = normalize_title(win32gui.GetWindowText(hwnd) or window_title or str(hwnd))
-                    return self._activate_hwnd(hwnd, target_title)
-            except Exception as e:
-                logger.debug(f"Activate via hwnd failed: {e}")
+        # Query live window list for validation
+        live_windows = []
+        try:
+            live_windows = self._list_windows().get("windows", [])
+        except Exception as e:
+            logger.debug(f"Failed to query live windows: {e}")
 
+        live_ids = {w["id"] for w in live_windows if "id" in w}
+
+        # Validate hwnd against live window list. If unknown, ignore the id!
+        target_hwnd = None
+        if raw_hwnd:
+            try:
+                raw_int = int(raw_hwnd)
+                if raw_int in live_ids:
+                    target_hwnd = raw_int
+                elif not live_windows and win32gui.IsWindow(raw_int):
+                    target_hwnd = raw_int
+                else:
+                    logger.warning(f"Activate: ignoring unknown/hallucinated window id {raw_hwnd}")
+            except (ValueError, TypeError):
+                pass
+
+        if target_hwnd:
+            target_title = normalize_title(win32gui.GetWindowText(target_hwnd) or window_title or str(target_hwnd))
+            return self._activate_hwnd(target_hwnd, target_title)
+
+        # Match by normalised title against live window list or EnumWindows
         if window_title:
+            norm_query = window_title.lower().strip()
+            # First match against live_windows
+            for w in live_windows:
+                w_title = normalize_title(w.get("title", "")).lower().strip()
+                if norm_query in w_title or w_title in norm_query:
+                    return self._activate_hwnd(w["id"], w.get("title", window_title))
+
+            # Fallback match via EnumWindows
             def enum_window(h, results):
                 try:
                     if win32gui.IsWindowVisible(h):
-                        t = normalize_title(win32gui.GetWindowText(h) or "")
-                        if window_title and (window_title.lower() in t.lower() or t.lower() in window_title.lower()):
+                        t = normalize_title(win32gui.GetWindowText(h) or "").lower().strip()
+                        if norm_query and (norm_query in t or t in norm_query):
                             results.append(h)
                 except Exception:
                     pass
@@ -1230,20 +1258,23 @@ class ComputerUse:
             except Exception:
                 pass
             if matched_hwnds:
-                target_hwnd = matched_hwnds[0]
-                return self._activate_hwnd(target_hwnd, window_title)
+                return self._activate_hwnd(matched_hwnds[0], window_title)
 
-        # Nothing matched. This used to report success, which meant the planner
-        # was told the window it asked for was in front and then planned its
-        # next step against a screen belonging to some other app entirely.
-        wanted = window_title or hwnd or "(no window named)"
+        # If neither matches, return an error that lists the real windows (title plus id, capped at 8)
+        wanted = window_title or raw_hwnd or "(no window named)"
+        if live_windows:
+            open_list = [f"'{w.get('title')}' (id: {w.get('id')})" for w in live_windows[:8]]
+            open_summary = f"Open windows: {', '.join(open_list)}"
+        else:
+            open_summary = "Use cua_list_windows to see what is open, or launch it first."
+
         return {
             "ok": False,
             "sent": False,
             "verified": False,
             "status": "window_not_found",
             "action": "activate",
-            "error": f"No open window matches {wanted!r}. Use cua_list_windows to see what is open, or launch it first.",
+            "error": f"No open window matches {wanted!r}. {open_summary}",
             "evidence": f"the foreground window is still '{_foreground_title()}'",
         }
 

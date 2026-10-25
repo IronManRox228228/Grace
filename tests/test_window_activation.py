@@ -115,3 +115,47 @@ class TestWindowActivation:
         # Must return ok: False (never ok: True with verified: False)
         assert res["ok"] is False, f"Expected ok: False for unverified activation, got: {res}"
         assert res["verified"] is False
+
+    def test_hallucinated_window_id_ignored_and_matches_by_title(self):
+        """Item 3: Hallucinated window id is ignored if unknown; matches by normalised title."""
+        cu = ComputerUse()
+        fake_id = 1234  # Hallucinated
+        real_id = 9999
+        real_title = "YouTube Music - Personal - Microsoft Edge"
+
+        mock_windows = [
+            {"id": 100, "title": "Terminal", "pid": 1},
+            {"id": real_id, "title": real_title, "pid": 2},
+        ]
+        cu._list_windows = MagicMock(return_value={"ok": True, "windows": mock_windows})
+
+        # Mock _activate_hwnd to record what hwnd was actually activated
+        activated_hwnds = []
+        cu._activate_hwnd = MagicMock(side_effect=lambda h, t: activated_hwnds.append(h) or {
+            "ok": True, "sent": True, "verified": True, "action": "activate", "hwnd": h, "message": f"Activated {t}"
+        })
+
+        # Pass window dict with hallucinated id and valid title
+        res = cu._activate({"window": {"title": "YouTube Music", "id": fake_id}})
+        assert res["ok"] is True
+        assert activated_hwnds == [real_id], f"Expected real hwnd {real_id} to be activated, got {activated_hwnds}"
+
+    def test_hallucinated_window_id_and_unknown_title_returns_real_windows_error(self):
+        """Item 3: When neither matches, error lists real windows (title + id, capped at 8)."""
+        cu = ComputerUse()
+        fake_id = 1234
+        mock_windows = [
+            {"id": i, "title": f"App {i}", "pid": i}
+            for i in range(1, 15)  # 14 windows
+        ]
+        cu._list_windows = MagicMock(return_value={"ok": True, "windows": mock_windows})
+
+        res = cu._activate({"window": {"title": "GhostApp", "id": fake_id}})
+        assert res["ok"] is False
+        assert "error" in res
+        error_msg = res["error"]
+        # Error must list real windows with title plus id
+        assert "'App 1' (id: 1)" in error_msg
+        assert "'App 8' (id: 8)" in error_msg
+        # Capped at 8
+        assert "'App 9' (id: 9)" not in error_msg
