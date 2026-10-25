@@ -272,6 +272,14 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
         ],
         is_system=True,
     ),
+    ToolDefinition(
+        name="type_saved_secret",
+        description="Type a saved password into the focused password field by its secret name. Never types into non-password fields or mismatched sites.",
+        params=[
+            ToolParam("name", "The name of the saved secret (e.g. 'gmail')", True, None, "str"),
+        ],
+        is_system=True,
+    ),
 ]
 
 ALL_TOOLS: list[ToolDefinition] = CUA_TOOLS + SYSTEM_TOOLS

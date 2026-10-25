@@ -213,10 +213,13 @@ class Planner:
         window_title: str = "",
         hide_tree: bool = False,
         user_facts: str = "",
+        available_secrets: Optional[list[str]] = None,
     ) -> str:
         sections = [f"### Goal\n{goal}"]
         if user_facts:
             sections.append(f"### What you know about the user\n{wrap_untrusted(user_facts)}")
+        if available_secrets:
+            sections.append(f"### Saved secret passwords available to type by name\n" + ", ".join(available_secrets))
         if window_title:
             sections.append(f"### Active window\n{window_title}")
         # Not "interactive elements": in blind mode this section is a legend for
@@ -267,6 +270,7 @@ class Planner:
         model: Optional[str] = None,
         hide_tree: bool = False,
         user_facts: str = "",
+        available_secrets: Optional[list[str]] = None,
     ) -> Optional[PlannedStep]:
         """Ask for the next step. Returns None if the model gave nothing usable.
 
@@ -288,6 +292,7 @@ class Planner:
             window_title=window_title,
             hide_tree=hide_tree,
             user_facts=user_facts,
+            available_secrets=available_secrets,
         )
 
         self._calls += 1

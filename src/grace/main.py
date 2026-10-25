@@ -887,10 +887,55 @@ class GraceApp:
         return True
 
     async def _handle_voice_memory_command(self, transcript: str, clean: str) -> Optional[bool]:
-        """Handle voice memory commands (PLAN.md §12.1)."""
+        """Handle voice memory and saved secret commands (PLAN.md §12.1)."""
         store = getattr(self, "memory_store", None)
         if not store:
-            return None
+            from grace.agent.memory import PersistentMemoryStore
+            store = getattr(getattr(self, "agent_loop", None), "_memory_store", None) or PersistentMemoryStore()
+            self.memory_store = store
+
+        # Deterministic secret typing: "type my gmail password" / "type gmail password"
+        type_pwd_match = re.match(r"^type (?:my )?([a-zA-Z0-9_\-\.]+?) password$", clean)
+        if type_pwd_match:
+            name = type_pwd_match.group(1).strip()
+            if hasattr(self, "dispatcher") and self.dispatcher:
+                intent = Intent(tool="type_saved_secret", params={"name": name, "user_authorized": True})
+                res_coro = self.dispatcher.execute(intent)
+                import inspect
+                res = await res_coro if inspect.iscoroutine(res_coro) else res_coro
+                if isinstance(res, dict) and res.get("status") != "ok" and res.get("text"):
+                    await self._speak_response(res["text"])
+            return True
+
+        # What passwords have you saved: speaks names only
+        if clean in (
+            "what passwords have you saved",
+            "what passwords do you have saved",
+            "what passwords are saved",
+            "what passwords have i saved",
+        ):
+            secrets = store.list_secrets()
+            if not secrets:
+                msg = "You don't have any saved passwords."
+            else:
+                names = [s["name"] for s in secrets]
+                msg = f"You have saved passwords for: {', '.join(names)}."
+            self._last_spoken_text = msg
+            await self._speak_response(msg)
+            return True
+
+        # Forget secret password: "forget my gmail password" -> asks confirmation first
+        forget_pwd_match = re.match(r"^forget (?:my )?([a-zA-Z0-9_\-\.]+?) password$", clean)
+        if forget_pwd_match:
+            name = forget_pwd_match.group(1).strip()
+            prompt = f"Are you sure you want me to forget your {name} password?"
+            intent = Intent(tool="forget_secret", params={"name": name, "confirmation_prompt": prompt})
+            self.agent_loop.park_intent(intent, prompt)
+            from grace.input.switch_input import VoiceSwitchRaceResolver
+            self._confirmation_race_resolver = VoiceSwitchRaceResolver()
+            await self._speak_response(prompt)
+            self._confirmation_prompt_finished_at = time.monotonic()
+            return True
 
         # Deterministic remember pattern
         remember_spec = detect_remember_pattern(transcript)
@@ -1409,6 +1454,11 @@ class GraceApp:
 
         clean_transcript = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
 
+        # Security: ignore Voice Access's own phrases completely (never route to agent)
+        if clean_transcript.startswith("voice access"):
+            log.debug(f"Dropped Voice Access command phrase: '{transcript}'")
+            return False
+
         # Immediate voice stop reflex
         if clean_transcript in self._STOP_COMMANDS or clean_transcript.startswith("stop ") or clean_transcript == "stop":
             log.info(f"Immediate stop command detected: '{transcript}'")
@@ -1760,6 +1810,11 @@ class GraceApp:
 
         clean_transcript = re.sub(r"[^\w\s]", "", transcript.strip().lower()).strip()
 
+        # Security: ignore Voice Access's own phrases completely (never route to agent)
+        if clean_transcript.startswith("voice access"):
+            log.debug(f"Dropped Voice Access command phrase: '{transcript}'")
+            return False
+
         # Immediate voice stop reflex in follow-up window
         if clean_transcript in self._STOP_COMMANDS or clean_transcript.startswith("stop ") or clean_transcript == "stop":
             log.info(f"Follow-up stop command detected: '{transcript}'")
@@ -1925,7 +1980,74 @@ def main():
         "--no-tts", action="store_true",
         help="Run without speech output (same behavior, silent).",
     )
+    parser.add_argument(
+        "--save-secret", default=None, metavar="NAME",
+        help="Save a secret password to the DPAPI vault (caregiver setup, prompt-hidden entry).",
+    )
+    parser.add_argument(
+        "--site", default=None, metavar="SITE",
+        help="Target domain or process executable name for the secret being saved.",
+    )
+    parser.add_argument(
+        "--list-secrets", action="store_true",
+        help="List saved secret names and sites only (never prints values).",
+    )
+    parser.add_argument(
+        "--forget-secret", default=None, metavar="NAME",
+        help="Delete a saved secret from the DPAPI vault.",
+    )
     args = parser.parse_args()
+
+    if args.save_secret:
+        if not args.site:
+            print("Error: --site <domain-or-exe> is required when saving a secret.")
+            import sys; sys.exit(1)
+        import getpass
+        val1 = getpass.getpass(f"Enter password for '{args.save_secret}': ")
+        val2 = getpass.getpass(f"Confirm password for '{args.save_secret}': ")
+        if val1 != val2:
+            print("Error: Passwords do not match.")
+            import sys; sys.exit(1)
+        if not val1:
+            print("Error: Password cannot be empty.")
+            import sys; sys.exit(1)
+        from grace.agent.secrets_vault import classify_site
+        from grace.agent.memory import PersistentMemoryStore
+        site_kind, site = classify_site(args.site)
+        store = PersistentMemoryStore()
+        ok = store.save_secret(args.save_secret, val1, site_kind, site)
+        store.close()
+        if ok:
+            print(f"Saved secret '{args.save_secret}' for {site_kind} '{site}'.")
+            import sys; sys.exit(0)
+        else:
+            print(f"Error saving secret '{args.save_secret}'.")
+            import sys; sys.exit(1)
+
+    if args.list_secrets:
+        from grace.agent.memory import PersistentMemoryStore
+        store = PersistentMemoryStore()
+        secrets = store.list_secrets()
+        store.close()
+        if not secrets:
+            print("No saved secrets.")
+        else:
+            print("Saved secrets:")
+            for s in secrets:
+                print(f"  - {s['name']} ({s['site_kind']}: {s['site']})")
+        import sys; sys.exit(0)
+
+    if args.forget_secret:
+        from grace.agent.memory import PersistentMemoryStore
+        store = PersistentMemoryStore()
+        ok = store.forget_secret(args.forget_secret)
+        store.close()
+        if ok:
+            print(f"Forgotten secret '{args.forget_secret}'.")
+            import sys; sys.exit(0)
+        else:
+            print(f"No secret found with name '{args.forget_secret}'.")
+            import sys; sys.exit(1)
 
     app = GraceApp(tts_off=args.no_tts)
     try:

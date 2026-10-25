@@ -223,7 +223,7 @@ class Dispatcher:
         "read_pdf", "summarize_pdf", "adjust_volume", "lock_computer",
         "open_calculator", "delete_file", "undo", "describe_screen",
         "set_speech_rate", "voice_training_status", "rollback_voice_model",
-        "remember",
+        "remember", "type_saved_secret", "forget_secret",
     }
 
     @staticmethod
@@ -305,6 +305,8 @@ class Dispatcher:
             "describe_screen": self._describe_screen,
             "set_speech_rate": self._set_speech_rate,
             "remember": lambda p: self._remember(p, confirmed=confirmed),
+            "type_saved_secret": self._type_saved_secret,
+            "forget_secret": self._forget_secret,
         }
 
         handler = handler_map.get(tool)
@@ -1075,4 +1077,118 @@ class Dispatcher:
         spoken = params.get("spoken_fact") or f"that your {topic} is {value}"
         msg = f"I'll remember {spoken}."
         return {"status": "ok", "text": msg}
+
+    async def _type_saved_secret(self, params: dict) -> dict:
+        """Type a saved secret password into the focused password field under strict deterministic guards."""
+        from grace.agent.secrets_vault import type_saved_secret_guard
+        name = str(params.get("name") or "").strip().lower()
+        if not name:
+            return {"status": "error", "error": "missing_name", "text": "No secret name provided."}
+
+        # Check authorization if requested by planner
+        user_authorized = bool(params.get("user_authorized", False))
+        current_goal = getattr(self, "_current_user_goal", "") or ""
+        if not user_authorized and current_goal:
+            if name not in current_goal.lower() and "password" not in current_goal.lower():
+                return {
+                    "status": "refused",
+                    "error": "unauthorized_goal",
+                    "text": f"I can only type {name} if you asked for it in your goal.",
+                }
+
+        from grace.agent.memory import PersistentMemoryStore
+        store = self._memory_store or PersistentMemoryStore()
+        secret = store.get_secret(name)
+        if not secret:
+            return {"status": "error", "error": "not_found", "text": f"I don't have a saved password for {name}."}
+
+        # Query desktop state deterministically at the moment of typing
+        focused_is_pwd = False
+        active_domain = ""
+        active_proc = ""
+
+        try:
+            import win32gui
+            import win32process
+            import psutil
+            hwnd = win32gui.GetForegroundWindow()
+            if hwnd:
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                try:
+                    active_proc = psutil.Process(pid).name()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            from grace.perception.uia_provider import _get_uia
+            uia = _get_uia()
+            if uia and uia.uia:
+                elem = uia.uia.GetFocusedElement()
+                if elem:
+                    focused_is_pwd = bool(elem.GetCurrentPropertyValue(uia.props.get("is_password", 30019)))
+                    if not focused_is_pwd:
+                        elem_name = str(elem.GetCurrentPropertyValue(uia.props.get("name", 30005)) or "")
+                        aid = str(elem.GetCurrentPropertyValue(uia.props.get("automation_id", 30011)) or "")
+                        role = str(elem.GetCurrentPropertyValue(uia.props.get("aria_role", 30101)) or "")
+                        from grace.perception.elements import is_password_element
+                        focused_is_pwd = is_password_element(role=role, name=elem_name, automation_id=aid)
+        except Exception:
+            pass
+
+        # In testing/simulated environments, check explicitly injected/mocked attributes
+        if not focused_is_pwd and hasattr(self, "_focused_is_password"):
+            focused_is_pwd = bool(self._focused_is_password)
+        if not active_domain and hasattr(self, "_active_domain"):
+            active_domain = str(self._active_domain)
+        if not active_proc and hasattr(self, "_active_proc"):
+            active_proc = str(self._active_proc)
+
+        # Also attempt to find address bar domain if domain secret
+        if not active_domain and secret.get("site_kind") == "domain":
+            try:
+                from grace.perception.uia_provider import _get_uia
+                uia = _get_uia()
+                if uia and hwnd:
+                    window_elem = uia.uia.ElementFromHandle(hwnd)
+                    cond = uia.uia.CreatePropertyCondition(uia.props["name"], "Address and search bar")
+                    addr_elem = window_elem.FindFirst(uia.client.TreeScope_Descendants, cond)
+                    if addr_elem:
+                        val = addr_elem.GetCurrentPropertyValue(uia.props["value"]) or ""
+                        active_domain = str(val)
+            except Exception:
+                pass
+
+        # Evaluate deterministic guards
+        ok, reason = type_saved_secret_guard(
+            secret_info=secret,
+            focused_is_password=focused_is_pwd,
+            active_domain=active_domain,
+            active_process_exe=active_proc,
+        )
+        if not ok:
+            return {"status": "refused", "error": "guard_failed", "text": reason}
+
+        # Type secret value
+        secret_value = secret["value"]
+        if self._cua:
+            await self._cua.type_text(secret_value)
+        else:
+            from grace.automation.win32_driver import Win32Driver
+            Win32Driver.type_text(secret_value)
+
+        # Log ONLY secret:<name> typed, never the value
+        logger.info("secret:%s typed", name)
+        return {"status": "ok", "message": f"secret:{name} typed", "text": ""}
+
+    async def _forget_secret(self, params: dict) -> dict:
+        """Delete a saved secret."""
+        name = str(params.get("name") or "").strip().lower()
+        from grace.agent.memory import PersistentMemoryStore
+        store = self._memory_store or PersistentMemoryStore()
+        ok = store.forget_secret(name)
+        if ok:
+            return {"status": "ok", "text": f"I've forgotten your {name} password."}
+        return {"status": "error", "text": f"I don't have a saved password for {name}."}
 

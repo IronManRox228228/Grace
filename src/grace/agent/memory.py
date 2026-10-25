@@ -220,6 +220,18 @@ class PersistentMemoryStore:
                         )
                     except Exception as fts_exc:
                         logger.debug("FTS5 table/triggers skipped or not available: %s", fts_exc)
+
+                    self._conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS secrets (
+                            name TEXT PRIMARY KEY,
+                            value TEXT NOT NULL,
+                            site_kind TEXT NOT NULL,
+                            site TEXT NOT NULL,
+                            created REAL NOT NULL
+                        )
+                        """
+                    )
                 self._flush_encrypted()
             except Exception as exc:
                 logger.warning(f"Persistent memory DB init failed: {exc}")
@@ -269,6 +281,111 @@ class PersistentMemoryStore:
             except Exception as exc:
                 logger.debug(f"Failed to get preference from persistent memory: {exc}")
                 return default
+
+    def _encrypt_secret_value(self, value: str) -> str:
+        """Encrypt secret value via DPAPI (user scope) if win32crypt is available."""
+        try:
+            import base64
+            import win32crypt
+            enc = win32crypt.CryptProtectData(value.encode("utf-8"), "GraceVaultSecret", None, None, None, 1)
+            return "dpapi:" + base64.b64encode(enc).decode("ascii")
+        except Exception:
+            return value
+
+    def _decrypt_secret_value(self, stored: str) -> str:
+        """Decrypt DPAPI-protected secret value."""
+        if stored.startswith("dpapi:"):
+            try:
+                import base64
+                import win32crypt
+                raw = base64.b64decode(stored[6:])
+                _, dec = win32crypt.CryptUnprotectData(raw, None, None, None, 1)
+                return dec.decode("utf-8")
+            except Exception as e:
+                logger.warning("Failed to decrypt secret value: %s", e)
+                return ""
+        return stored
+
+    def save_secret(self, name: str, value: str, site_kind: str, site: str) -> bool:
+        """Save a secret to the DPAPI vault. Value is encrypted at rest and never logged."""
+        cleaned_name = name.strip().lower()
+        enc_value = self._encrypt_secret_value(value)
+        with self._lock:
+            try:
+                with self._conn:
+                    self._conn.execute(
+                        """
+                        INSERT INTO secrets (name, value, site_kind, site, created)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(name) DO UPDATE SET
+                            value=excluded.value,
+                            site_kind=excluded.site_kind,
+                            site=excluded.site,
+                            created=excluded.created
+                        """,
+                        (cleaned_name, enc_value, site_kind, site, time.time()),
+                    )
+                self._flush_encrypted()
+                return True
+            except Exception as exc:
+                logger.error(f"Failed to save secret to vault: {exc}")
+                return False
+
+    def get_secret(self, name: str) -> Optional[dict[str, Any]]:
+        """Retrieve a secret by name. Decrypts value for deterministic typing guard only."""
+        cleaned_name = name.strip().lower()
+        with self._lock:
+            try:
+                cursor = self._conn.execute(
+                    "SELECT name, value, site_kind, site, created FROM secrets WHERE name = ?",
+                    (cleaned_name,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return {
+                    "name": row[0],
+                    "value": self._decrypt_secret_value(row[1]),
+                    "site_kind": row[2],
+                    "site": row[3],
+                    "created": row[4],
+                }
+            except Exception as exc:
+                logger.error(f"Failed to query secret: {exc}")
+                return None
+
+    def list_secrets(self) -> list[dict[str, Any]]:
+        """List saved secrets (names, sites, site_kinds, created timestamps ONLY, never values)."""
+        with self._lock:
+            try:
+                cursor = self._conn.execute(
+                    "SELECT name, site_kind, site, created FROM secrets ORDER BY name ASC"
+                )
+                rows = cursor.fetchall()
+                return [
+                    {"name": r[0], "site_kind": r[1], "site": r[2], "created": r[3]}
+                    for r in rows
+                ]
+            except Exception as exc:
+                logger.error(f"Failed to list secrets: {exc}")
+                return []
+
+    def forget_secret(self, name: str) -> bool:
+        """Delete a saved secret by name."""
+        cleaned_name = name.strip().lower()
+        with self._lock:
+            try:
+                with self._conn:
+                    cursor = self._conn.execute(
+                        "DELETE FROM secrets WHERE name = ?",
+                        (cleaned_name,),
+                    )
+                    count = cursor.rowcount
+                self._flush_encrypted()
+                return count > 0
+            except Exception as exc:
+                logger.error(f"Failed to forget secret: {exc}")
+                return False
 
     def get_recent_history(self, limit: int = 5) -> list[dict[str, Any]]:
         """Retrieve recent task history across sessions."""
