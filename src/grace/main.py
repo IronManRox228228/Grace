@@ -436,7 +436,7 @@ class GraceApp:
                 except queue.Full:
                     pass
 
-    async def _run_agent_goal(self, transcript: str) -> dict:
+    async def _run_agent_goal(self, transcript: str, pre_exec_step: Optional[dict[str, Any]] = None) -> dict:
         """Run one agent goal while listening for a spoken "stop"/"cancel".
 
         `AgentLoop.run` used to be awaited with nothing listening for more
@@ -450,7 +450,7 @@ class GraceApp:
         self.wake_word.resume()
         forwarder = asyncio.create_task(self._pump_audio_to_wake_word())
         try:
-            return await self.agent_loop.run(user_goal=transcript)
+            return await self.agent_loop.run(user_goal=transcript, pre_exec_step=pre_exec_step)
         finally:
             forwarder.cancel()
             try:
@@ -459,6 +459,77 @@ class GraceApp:
                 pass
             self.wake_word.disarm_cancel_watch()
             self.wake_word.pause()
+
+    async def _wait_and_activate_browser(
+        self,
+        initial_windows: list[dict[str, Any]],
+        target_name: str = "",
+        url: str = "",
+        timeout: float = 3.0,
+    ) -> bool:
+        """Wait up to timeout seconds for a browser window whose title changes or appears, then activate it."""
+        from grace.perception.uia_provider import is_browser_window
+        from urllib.parse import urlparse
+
+        domain = ""
+        if url:
+            domain = urlparse(url if "://" in url else f"https://{url}").netloc.lower()
+            if domain.startswith("www."):
+                domain = domain[4:]
+
+        target_name_lower = target_name.lower().strip() if target_name else ""
+        initial_ids = {w.get("id"): w.get("title", "") for w in (initial_windows or [])}
+
+        start_t = time.monotonic()
+        while time.monotonic() - start_t < timeout:
+            res = await self.dispatcher.execute(Intent(tool="cua_list_windows", params={}))
+            windows = res.get("windows") or (res.get("result", {}).get("windows") if isinstance(res.get("result"), dict) else [])
+            if not windows and hasattr(self, "computer_use"):
+                windows = self.computer_use._list_windows().get("windows", [])
+
+            candidate = None
+            for w in (windows or []):
+                w_id = w.get("id")
+                w_title = w.get("title", "")
+                title_lower = w_title.lower()
+
+                is_new = w_id not in initial_ids
+                is_changed = w_id in initial_ids and w_title != initial_ids[w_id]
+
+                matches_target = False
+                if target_name_lower and target_name_lower in title_lower:
+                    matches_target = True
+                elif domain and domain in title_lower:
+                    matches_target = True
+
+                if (is_new or is_changed or matches_target) and (is_browser_window(w_title) or matches_target):
+                    candidate = w
+                    break
+
+            if candidate is not None:
+                log.info(f"Pre-exec: found browser window '{candidate.get('title')}' (id={candidate.get('id')}), activating...")
+                await self.dispatcher.execute(
+                    Intent(
+                        tool="cua_activate",
+                        params={"id": candidate.get("id"), "window_title": candidate.get("title")},
+                    )
+                )
+                return True
+
+            await asyncio.sleep(0.2)
+
+        # Fallback: if timeout reached, try activating any browser window found
+        res = await self.dispatcher.execute(Intent(tool="cua_list_windows", params={}))
+        windows = res.get("windows") or (res.get("result", {}).get("windows") if isinstance(res.get("result"), dict) else [])
+        for w in (windows or []):
+            if is_browser_window(w.get("title", "")):
+                log.info(f"Pre-exec: timeout reached; activating available browser window '{w.get('title')}'...")
+                await self.dispatcher.execute(
+                    Intent(tool="cua_activate", params={"id": w.get("id"), "window_title": w.get("title")})
+                )
+                return True
+
+        return False
 
     async def _speak_response(self, text: str) -> None:
         """Speak response text and record it for voice repeat requests."""
@@ -1715,15 +1786,41 @@ class GraceApp:
 
         if complexity == TaskComplexity.AGENTIC_GOAL:
             log.info(f"Routing goal '{transcript}' to Agentic ReAct Loop...")
+            pre_exec_step = None
             if intent and intent.tool in ("open_app", "cua_launch"):
                 log.info(f"Pre-executing setup intent before AgentLoop: {intent.tool}({intent.params})")
                 async with trace.stage("pre_exec"):
-                    await self.dispatcher.execute(intent)
-                    await asyncio.sleep(2.0)
+                    before_res = await self.dispatcher.execute(Intent(tool="cua_list_windows", params={}))
+                    before_windows = (
+                        before_res.get("windows")
+                        or (before_res.get("result", {}).get("windows") if isinstance(before_res.get("result"), dict) else [])
+                    )
+                    if not before_windows and hasattr(self, "computer_use"):
+                        before_windows = self.computer_use._list_windows().get("windows", [])
+
+                    pre_res = await self.dispatcher.execute(intent)
+                    pre_exec_step = {
+                        "action": intent.tool,
+                        "params": intent.params,
+                        "result": pre_res,
+                    }
+                    if intent.tool == "open_app" and intent.params.get("url"):
+                        await self._wait_and_activate_browser(
+                            initial_windows=before_windows,
+                            target_name=intent.params.get("name", ""),
+                            url=intent.params.get("url", ""),
+                            timeout=3.0,
+                        )
+                    else:
+                        await asyncio.sleep(2.0)
 
             async with trace.stage("agent_loop") as agent_stage:
-                agent_res = await self._run_agent_goal(transcript)
-                agent_stage.detail(f"{len(agent_res.get('steps') or [])} steps")
+                agent_res = await self._run_agent_goal(transcript, pre_exec_step=pre_exec_step)
+                if hasattr(agent_stage, "detail") and callable(agent_stage.detail):
+                    res_steps = agent_res.get("steps") if isinstance(agent_res, dict) else []
+                    det = agent_stage.detail(f"{len(res_steps or [])} steps")
+                    if asyncio.iscoroutine(det):
+                        await det
             trace.mark_event("action_done")
 
             log.info(f"AgentLoop Result: {agent_res}")

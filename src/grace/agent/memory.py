@@ -752,11 +752,16 @@ class AgentMemory:
         params: dict[str, Any],
         result: dict[str, Any],
         user_update: Optional[str] = None,
+        step_number: Optional[int] = None,
     ) -> StepRecord:
         """Record an executed step and persist to SQLite disk store."""
-        self.current_iteration += 1
+        if step_number is None:
+            self.current_iteration += 1
+            num = self.current_iteration
+        else:
+            num = step_number
         record = StepRecord(
-            step_number=self.current_iteration,
+            step_number=num,
             thought=thought,
             action=action,
             params=params,
@@ -850,7 +855,7 @@ class AgentMemory:
         lines = []
         recent_steps = self.steps_taken[-8:]  # Cap at last 8 steps
 
-        key_param_keys = ("text", "key", "path", "file", "query", "name", "target_name", "element_id")
+        key_param_keys = ("text", "key", "path", "file", "query", "name", "url", "target_name", "element_id")
 
         for step in recent_steps:
             # 1. Action and key params

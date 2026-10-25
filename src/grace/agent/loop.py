@@ -438,12 +438,26 @@ class AgentLoop:
 
     # -- main entry point --------------------------------------------------
 
-    async def run(self, user_goal: str, max_iterations: Optional[int] = None) -> dict[str, Any]:
+    async def run(
+        self,
+        user_goal: str,
+        max_iterations: Optional[int] = None,
+        pre_exec_step: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """Run the autonomous Observe-Plan-Act loop for a given user goal."""
         limit = max_iterations if max_iterations is not None else self._max_iterations
         memory = AgentMemory(user_goal=user_goal, max_iterations=limit,
                              persistent_store=self._memory_store,
                              max_seconds=self._max_seconds)
+        if pre_exec_step:
+            memory.add_step(
+                thought=pre_exec_step.get("thought", "Pre-executed setup intent before goal start"),
+                action=pre_exec_step.get("action", "open_app"),
+                params=pre_exec_step.get("params", {}),
+                result=pre_exec_step.get("result", {"status": "ok"}),
+                user_update=pre_exec_step.get("user_update", "Pre-executing setup action"),
+                step_number=0,
+            )
         self._planner.reset()
         self._pending = None
         self._cancel_requested = False
