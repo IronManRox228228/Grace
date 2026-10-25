@@ -125,7 +125,7 @@ def test_harness_environment_detection():
     profile = get_machine_profile(background_load="test_load")
     assert "cpu" in profile
     assert profile["ram_total_gb"] > 0
-    assert profile["tier_chosen"] in ["cpu", "igpu", "npu"]
+    assert profile["tier_chosen"] in ["cpu", "igpu", "npu", "dgpu"]
     assert profile["background_load"] == "test_load"
 
     runtimes = get_runtime_info()

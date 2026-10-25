@@ -107,8 +107,12 @@ def test_decision_ladder_rung1_pattern():
 
 
 def test_decision_ladder_specialist_and_user_escalation():
-    # Test on CPU floor tier
-    ladder_cpu = DecisionLadder(hardware_tier=HardwareTier.FLOOR_CPU)
+    # Test on CPU floor tier (hermetic: fleet forced to cpu-fleet so the result
+    # does not depend on the physical GPU present on the machine running the suite).
+    ladder_cpu = DecisionLadder(
+        hardware_tier=HardwareTier.FLOOR_CPU,
+        fleet_config=build_cpu_fleet_preset(),
+    )
 
     candidates = [
         ElementCandidate(id=4, name="Submit", control_type="Button"),

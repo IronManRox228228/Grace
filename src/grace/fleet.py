@@ -184,9 +184,9 @@ def get_fleet_config(
 
     # Tier-driven auto selection:
     tier_diag = detect_hardware_tier(config)
-    if tier_diag.tier == HardwareTier.FLOOR_CPU or tier_diag.tier == HardwareTier.MIDDLE_IGPU:
-        # Default to CPU fleet for resource efficiency
+    if tier_diag.tier in (HardwareTier.FLOOR_CPU, HardwareTier.MIDDLE_IGPU):
+        # Memory-bounded tiers: use the micromodel fleet.
         return build_cpu_fleet_preset()
-    else:
-        # On high NPU tier, GPU single preset can be used if configured
-        return build_gpu_single_preset()
+    # BEST_NPU or BEST_DGPU: accelerator compute is available, so a single GPU
+    # model (Holo3.1-4B on CUDA for a dGPU, or on the NPU) serves all slots.
+    return build_gpu_single_preset()

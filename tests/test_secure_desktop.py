@@ -33,6 +33,7 @@ def mock_hardware_and_instant_sleep():
         available_ram_gb=8.0,
         total_ram_gb=16.0,
         has_npu=False,
+        has_dgpu=False,
         has_igpu=False,
         override="cpu",
         rationale="test",
