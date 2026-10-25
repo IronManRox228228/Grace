@@ -163,6 +163,7 @@ class AgentLoop:
         self._dispatcher = dispatcher
         self._perception = perception or PerceptionEngine()
         self._ws_server = ws_server
+        self._speaker = None
         self._planner = planner or Planner(gemma, max_calls=_config_int("planner_max_calls_per_goal", 0, config=config))
         coord_format = _config_str("grounder_coordinate_format", "0-1000", config=config)
         self._grounder = grounder or Grounder(
@@ -222,8 +223,73 @@ class AgentLoop:
     def set_cancel_hook(self, hook) -> None:
         self._cancel_hook = hook
 
+    def set_speaker(self, speaker: Any) -> None:
+        self._speaker = speaker
+
     def set_memory_store(self, memory_store: Any) -> None:
         self._memory_store = memory_store
+
+    async def _handle_secure_desktop(
+        self,
+        memory: AgentMemory,
+        timeout_seconds: float = 60.0,
+    ) -> Optional[dict[str, Any]]:
+        """Handle a Windows security screen (UAC, Lock screen, Sign-in).
+
+        Grace goes deaf and dispatches nothing, speaks the safe line once,
+        shows command phrases in the pill only, and waits up to 60s for Default desktop.
+        """
+        from grace.agent.secure_desktop import (
+            is_input_desktop_secure,
+            SAFE_HANDOFF_SPOKEN,
+            SAFE_HANDOFF_PILL_TEXT,
+        )
+        logger.info("Secure desktop detected. Pausing agent loop and handing off to Voice Access.")
+
+        speaker = getattr(self, "_speaker", None)
+        if speaker:
+            try:
+                import inspect
+                res = speaker(SAFE_HANDOFF_SPOKEN)
+                if inspect.iscoroutine(res):
+                    await res
+            except Exception as e:
+                logger.debug("Failed speaking secure desktop line: %s", e)
+
+        if self._ws_server:
+            try:
+                await self._ws_server.emit({
+                    "type": "PillUpdate",
+                    "text": SAFE_HANDOFF_PILL_TEXT,
+                    "state": "paused",
+                })
+            except Exception:
+                pass
+
+        start_time = time.monotonic()
+        while is_input_desktop_secure():
+            if self._cancel_requested or AgentLoop.is_cancel_requested():
+                return self._cancel_result(memory)
+            if (time.monotonic() - start_time) >= timeout_seconds:
+                logger.warning(f"Secure desktop timeout ({timeout_seconds}s). Stopping honestly.")
+                memory.is_completed = True
+                memory.final_response = "Timed out waiting for Windows security screen to be dismissed."
+                res = self._result(memory)
+                res["status"] = "secure_desktop"
+                return res
+            await asyncio.sleep(0.05)
+
+        logger.info("Returned to Default desktop. Resuming goal.")
+        if self._ws_server:
+            try:
+                await self._ws_server.emit({
+                    "type": "PillUpdate",
+                    "text": "",
+                    "state": "active",
+                })
+            except Exception:
+                pass
+        return None
 
     # -- safety resumption -------------------------------------------------
 
@@ -378,6 +444,12 @@ class AgentLoop:
             if self._cancel_requested or AgentLoop.is_cancel_requested():
                 logger.info("AgentLoop: cancelled by voice stop request.")
                 return self._cancel_result(memory)
+
+            from grace.agent.secure_desktop import is_input_desktop_secure
+            if is_input_desktop_secure():
+                secure_res = await self._handle_secure_desktop(memory)
+                if secure_res is not None:
+                    return secure_res
 
             if memory.is_out_of_time:
                 logger.error(

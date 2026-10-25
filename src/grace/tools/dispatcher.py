@@ -189,25 +189,16 @@ class Dispatcher:
         self._training_scheduler = scheduler
 
     async def execute(self, intent: Intent, confirmed: bool = False) -> dict[str, Any]:
-        """Execute a parsed intent, taping the call when recording is on.
+        """Execute a parsed intent, taping the call when recording is on."""
+        from grace.agent.secure_desktop import is_input_desktop_secure, SAFE_HANDOFF_SPOKEN
+        if is_input_desktop_secure():
+            logger.warning("Dispatcher: refusing dispatch while on secure desktop.")
+            return {
+                "status": "secure_desktop",
+                "error": "secure_desktop",
+                "text": SAFE_HANDOFF_SPOKEN,
+            }
 
-        This is the outermost side-effecting boundary in the backend. In a
-        replay it is asserted rather than performed: what must match is that
-        the Rust port asked for the same tool with the same parameters, in the
-        same order - "Grace did the right thing on screen" is not enough if it
-        took a different route to get there.
-
-        Being the outermost boundary is also why the safety check belongs here.
-        It used to live inside `AgentLoop`, which meant it covered the agentic
-        path and nothing else - and `delete_file`, `close_app` and
-        `lock_computer` are all in `CapabilityRouter.FAST_PATH_TOOLS`, so
-        "delete my tax return" reached the desktop unconfirmed precisely because
-        it was simple enough to route directly. `AgentLoop` still asks first, so
-        it can park the whole step and resume it; this is the backstop that
-        makes the guarantee independent of which path was taken.
-
-        `confirmed=True` is the caller saying the user has already answered yes.
-        """
         refusal = self.confirmation_required(intent, confirmed)
         if refusal is not None:
             return refusal

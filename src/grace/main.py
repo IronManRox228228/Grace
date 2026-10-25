@@ -295,6 +295,8 @@ class GraceApp:
             self.dispatcher.set_memory_store(self.memory_store)
         if hasattr(self.agent_loop, "set_memory_store"):
             self.agent_loop.set_memory_store(self.memory_store)
+        if hasattr(self.agent_loop, "set_speaker"):
+            self.agent_loop.set_speaker(self._speak_response)
 
         # TTS. A --no-tts session (typed-command users) swaps both engines
         # for the harness's silent stand-in, so the same speech paths run and
@@ -489,6 +491,21 @@ class GraceApp:
             # Stop the TTS tail being captured (echo suppression: gate mic for ~200ms)
             if hasattr(self, "pump") and self.pump:
                 self.pump.gate(0.20)
+
+    async def offer_voice_access_setup(self, confirmed: bool) -> str:
+        """Hands-free setup for Voice Access before sign-in."""
+        from grace.agent.secure_desktop import request_enable_voice_access_elevation
+        if not confirmed:
+            msg = "You can turn on Voice Access before sign-in in Windows Settings under Accessibility, Speech, Voice access."
+            await self._speak_response(msg)
+            return msg
+        ok = request_enable_voice_access_elevation()
+        if ok:
+            msg = "I've requested administrator approval to start Voice Access before sign-in. Please approve the prompt using Voice Access."
+        else:
+            msg = "I couldn't launch the administrator helper to enable Voice Access."
+        await self._speak_response(msg)
+        return msg
 
     def _start_llama_server(self) -> None:
         """Start llama-server as a subprocess on GPU."""
@@ -717,6 +734,11 @@ class GraceApp:
                 # Feed audio chunk to wake word detector
                 chunk = await self.pump.get(timeout=0.5)
                 if chunk is None:
+                    continue
+                from grace.agent.secure_desktop import is_deaf
+                if is_deaf():
+                    # Security rule: Grace stops speech recognition completely on secure or locked screens.
+                    # Nothing is transcribed, buffered, logged or written to tapes.
                     continue
                 if self._audio_queue is not None:
                     try:
@@ -1316,6 +1338,10 @@ class GraceApp:
                                 log.info("Listen timeout reached.")
                                 break
                         continue
+                    from grace.agent.secure_desktop import is_deaf
+                    if is_deaf():
+                        # Security rule: Drop audio frames arriving while locked or secure
+                        continue
                     audio_buffer.extend(chunk)
                     rms = self.capture.get_rms(chunk)
                     threshold = self.config.whisper_vad_threshold * 32767
@@ -1352,6 +1378,17 @@ class GraceApp:
             log.warning("Listen window reached hard cutoff while user was speaking.")
             await self.ws_server.emit({"type": "ListeningStopped"})
             await self._speak_response("I didn't catch all of that.")
+            await self.ws_server.emit({"type": "ConversationFinished"})
+            await self.ws_server.emit({"type": "Idle"})
+            return False
+
+        # Don't transcribe if screen is locked or secure (security rule: deaf on secure/locked screens)
+        from grace.agent.secure_desktop import is_deaf
+        if is_deaf():
+            log.info("Secure screen or lock active: dropping captured audio before STT.")
+            audio_buffer.clear()
+            self.whisper.reset_buffer()
+            await self.ws_server.emit({"type": "ListeningStopped"})
             await self.ws_server.emit({"type": "ConversationFinished"})
             await self.ws_server.emit({"type": "Idle"})
             return False
@@ -1711,6 +1748,10 @@ class GraceApp:
                     chunk = await self.pump.get(timeout=0.5)
                     if chunk is None:
                         continue
+                    from grace.agent.secure_desktop import is_deaf
+                    if is_deaf():
+                        # Security rule: Drop audio frames arriving while locked or secure
+                        continue
                     audio_buffer.extend(chunk)
 
                     rms = self.capture.get_rms(chunk)
@@ -1996,7 +2037,40 @@ def main():
         "--forget-secret", default=None, metavar="NAME",
         help="Delete a saved secret from the DPAPI vault.",
     )
+    parser.add_argument(
+        "--check-setup", action="store_true",
+        help="Check accessibility setup, reporting whether Voice Access is set to start before sign-in.",
+    )
+    parser.add_argument(
+        "--enable-voice-access-at-signin", action="store_true",
+        help="Elevated helper to enable Voice Access before sign-in in HKLM registry.",
+    )
     args = parser.parse_args()
+
+    if args.check_setup:
+        from grace.agent.secure_desktop import (
+            is_voice_access_enabled_at_signin,
+            get_signin_accessibility_config,
+        )
+        enabled = is_voice_access_enabled_at_signin()
+        cfg = get_signin_accessibility_config()
+        if enabled:
+            print(f"Voice Access before sign-in: enabled (Configuration: {cfg})")
+            import sys; sys.exit(0)
+        else:
+            print(f"Voice Access before sign-in: disabled (Configuration: {cfg})")
+            print("To enable, run: grace.exe --enable-voice-access-at-signin (requires admin approval) or tick 'Start voice access before you sign in' in Windows Settings.")
+            import sys; sys.exit(1)
+
+    if args.enable_voice_access_at_signin:
+        from grace.agent.secure_desktop import enable_voice_access_at_signin_registry
+        ok = enable_voice_access_at_signin_registry()
+        if ok:
+            print("Successfully enabled Voice Access before sign-in.")
+            import sys; sys.exit(0)
+        else:
+            print("Failed to enable Voice Access before sign-in.")
+            import sys; sys.exit(1)
 
     if args.save_secret:
         if not args.site:
