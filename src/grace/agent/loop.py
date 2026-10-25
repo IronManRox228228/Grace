@@ -726,11 +726,16 @@ class AgentLoop:
                 or step.params.get("window")
                 or (step.params.get("name") if step.action == "open_app" else None)
             )
-            if target_window and isinstance(target_window, str):
+            target_title = (
+                target_window if isinstance(target_window, str)
+                else (target_window.get("title") if isinstance(target_window, dict) else "")
+            )
+            if target_title:
                 cur_title = _window_title(snapshot)
-                if cur_title and normalize_title(target_window).lower() not in cur_title.lower() and step.action != "open_app":
-                    logger.info(f"AgentLoop: harness switching app focus to '{target_window}'")
-                    await self._dispatcher.execute(Intent(tool="cua_activate", params={"window_title": target_window}))
+                if cur_title and normalize_title(target_title).lower() not in cur_title.lower() and step.action != "open_app":
+                    logger.info(f"AgentLoop: harness switching app focus to '{target_title}'")
+                    act_params = {"window": target_window} if isinstance(target_window, dict) else {"window_title": target_window}
+                    await self._dispatcher.execute(Intent(tool="cua_activate", params=act_params))
 
             # Executed before the completion check so a final step that also
             # performs an action is never skipped.

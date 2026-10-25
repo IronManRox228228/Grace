@@ -230,7 +230,16 @@ def _wrong_window(
 
     if wanted:
         if not actual:
-            return None
+            return {
+                "ok": False,
+                "sent": False,
+                "verified": False,
+                "status": "wrong_window",
+                "action": action,
+                "error": (f"You aimed at '{wanted}' but foreground window could not be verified. "
+                          f"Activate the window you meant first."),
+                "evidence": "foreground window is empty",
+            }
         a, b = wanted.lower(), actual.lower()
         if a in b or b in a:
             return None
@@ -404,7 +413,8 @@ class ComputerUse:
             except (ValueError, TypeError):
                 return None
 
-        window = _normalize_window(params.get("window"))
+        window_raw = params.get("window")
+        window = _normalize_window(window_raw)
         target_name = params.get("target_name") or params.get("name") or params.get("label")
         element_index = _to_int(params.get("element_index"))
         relative_to = params.get("relative_to")
@@ -418,6 +428,31 @@ class ComputerUse:
         bounds = window.get("bounds") or window.get("rect")
         if bounds and isinstance(bounds, (list, tuple)) and len(bounds) >= 4:
             window_bounds = (int(bounds[0]), int(bounds[1]), int(bounds[2]), int(bounds[3]))
+
+        wanted_title = window.get("title") or params.get("window_title")
+        if wanted_title or window_raw:
+            wanted_norm = normalize_title(str(wanted_title or "")).strip()
+            actual = normalize_title(_foreground_title())
+            is_fg = bool(wanted_norm and actual and (wanted_norm.lower() in actual.lower() or actual.lower() in wanted_norm.lower()))
+            if not is_fg:
+                # Attempt activation
+                act_params = {"window": window_raw} if window_raw else {"window_title": wanted_title}
+                act_res = self._activate(act_params)
+                actual = normalize_title(_foreground_title())
+                is_fg = bool(act_res.get("verified")) and bool(actual) and (not wanted_norm or wanted_norm.lower() in actual.lower() or actual.lower() in wanted_norm.lower())
+                if not is_fg:
+                    return {
+                        "ok": False,
+                        "sent": False,
+                        "verified": False,
+                        "status": "wrong_window",
+                        "action": "click",
+                        "error": (
+                            f"Target window '{wanted_title or window_raw}' is not the verified foreground after activation. "
+                            f"Foreground is '{actual}'. Click refused to prevent misdirected input."
+                        ),
+                        "evidence": f"foreground window is '{actual}'",
+                    }
 
         initial_fg = _foreground_title()
         refused = _wrong_window(params, "click", initial_title=initial_fg)
