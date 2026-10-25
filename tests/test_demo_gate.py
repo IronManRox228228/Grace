@@ -15,6 +15,7 @@ from scripts.demo_gate import (
     compute_overall_status,
     evaluate_tape_verdict,
     extract_raw_planner_outputs,
+    resolve_tape_path,
 )
 
 
@@ -213,4 +214,21 @@ def test_main_exit_code_fail(monkeypatch):
     from scripts.demo_gate import main
     code = main(["--server-url", "http://127.0.0.1:8080"])
     assert code == 1
+
+
+def test_resolve_tape_path(tmp_path, monkeypatch):
+    import tempfile
+    tape_name = "test_custom_tape"
+    # Fallback to corpus if not in temp
+    p = resolve_tape_path(tape_name)
+    assert p.endswith(os.path.join("corpus", tape_name))
+
+    # Resolves from temp task tapes dir if present
+    temp_dir = os.path.join(tempfile.gettempdir(), "sim-tapes-demo", "tapes", tape_name)
+    os.makedirs(temp_dir, exist_ok=True)
+    try:
+        p2 = resolve_tape_path(tape_name)
+        assert p2 == temp_dir
+    finally:
+        os.rmdir(temp_dir)
 

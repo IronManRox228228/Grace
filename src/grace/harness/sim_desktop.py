@@ -446,6 +446,347 @@ class GenericTapeSim(BaseTapeSim):
         return {"status": "ok"}
 
 
+class YouTubeMusicSim(BaseTapeSim):
+    """Deterministic state machine for `agentic_youtube_music`.
+
+    Goal: Open YouTube Music, search for "Signal" by Home, and play it.
+    State 0 ('initial' / 'browser_open'): Browser open on music.youtube.com.
+    State 1 ('search_focused'): Search box has keyboard focus.
+    State 2 ('query_typed'): "signal by home" typed into search box.
+    State 3 ('results_shown'): Results shown including "Signal" and "Home".
+    State 4 ('song_playing'): Player bar shows "Signal · Home" playing (GOAL STATE).
+    """
+
+    def __init__(self):
+        super().__init__("agentic_youtube_music")
+        self._setup_states()
+
+    def _setup_states(self) -> None:
+        title = "YouTube Music - Edge"
+
+        # State 0: browser_open
+        s0_elements = [
+            ElementNode(id=0, role="edit", name="Address and search bar", rect=(120, 60, 1700, 96),
+                        center=(910, 78), placeholder="Search or enter web address", container="Toolbar",
+                        focused=False, focusable=True, enabled=True, value="music.youtube.com"),
+            ElementNode(id=1, role="button", name="Search", rect=(600, 60, 640, 100),
+                        center=(620, 80), container="Header", focused=False, focusable=True, enabled=True),
+            ElementNode(id=2, role="edit", name="Search songs, albums, artists", rect=(650, 60, 1200, 100),
+                        center=(925, 80), placeholder="Search songs, albums, artists", container="Header",
+                        focused=False, focusable=True, enabled=True, value=""),
+            ElementNode(id=3, role="text", name="Home", rect=(100, 200, 300, 240),
+                        center=(200, 220), container="Navigation", focused=False, focusable=False, enabled=True),
+            ElementNode(id=4, role="text", name="Explore", rect=(100, 260, 300, 300),
+                        center=(200, 280), container="Navigation", focused=False, focusable=False, enabled=True),
+            ElementNode(id=5, role="text", name="Library", rect=(100, 320, 300, 360),
+                        center=(200, 340), container="Navigation", focused=False, focusable=False, enabled=True),
+        ]
+        self.states["initial"] = SimState(
+            name="initial", window_title=title, elements=s0_elements, is_goal=False,
+            class_name="Chrome_WidgetWin_1",
+        )
+        self.states["browser_open"] = self.states["initial"]
+
+        # State 1: search_focused
+        s1_elements = [
+            ElementNode(id=0, role="edit", name="Address and search bar", rect=(120, 60, 1700, 96),
+                        center=(910, 78), placeholder="Search or enter web address", container="Toolbar",
+                        focused=False, focusable=True, enabled=True, value="music.youtube.com"),
+            ElementNode(id=1, role="button", name="Search", rect=(600, 60, 640, 100),
+                        center=(620, 80), container="Header", focused=False, focusable=True, enabled=True),
+            ElementNode(id=2, role="edit", name="Search songs, albums, artists", rect=(650, 60, 1200, 100),
+                        center=(925, 80), placeholder="Search songs, albums, artists", container="Header",
+                        focused=True, focusable=True, enabled=True, value=""),
+            ElementNode(id=3, role="text", name="Home", rect=(100, 200, 300, 240),
+                        center=(200, 220), container="Navigation", focused=False, focusable=False, enabled=True),
+            ElementNode(id=4, role="text", name="Explore", rect=(100, 260, 300, 300),
+                        center=(200, 280), container="Navigation", focused=False, focusable=False, enabled=True),
+            ElementNode(id=5, role="text", name="Library", rect=(100, 320, 300, 360),
+                        center=(200, 340), container="Navigation", focused=False, focusable=False, enabled=True),
+        ]
+        self.states["search_focused"] = SimState(
+            name="search_focused", window_title=title, elements=s1_elements, is_goal=False,
+            class_name="Chrome_WidgetWin_1",
+        )
+
+        # State 2: query_typed
+        s2_elements = [
+            ElementNode(id=0, role="edit", name="Address and search bar", rect=(120, 60, 1700, 96),
+                        center=(910, 78), placeholder="Search or enter web address", container="Toolbar",
+                        focused=False, focusable=True, enabled=True, value="music.youtube.com"),
+            ElementNode(id=1, role="button", name="Search", rect=(600, 60, 640, 100),
+                        center=(620, 80), container="Header", focused=False, focusable=True, enabled=True),
+            ElementNode(id=2, role="edit", name="Search songs, albums, artists", rect=(650, 60, 1200, 100),
+                        center=(925, 80), placeholder="Search songs, albums, artists", container="Header",
+                        focused=True, focusable=True, enabled=True, value="signal by home"),
+            ElementNode(id=3, role="text", name="Home", rect=(100, 200, 300, 240),
+                        center=(200, 220), container="Navigation", focused=False, focusable=False, enabled=True),
+        ]
+        self.states["query_typed"] = SimState(
+            name="query_typed", window_title=title, elements=s2_elements, is_goal=False,
+            class_name="Chrome_WidgetWin_1",
+        )
+
+        # State 3: results_shown
+        s3_title = 'Search results for "signal by home" - YouTube Music - Edge'
+        s3_elements = [
+            ElementNode(id=0, role="edit", name="Address and search bar", rect=(120, 60, 1700, 96),
+                        center=(910, 78), placeholder="Search or enter web address", container="Toolbar",
+                        focused=False, focusable=True, enabled=True, value="music.youtube.com/search?q=signal+by+home"),
+            ElementNode(id=2, role="edit", name="Search songs, albums, artists", rect=(650, 60, 1200, 100),
+                        center=(925, 80), placeholder="Search songs, albums, artists", container="Header",
+                        focused=False, focusable=True, enabled=True, value="signal by home"),
+            ElementNode(id=10, role="button", name="Signal", rect=(300, 200, 1200, 260),
+                        center=(750, 230), container="Results", focused=False, focusable=True, enabled=True),
+            ElementNode(id=11, role="text", name="Home", rect=(300, 260, 1200, 300),
+                        center=(750, 280), container="Results", focused=False, focusable=False, enabled=True),
+            ElementNode(id=12, role="button", name="Play", rect=(1100, 210, 1180, 250),
+                        center=(1140, 230), container="Results", focused=False, focusable=True, enabled=True),
+        ]
+        self.states["results_shown"] = SimState(
+            name="results_shown", window_title=s3_title, elements=s3_elements, is_goal=False,
+            class_name="Chrome_WidgetWin_1",
+        )
+
+        # State 4: song_playing (GOAL STATE)
+        s4_title = "Signal · Home - YouTube Music - Edge"
+        s4_elements = [
+            ElementNode(id=0, role="edit", name="Address and search bar", rect=(120, 60, 1700, 96),
+                        center=(910, 78), placeholder="Search or enter web address", container="Toolbar",
+                        focused=False, focusable=True, enabled=True, value="music.youtube.com/watch?v=signal"),
+            ElementNode(id=10, role="button", name="Signal", rect=(300, 200, 1200, 260),
+                        center=(750, 230), container="Results", focused=False, focusable=True, enabled=True),
+            ElementNode(id=11, role="text", name="Home", rect=(300, 260, 1200, 300),
+                        center=(750, 280), container="Results", focused=False, focusable=False, enabled=True),
+            ElementNode(id=20, role="text", name="Signal · Home", rect=(200, 980, 600, 1040),
+                        center=(400, 1010), container="Player bar", focused=False, focusable=False, enabled=True,
+                        value="Signal · Home"),
+            ElementNode(id=21, role="button", name="Pause", rect=(930, 980, 990, 1040),
+                        center=(960, 1010), container="Player bar", focused=False, focusable=True, enabled=True),
+            ElementNode(id=22, role="text", name="Playing", rect=(1010, 980, 1100, 1040),
+                        center=(1055, 1010), container="Player bar", focused=False, focusable=False, enabled=True,
+                        value="Playing"),
+        ]
+        self.states["song_playing"] = SimState(
+            name="song_playing", window_title=s4_title, elements=s4_elements, is_goal=True,
+            class_name="Chrome_WidgetWin_1",
+        )
+
+    def is_goal_state(self) -> bool:
+        state = self.states.get(self.current_state_name)
+        if not state:
+            return False
+        has_player_bar = any(
+            e.container == "Player bar" and "signal · home" in (e.name or e.value or "").lower()
+            for e in state.elements
+        )
+        return state.is_goal or has_player_bar
+
+    def dispatch(self, intent: Intent, confirmed: bool = False) -> dict[str, Any]:
+        self.dispatched_actions.append({"tool": intent.tool, "params": intent.params})
+        tool = intent.tool
+        params = intent.params or {}
+
+        if tool in ("open_app", "open_url"):
+            if self.current_state_name == "initial":
+                self.current_state_name = "browser_open"
+            return {"status": "ok", "text": "Opened YouTube Music."}
+
+        if tool == "cua_click":
+            target_id = params.get("element_id") or params.get("element_index")
+            target_name = (params.get("target_name") or params.get("name") or "").lower()
+            x = params.get("x")
+            y = params.get("y")
+
+            is_search = (
+                target_id in (1, 2)
+                or "search" in target_name
+                or (x is not None and y is not None and 600 <= x <= 1200 and 60 <= y <= 100)
+            )
+            if is_search:
+                self.current_state_name = "search_focused"
+                return {"status": "ok", "result": {"ok": True, "message": "clicked search", "verified": True, "sent": True}}
+
+            is_play_song = (
+                target_id in (10, 11, 12)
+                or any(k in target_name for k in ("signal", "play", "home"))
+                or (x is not None and y is not None and 300 <= x <= 1200 and 200 <= y <= 300)
+            )
+            if is_play_song and self.current_state_name in ("results_shown", "query_typed", "search_focused"):
+                self.current_state_name = "song_playing"
+                return {"status": "ok", "result": {"ok": True, "message": "playing Signal · Home", "verified": True, "sent": True}}
+
+            return {"status": "ok", "result": {"ok": True, "message": "clicked", "verified": True, "sent": True}}
+
+        if tool == "cua_type_text":
+            text = (params.get("text") or "").lower()
+            if "signal" in text or "home" in text:
+                self.current_state_name = "query_typed"
+                return {"status": "ok", "result": {"ok": True, "message": "typed query", "verified": True, "sent": True}}
+            return {"status": "ok", "result": {"ok": True, "message": "typed", "verified": True, "sent": True}}
+
+        if tool == "cua_press_key":
+            key = str(params.get("key", "")).lower()
+            if key in ("enter", "return") and self.current_state_name in ("query_typed", "search_focused"):
+                self.current_state_name = "results_shown"
+                return {"status": "ok", "result": {"ok": True, "message": "submitted search", "verified": True, "sent": True}}
+            return {"status": "ok", "result": {"ok": True, "message": f"pressed {key}", "verified": True, "sent": True}}
+
+        if tool == "converse":
+            return {"status": "ok"}
+
+        return {"status": "ok"}
+
+
+class PdfToNotesSim(BaseTapeSim):
+    """Deterministic state machine for `agentic_pdf_to_notes`.
+
+    Goal: Find the deadline in report PDF and put it in a new note.
+    States:
+      - PDF found and read (text contains "Final submission deadline: 14 November")
+      - Notepad open
+      - The text "14 November" typed
+    Goal check: the Notepad buffer contains "14 November".
+    """
+
+    def __init__(self, documents_root: Optional[str] = None):
+        super().__init__("agentic_pdf_to_notes")
+        if documents_root is None:
+            documents_root = (
+                os.environ.get("GRACE_DOCUMENTS_DIR")
+                or os.environ.get("DOCUMENTS_ROOT")
+                or os.environ.get("DOCUMENTS_DIR")
+            )
+        if documents_root is None:
+            user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+            documents_root = os.path.join(user_profile, "Documents")
+        self._documents_root = documents_root
+        self._pdf_path = os.path.join(self._documents_root, "report.pdf")
+        self._notepad_open = False
+        self._pdf_read = False
+        self._buffer = ""
+        self._setup_states()
+
+    def _setup_states(self) -> None:
+        desktop_elements = [
+            ElementNode(id=0, role="listitem", name="report.pdf", rect=(40, 40, 120, 120),
+                        center=(80, 80), focused=False, focusable=True, enabled=True),
+            ElementNode(id=1, role="button", name="Start", rect=(0, 1040, 60, 1080),
+                        center=(30, 1060), focused=False, focusable=True, enabled=True),
+        ]
+        self.states["initial"] = SimState(
+            name="initial", window_title="Desktop", elements=desktop_elements, is_goal=False,
+            class_name="Progman",
+        )
+        self.states["file_found"] = SimState(
+            name="file_found", window_title="Desktop", elements=desktop_elements, is_goal=False,
+            class_name="Progman",
+        )
+        self.states["pdf_read"] = SimState(
+            name="pdf_read", window_title="Desktop", elements=desktop_elements, is_goal=False,
+            class_name="Progman",
+        )
+
+        notepad_elements = [
+            ElementNode(id=0, role="document", name="Text Editor", rect=(8, 60, 1912, 1040),
+                        center=(960, 550), focused=True, focusable=True, enabled=True, value=""),
+            ElementNode(id=1, role="menuitem", name="File", rect=(8, 30, 60, 58),
+                        center=(34, 44), focused=False, focusable=True, enabled=True),
+            ElementNode(id=2, role="menuitem", name="Edit", rect=(60, 30, 112, 58),
+                        center=(86, 44), focused=False, focusable=True, enabled=True),
+        ]
+        self.states["notepad_open"] = SimState(
+            name="notepad_open", window_title="Untitled - Notepad", elements=notepad_elements, is_goal=False,
+            class_name="Notepad",
+        )
+
+        typed_elements = [
+            ElementNode(id=0, role="document", name="Text Editor", rect=(8, 60, 1912, 1040),
+                        center=(960, 550), focused=True, focusable=True, enabled=True, value="14 November"),
+            ElementNode(id=1, role="menuitem", name="File", rect=(8, 30, 60, 58),
+                        center=(34, 44), focused=False, focusable=True, enabled=True),
+            ElementNode(id=2, role="menuitem", name="Edit", rect=(60, 30, 112, 58),
+                        center=(86, 44), focused=False, focusable=True, enabled=True),
+        ]
+        self.states["note_typed"] = SimState(
+            name="note_typed", window_title="*Untitled - Notepad", elements=typed_elements, is_goal=True,
+            class_name="Notepad",
+        )
+
+    def is_goal_state(self) -> bool:
+        state = self.states.get(self.current_state_name)
+        if not state:
+            return False
+        for el in state.elements:
+            if el.role == "document" and "14 november" in (el.value or "").lower():
+                return True
+        return False
+
+    def dispatch(self, intent: Intent, confirmed: bool = False) -> dict[str, Any]:
+        self.dispatched_actions.append({"tool": intent.tool, "params": intent.params})
+        tool = intent.tool
+        params = intent.params or {}
+
+        if tool == "search_files":
+            if self.current_state_name == "initial":
+                self.current_state_name = "file_found"
+            return {
+                "status": "ok",
+                "text": f"Here are the matching files:\n  1. {self._pdf_path}",
+                "files": [self._pdf_path],
+            }
+
+        if tool in ("read_pdf", "summarize_pdf"):
+            self._pdf_read = True
+            if self.current_state_name in ("initial", "file_found"):
+                self.current_state_name = "pdf_read"
+            return {
+                "status": "ok",
+                "action": "read_pdf",
+                "text": "Project Report\nFinal submission deadline: 14 November\nPlease submit deliverables on time.",
+            }
+
+        if tool == "open_app":
+            name = (params.get("name") or "").lower()
+            if "notepad" in name or "note" in name:
+                self._notepad_open = True
+                if "14 november" in self._buffer.lower():
+                    self.current_state_name = "note_typed"
+                else:
+                    self.current_state_name = "notepad_open"
+                return {"status": "ok", "text": "I've opened Notepad."}
+            return {"status": "ok", "text": f"Opened {name}."}
+
+        if tool == "cua_click":
+            target_name = (params.get("target_name") or params.get("name") or "").lower()
+            if "notepad" in target_name:
+                self._notepad_open = True
+                self.current_state_name = "notepad_open"
+            return {"status": "ok", "result": {"ok": True, "message": "clicked", "verified": True, "sent": True}}
+
+        if tool == "cua_type_text":
+            text = params.get("text", "")
+            if self._notepad_open or self.current_state_name in ("notepad_open", "note_typed"):
+                self._buffer = text
+                if "14 november" in text.lower():
+                    self.current_state_name = "note_typed"
+                    for el in self.states["note_typed"].elements:
+                        if el.role == "document":
+                            el.value = text
+                    return {"status": "ok", "result": {"ok": True, "message": "typed", "verified": True, "sent": True}}
+                else:
+                    for el in self.states["notepad_open"].elements:
+                        if el.role == "document":
+                            el.value = text
+                    return {"status": "ok", "result": {"ok": True, "message": "typed", "verified": True, "sent": True}}
+            return {"status": "ok", "result": {"ok": False, "message": "no text editor open", "verified": False, "sent": True}}
+
+        if tool == "converse":
+            return {"status": "ok"}
+
+        return {"status": "ok"}
+
+
 def create_sim_for_tape(tape: Tape) -> BaseTapeSim:
     name = (tape.meta.get("scenario") or getattr(tape, "dir", "") or "").lower()
     if "agentic_two_step" in name:
@@ -457,6 +798,15 @@ def create_sim_for_tape(tape: Tape) -> BaseTapeSim:
             or os.environ.get("DOCUMENTS_DIR")
         )
         return ReadPdfSim(documents_root=doc_root)
+    if "agentic_youtube_music" in name:
+        return YouTubeMusicSim()
+    if "agentic_pdf_to_notes" in name:
+        doc_root = (
+            os.environ.get("GRACE_DOCUMENTS_DIR")
+            or os.environ.get("DOCUMENTS_ROOT")
+            or os.environ.get("DOCUMENTS_DIR")
+        )
+        return PdfToNotesSim(documents_root=doc_root)
     return GenericTapeSim(tape)
 
 

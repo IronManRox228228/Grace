@@ -696,6 +696,26 @@ _BROWSER = screen(
     class_name="Chrome_WidgetWin_1",
 )
 
+_YOUTUBE_MUSIC = screen(
+    "YouTube Music - Edge",
+    [
+        element(0, "edit", "Address and search bar", (120, 60, 1700, 96),
+                frame="chrome", container="Toolbar", placeholder="Search or enter web address",
+                value="music.youtube.com"),
+        element(1, "button", "Search", (600, 60, 640, 100), frame="page",
+                container="Header"),
+        element(2, "edit", "Search songs, albums, artists", (650, 60, 1200, 100), frame="page",
+                container="Header", placeholder="Search songs, albums, artists"),
+        element(3, "text", "Home", (100, 200, 300, 240), frame="page",
+                container="Navigation"),
+        element(4, "text", "Explore", (100, 260, 300, 300), frame="page",
+                container="Navigation"),
+        element(5, "text", "Library", (100, 320, 300, 360), frame="page",
+                container="Navigation"),
+    ],
+    class_name="Chrome_WidgetWin_1",
+)
+
 
 # The shape of the app all three recorded failures happened in: the window
 # frame, reported perfectly, and nothing whatever from inside it. Every element
@@ -1013,6 +1033,78 @@ def _catalogue() -> list[Scenario]:
                 "status": "ok", "action": "read_pdf",
                 "text": "[Excerpt 1]: Third quarter results exceeded projections.",
             }},
+        ),
+        Scenario(
+            name="agentic_youtube_music",
+            covers="Open YouTube Music, search for the song Signal by Home, and play it.",
+            turns=[Turn(
+                "open youtube music in my browser, search for the song signal by home, and play it",
+                [
+                    _intent("cua_click", element_id=2),
+                    _plan("cua_click", thought="Focus the search box.",
+                          expect="search box has keyboard focus",
+                          user_update="Clicking search…", element_id=2),
+                    _plan("cua_type_text", thought="Type the query.",
+                          expect="the query is typed",
+                          user_update="Typing song name…", text="signal by home"),
+                    _plan("cua_press_key", thought="Submit the search.",
+                          expect="search results appear",
+                          user_update="Searching…", key="enter"),
+                    _plan("cua_click", thought="Play Signal by Home.",
+                          expect="the song starts playing",
+                          user_update="Playing song…", element_id=10),
+                    _plan("converse", thought="Done.", completed=True,
+                          user_update="Finishing up…",
+                          final="Playing Signal by Home on YouTube Music."),
+                ],
+            )],
+            snapshots=[_YOUTUBE_MUSIC],
+            cua_results=[
+                {"ok": True, "message": "clicked"},
+                {"ok": True, "message": "typed"},
+                {"ok": True, "message": "pressed enter"},
+                {"ok": True, "message": "clicked"},
+            ],
+        ),
+        Scenario(
+            name="agentic_pdf_to_notes",
+            covers="Find the deadline in report PDF and put it in a new note.",
+            turns=[Turn(
+                "find the deadline in my report PDF and put it in a new note",
+                [
+                    _intent("search_files", query="report.pdf"),
+                    _plan("search_files", thought="Search for report PDF.",
+                          expect="the report PDF path is found",
+                          user_update="Searching for PDF…", query="report.pdf"),
+                    _plan("read_pdf", thought="Read report PDF to find the deadline.",
+                          expect="document text is extracted",
+                          user_update="Reading document…", path="report.pdf"),
+                    _plan("open_app", thought="Open Notepad for a new note.",
+                          expect="Notepad is open",
+                          user_update="Opening Notepad…", name="notepad"),
+                    _plan("cua_type_text", thought="Type the deadline into Notepad.",
+                          expect="Notepad contains the deadline",
+                          user_update="Typing deadline…", text="14 November"),
+                    _plan("converse", thought="Done.", completed=True,
+                          user_update="Finishing up…",
+                          final="I found the deadline: 14 November, and put it in a new note."),
+                ],
+            )],
+            snapshots=[_NOTEPAD],
+            tool_results={
+                "search_files": {
+                    "status": "ok",
+                    "text": "Here are the matching files:\n  1. report.pdf",
+                    "files": ["report.pdf"],
+                },
+                "read_pdf": {
+                    "status": "ok",
+                    "action": "read_pdf",
+                    "text": "Final submission deadline: 14 November",
+                },
+                "open_app": {"status": "ok", "text": "Opened Notepad."},
+            },
+            cua_results=[{"ok": True, "message": "typed"}],
         ),
 
         # -- the three real failures ----------------------------------------

@@ -3,7 +3,8 @@
 Starts llama-server with Holo 3.1-4B once, runs:
 1. Smoke tests: visual grounding and streaming planner tool-call.
 2. Intent evaluation: verifies all 'agent'-labelled intents route to agent.
-3. Tape drive: runs both agentic tapes (agentic_two_step, agentic_read_pdf).
+3. Tape drive: runs agentic tapes (agentic_two_step, agentic_read_pdf,
+   agentic_youtube_music, agentic_pdf_to_notes).
    A tape verdict is PASS only on `status: ok` with the goal reached.
    `no_progress` or an honest failure is `NOT PROVEN` (tapes run against a
    stateful sim desktop, a PASS means the sim reached its goal state, and only
@@ -222,6 +223,19 @@ SIM_DESKTOP_NOTE = (
 FROZEN_SCREEN_NOTE = SIM_DESKTOP_NOTE
 
 
+def resolve_tape_path(name: str) -> str:
+    """Find a tape directory in the permanent corpus or generated task tapes."""
+    candidates = [
+        os.path.join(repo_root, "corpus", name),
+        os.path.join(tempfile.gettempdir(), "sim-tapes-demo", "tapes", name),
+        os.path.join(tempfile.gettempdir(), "grace-demo", "tapes", name),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return os.path.join(repo_root, "corpus", name)
+
+
 def evaluate_tape_verdict(res: Optional[dict]) -> str:
     """Evaluate a tape drive result dictionary into PASS, NOT PROVEN, or FAIL.
 
@@ -389,8 +403,10 @@ def main(argv=None) -> int:
 
         # 3. Tape drives
         tapes = [
-            os.path.join(repo_root, "corpus", "agentic_two_step"),
-            os.path.join(repo_root, "corpus", "agentic_read_pdf"),
+            resolve_tape_path("agentic_two_step"),
+            resolve_tape_path("agentic_read_pdf"),
+            resolve_tape_path("agentic_youtube_music"),
+            resolve_tape_path("agentic_pdf_to_notes"),
         ]
         tape_results = run_tapes_gate(url, tapes, args)
         for tname, verdict in tape_results.items():

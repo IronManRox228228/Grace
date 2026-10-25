@@ -10,10 +10,12 @@ import pytest
 
 from grace.agent.perception import ScreenSnapshot
 from grace.harness.sim_desktop import (
+    PdfToNotesSim,
     ReadPdfSim,
     SimDispatcher,
     SimPerception,
     TwoStepSim,
+    YouTubeMusicSim,
     create_sim_for_tape,
     render_element_tree_image,
 )
@@ -34,6 +36,24 @@ def test_render_element_tree_image_generates_valid_png():
     assert len(png_bytes) > 100
     # Valid PNG signature
     assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_create_sim_for_tape_all_scenarios():
+    tape_two_step = MagicMock()
+    tape_two_step.meta = {"scenario": "agentic_two_step"}
+    assert isinstance(create_sim_for_tape(tape_two_step), TwoStepSim)
+
+    tape_read_pdf = MagicMock()
+    tape_read_pdf.meta = {"scenario": "agentic_read_pdf"}
+    assert isinstance(create_sim_for_tape(tape_read_pdf), ReadPdfSim)
+
+    tape_yt = MagicMock()
+    tape_yt.meta = {"scenario": "agentic_youtube_music"}
+    assert isinstance(create_sim_for_tape(tape_yt), YouTubeMusicSim)
+
+    tape_pdf_notes = MagicMock()
+    tape_pdf_notes.meta = {"scenario": "agentic_pdf_to_notes"}
+    assert isinstance(create_sim_for_tape(tape_pdf_notes), PdfToNotesSim)
 
 
 class TestTwoStepSim:
@@ -159,6 +179,111 @@ class TestReadPdfSim:
         assert sim._pdf_path == os.path.join(env_root, "report.pdf")
         res = sim.dispatch(Intent(tool="search_files", params={"query": "report.pdf"}))
         assert os.path.join(env_root, "report.pdf") in res["files"]
+
+
+class TestYouTubeMusicSim:
+    def test_initial_state_not_goal(self):
+        sim = YouTubeMusicSim()
+        assert not sim.is_goal_state()
+        snap = sim.get_snapshot()
+        assert "YouTube Music" in snap.active_window.title
+
+    def test_youtube_music_flow_reaches_goal(self):
+        sim = YouTubeMusicSim()
+        # 1. Click search box
+        res1 = sim.dispatch(Intent(tool="cua_click", params={"element_id": 2}))
+        assert res1.get("status") == "ok"
+        assert sim.current_state_name == "search_focused"
+        assert not sim.is_goal_state()
+
+        # 2. Type query
+        res2 = sim.dispatch(Intent(tool="cua_type_text", params={"text": "signal by home"}))
+        assert res2.get("status") == "ok"
+        assert sim.current_state_name == "query_typed"
+        assert not sim.is_goal_state()
+
+        # 3. Press Enter to submit search
+        res3 = sim.dispatch(Intent(tool="cua_press_key", params={"key": "enter"}))
+        assert res3.get("status") == "ok"
+        assert sim.current_state_name == "results_shown"
+        assert not sim.is_goal_state()
+
+        # 4. Click Play / Signal
+        res4 = sim.dispatch(Intent(tool="cua_click", params={"element_id": 10}))
+        assert res4.get("status") == "ok"
+        assert sim.current_state_name == "song_playing"
+        assert sim.is_goal_state()
+
+        snap = sim.get_snapshot()
+        assert any(e.container == "Player bar" and "signal · home" in (e.name or e.value or "").lower()
+                   for e in snap.graph.elements)
+
+    def test_wrong_action_changes_nothing(self):
+        sim = YouTubeMusicSim()
+        # Click an unrelated element (e.g. element 5 "Library")
+        res = sim.dispatch(Intent(tool="cua_click", params={"element_id": 5}))
+        assert res.get("status") == "ok"
+        assert sim.current_state_name == "initial"
+        assert not sim.is_goal_state()
+
+
+class TestPdfToNotesSim:
+    def test_initial_state_not_goal(self):
+        sim = PdfToNotesSim()
+        assert not sim.is_goal_state()
+        snap = sim.get_snapshot()
+        assert snap.active_window.title == "Desktop"
+
+    def test_pdf_to_notes_flow_reaches_goal(self):
+        sim = PdfToNotesSim()
+        # 1. search_files
+        res1 = sim.dispatch(Intent(tool="search_files", params={"query": "report.pdf"}))
+        assert res1.get("status") == "ok"
+        assert not sim.is_goal_state()
+
+        # 2. read_pdf
+        res2 = sim.dispatch(Intent(tool="read_pdf", params={"path": res1["files"][0]}))
+        assert res2.get("status") == "ok"
+        assert "Final submission deadline: 14 November" in res2.get("text", "")
+        assert not sim.is_goal_state()
+
+        # 3. open_app notepad
+        res3 = sim.dispatch(Intent(tool="open_app", params={"name": "notepad"}))
+        assert res3.get("status") == "ok"
+        assert sim.current_state_name == "notepad_open"
+        assert not sim.is_goal_state()
+
+        # 4. type deadline into Notepad
+        res4 = sim.dispatch(Intent(tool="cua_type_text", params={"text": "14 November"}))
+        assert res4.get("status") == "ok"
+        assert sim.current_state_name == "note_typed"
+        assert sim.is_goal_state()
+
+        snap = sim.get_snapshot()
+        editor = next(e for e in snap.graph.elements if e.role == "document")
+        assert editor.value == "14 November"
+
+    def test_wrong_text_typed_does_not_reach_goal(self):
+        sim = PdfToNotesSim()
+        sim.dispatch(Intent(tool="open_app", params={"name": "notepad"}))
+        res = sim.dispatch(Intent(tool="cua_type_text", params={"text": "arbitrary text"}))
+        assert res.get("status") == "ok"
+        assert not sim.is_goal_state()
+
+    def test_documents_root_from_argument(self, tmp_path):
+        custom_root = str(tmp_path / "pdf_notes_docs")
+        sim = PdfToNotesSim(documents_root=custom_root)
+        assert sim._documents_root == custom_root
+        assert sim._pdf_path == os.path.join(custom_root, "report.pdf")
+        res = sim.dispatch(Intent(tool="search_files", params={"query": "report.pdf"}))
+        assert os.path.join(custom_root, "report.pdf") in res["files"]
+
+    def test_documents_root_from_environment(self, tmp_path, monkeypatch):
+        env_root = str(tmp_path / "env_pdf_notes")
+        monkeypatch.setenv("GRACE_DOCUMENTS_DIR", env_root)
+        sim = PdfToNotesSim()
+        assert sim._documents_root == env_root
+        assert sim._pdf_path == os.path.join(env_root, "report.pdf")
 
 
 class TestSimDispatcherAndPerception:
