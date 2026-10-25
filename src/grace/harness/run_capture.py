@@ -71,12 +71,19 @@ class RedactingFileHandler(logging.FileHandler):
         self.vault_secrets = [v for v in (vault_secrets or []) if v]
 
     def format(self, record: logging.LogRecord) -> str:
-        formatted = super().format(record)
-        formatted = redact_string(formatted)
-        for s in self.vault_secrets:
-            if s and s in formatted:
-                formatted = formatted.replace(s, "<redacted>")
-        return formatted
+        orig_name = record.name
+        token = f"__LOGGER_NAME_{id(record)}__"
+        record.name = token
+        try:
+            formatted = super().format(record)
+            formatted = redact_string(formatted)
+            for s in self.vault_secrets:
+                if s and s in formatted:
+                    formatted = formatted.replace(s, "<redacted>")
+            formatted = formatted.replace(token, orig_name)
+            return formatted
+        finally:
+            record.name = orig_name
 
 
 class RunCapture:

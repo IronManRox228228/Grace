@@ -95,6 +95,11 @@ def redact_string(text: str, username: str = "", home: str = "") -> str:
             return word
         if word.startswith("cua_") or "UNTRUSTED_DATA" in word:
             return word
+        if word.startswith("grace.") or word.startswith("grace_") or word == "grace":
+            return word
+        import logging
+        if word in logging.Logger.manager.loggerDict or word in logging.root.manager.loggerDict:
+            return word
         if re.search(r"\.(?:com|org|net|edu|gov|io|ai|app|dev|co|uk|de|jp|fr|ca|au|in|ru|ch|it|nl|se|no|es|mil|xyz|site|online|tech)\b", word, re.IGNORECASE):
             return word
         return "<redacted>"

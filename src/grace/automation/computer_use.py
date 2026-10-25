@@ -1200,7 +1200,10 @@ class ComputerUse:
         VK_MENU = 0x12
         KEYEVENTF_KEYUP = 0x0002
 
-        if technique == 2:
+        if technique == 1:
+            # 1. plain SetForegroundWindow
+            win32gui.SetForegroundWindow(hwnd)
+        elif technique == 2:
             # 2. AttachThreadInput to foreground thread, SetForegroundWindow + BringWindowToTop
             fg_hwnd = 0
             try:
@@ -1237,16 +1240,11 @@ class ComputerUse:
         elif technique == 5:
             # 5. SwitchToThisWindow(hwnd, True)
             user32.SwitchToThisWindow(hwnd, True)
-        elif technique == 4:
-            # 4. ShowWindow(SW_MINIMIZE) then SW_RESTORE
-            win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
-            time.sleep(0.05)
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
 
     def _activate_hwnd(self, target_hwnd: int, wanted: str) -> dict[str, Any]:
-        """Activate target_hwnd trying techniques 2 -> 3 -> 5 -> 4, verifying after each."""
+        """Activate target_hwnd trying techniques 1 -> 2 -> 3 -> 5, verifying after each."""
         last_fg_title = ""
-        for tech in (2, 3, 5, 4):
+        for tech in (1, 2, 3, 5):
             try:
                 self._apply_activation_technique(target_hwnd, tech)
             except Exception as e:

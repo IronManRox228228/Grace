@@ -137,6 +137,9 @@ TECHNIQUES = [
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     if len(sys.argv) < 2 or not sys.argv[1].strip():
         print("Usage: python scripts/diag_activate.py <title-substring>")
         sys.exit(1)
@@ -156,7 +159,21 @@ def main():
     print(f"{'#':<3} | {'Technique':<50} | {'Success':<8} | {'FG HWND':<10} | {'Foreground Title'}")
     print("-" * 105)
 
+    import win32gui
+    orig_fg = 0
+    try:
+        orig_fg = win32gui.GetForegroundWindow()
+    except Exception:
+        pass
+
     for idx, (name, fn) in enumerate(TECHNIQUES, start=1):
+        if orig_fg and win32gui.IsWindow(orig_fg):
+            try:
+                user32.SwitchToThisWindow(orig_fg, True)
+                time.sleep(0.2)
+            except Exception:
+                pass
+
         try:
             fn(target_hwnd)
         except Exception as e:
