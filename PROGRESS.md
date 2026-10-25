@@ -1263,3 +1263,43 @@ Session of 2026-10-25. Continued from 55c085d (vault) to implement secure deskto
 - `tests/test_secure_desktop.py`: 11 passed in 1.05s (zero sleeps, mocked clock and hardware tier, no hangs).
 - `tests/test_secrets_vault.py`: 6 passed in 3.53s.
 - Full workspace Rust suite (`cargo test --workspace`): 249 passed, 3 ignored, 0 failed.
+
+---
+
+## Real-desktop fixes
+
+Status: working through real-desktop.md items 9, 6, 10, 11, 12, 8, 7 (in that order)
+on branch `main`. Items 1-5 already committed (e010656, af9fd0e, 104e545, 77fc18c, 3d1ef9a).
+Baseline suite before this work: `7 failed, 1262 passed, 1 skipped` (the 6 failures in
+test_config_wiring, test_event_contract_live, test_tool_wiring x2, test_harness_generate,
+test_harness_recorder are pre-existing on HEAD and unrelated to these items).
+
+### Item 9 — zero-width characters in window titles (TOP PRIORITY) — DONE
+
+Commit `4b5ef8c` `fix(desktop): normalise zero-width characters in window titles (real-desktop #9)` — pushed to origin/main.
+
+**Root cause:** Edge Beta embeds U+200B in its title ("Microsoft​ Edge"), so the raw
+string comparison in the window-match guard refused the right window and `cua_activate`
+reported "No open window matches".
+
+**Fix:** Added `normalize_title()` (strip U+200B–U+200D, U+2060, U+FEFF; apply NFKC;
+collapse whitespace) in `src/grace/automation/computer_use.py` and applied it everywhere
+titles are compared or shown to the planner:
+- `src/grace/automation/computer_use.py`: `_foreground_title`, `_wrong_window`, `_activate`,
+  `_activated` (hwnd matching still preferred when the planner passes one).
+- `src/grace/agent/perception.py`: active-window title read at the source so the planner
+  sees normalised titles in `header_markdown`/`to_markdown`.
+- `src/grace/perception/element_graph.py`: `WindowRef.title` normalised at the source.
+- `src/grace/agent/loop.py`: planner-supplied `target_window` normalised in the focus check.
+
+**Tests** (`tests/test_window_guard.py`, new `TestWindowTitleNormalization`): exact title
+"New tab - Personal - Microsoft\\u200b Edge Beta"; normalisation strips all five zero-width/
+format chars; `_wrong_window` does not refuse the right window and still refuses a genuinely
+different one.
+
+**Suite:** `7 failed, 1266 passed, 1 skipped` (up from 1262 passed; no regressions — the 4 new
+tests pass, the 7 failures are the pre-existing 6 plus item 6's own `test_model_swap_manager_emits_fa_on`
+which is fixed in item 6).
+
+---
+
