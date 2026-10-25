@@ -1832,3 +1832,92 @@ Fix under Cockpit 1: In single mode, a shown `element_id` always takes absolute 
   - **1451 passed, 0 failed, 1 skipped** (exceeds count ≥ 1429 requirement).
 - **Rust test suite (`cargo test --workspace`):**
   - **all workspace crates passed, 0 failed** (21 + 10 + 2 + 2 + 175 + 2 + 27 passed; 3 ignored).
+
+
+## Cockpit 2
+
+Implementation of Cockpit 2: the model judges its own progress; the harness reports plain facts (tool action, URL, title, focus, element values) without subjective verdict text or coaching.
+
+### Commits
+
+- `12b8f02` — `fix(agent): the harness reports facts; the model judges progress`
+- `5d75ddc` — `fix(agent): never end a run because an action failed twice`
+- `ff1e75e` — `feat(agent): expect is required and fed back`
+- `c742f79` — `feat(perception): browser URL as a plain fact`
+- `56e9cf5` — `feat(tools): cua_type_text submit option`
+- `70e0a10` — `fix(agent): single mode uses one coordinate space and no OCR`
+- `3db16ad` — `fix: window match prefers closest; prompt says whole screen`
+- `41257d7` — `fix(tests): no test touches the real ~/.grace; order-dependent tape test`
+- `362c433` — `fix(harness): stub perception signatures accept is_single and guard uninitialized loop fleet_config`
+
+### Removed Verdict Lines and Coaching Text
+
+1. `src/grace/agent/loop.py:1218-1240` (`AgentLoop._expectation_note`):
+   - Removed subjective verdict text: `Screen unchanged: ...` and `The input was sent but changed nothing. Try a different target.`
+2. `src/grace/agent/loop.py:1229-1234` (`AgentLoop._expectation_note`):
+   - Removed coaching text: `Do not treat that as failure...`, `You must choose a different action or declare the goal complete.` Replaced with neutral fact: `You have now done this exact action {repeat_count} times on this same screen.`
+3. `src/grace/agent/loop.py:1208-1215` (`AgentLoop._expectation_note`):
+   - Removed coaching sentence from tool errors: `Do not repeat this action unchanged. Try a different element or a different approach.`
+4. `src/grace/agent/loop.py:975-992` (`AgentLoop.run`):
+   - Removed `fail_count >= 2` -> `needs_user_input` termination block (`I'm having trouble with ...`). A run no longer terminates because an action fails twice.
+   - When the same equivalent action returns a tool error >= 2 times, the prompt states the plain fact: `This exact action has returned an error {tool_error_count} times.`
+5. `src/grace/agent/loop.py:962`:
+   - Updated `action_failed` to only count real tool errors (`status == "error"` or `ok is False`), not `verified is False`.
+6. `src/grace/automation/computer_use.py:145-165` (`_screen_state` / `_change_verdict`):
+   - Removed `Page URL/title unchanged` claim; replaced with `Window title unchanged` and only reports URL when actually read from the chrome address bar.
+7. `src/grace/agent/perception.py:348-364` (`ScreenSnapshot.to_markdown`):
+   - Removed redundant nested `wrap_untrusted` from OCR output (outer planner prompt section already wraps `### What is on screen`).
+8. `src/grace/agent/perception.py:569` (`PerceptionEngine.capture_snapshot`):
+   - Skipped OCR in single mode (`not is_single`) since multimodal single-mode planners directly inspect the visual screenshot.
+9. `src/grace/automation/computer_use.py:1411` (`_pick_best_match`):
+   - Removed "shortest wins" selection. Replaced with `pick_best_window_match` preferring candidate containing all wanted tokens, then most overlapping tokens, then closest length.
+10. `src/grace/agent/planner.py:157` (`get_planner_system_prompt`):
+    - Removed "screenshot of the active window"; updated to state that the screenshot is of the whole screen.
+
+### Old Tests Changed
+
+1. `tests/test_agent_loop.py::TestPromptBuilder::test_same_screen_repeat_adds_prompt_warning`:
+   - Updated to assert `You have now done this exact action 2 times on this same screen.` instead of old coaching text.
+2. `tests/test_agent_loop.py::TestPromptBuilder::test_failure_note_has_remediation_guidance`:
+   - Updated to verify tool error fact without the removed coaching sentence `Do not repeat this action unchanged...`.
+3. `tests/test_cockpit_effect_text.py::test_effect_text_never_contains_verdict_words`:
+   - Verified absence of "Screen unchanged" and coaching words in effect feedback.
+4. `tests/test_cockpit_effect_text.py::test_browser_ocr_triggered_and_rendered_in_reading_order`:
+   - Updated assertion to `assert "<<<UNTRUSTED_DATA_START" not in md` to verify removal of redundant double-wrapping in `to_markdown`.
+5. `tests/test_read_only_step_notes.py`:
+   - Updated to assert neutral fact note format without coaching text.
+
+### Tests and Modules that Wrote to ~/.grace
+
+1. `src/grace/agent/memory.py`:
+   - `AgentMemory()` defaulted to `persistent_store or PersistentMemoryStore()`. Whenever instantiated with default `db_path=None` without checking for test execution, it created and wrote to `~/.grace/memory.db`.
+2. `src/grace/main.py`:
+   - `GraceApp.__init__` instantiated `self.memory_store = PersistentMemoryStore()`.
+3. Tests constructing `GraceApp(tts_off=True)` without patching `PersistentMemoryStore`:
+   - `tests/test_memory_facts.py` (12 test cases)
+   - `tests/test_secrets_vault.py` (2 test cases)
+   - `tests/test_secure_desktop.py` (3 test cases)
+   - `tests/test_pre_exec_visibility.py`
+   - `tests/test_offline_guarantee.py`
+   - `tests/test_harness_replay.py`
+   - `tests/integration/test_config_wiring.py`
+4. `src/grace/harness/run_capture.py`:
+   - `load_vault_secret_values()` instantiated `PersistentMemoryStore()`.
+5. Guard added:
+   - In `PersistentMemoryStore.__init__`, when running under pytest (`"PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules`), default `db_path` is strictly `":memory:"`.
+   - Any attempt to open a path inside `~/.grace` during test execution immediately raises `RuntimeError`.
+   - Verified via `tests/test_memory_home_guard.py`.
+
+### Leaking State Found and Resolved
+
+- In `tests/test_secure_desktop.py`, `test_audio_frames_dropped_while_locked_or_secure_and_resumes_after` set `set_mock_session_locked(False)` and `set_mock_desktop_name("Default")` on module-level globals in `src/grace/agent/secure_desktop.py` without teardown cleanup.
+- This leaked into subsequent tests in a serial run, keeping `_mock_desktop_name = "Default"` and `_mock_session_locked = False` across runs, which caused `test_a_generated_tape_replays_to_itself[agentic_two_step]` in `tests/test_harness_generate.py` to fail when run serially.
+- Resolution: Added an `autouse=True` fixture in `tests/test_secure_desktop.py` resetting `set_mock_desktop_name(None)` and `set_mock_session_locked(None)` in a `finally` block after every test.
+- Additionally in `src/grace/agent/loop.py`: Used `getattr(getattr(self, "_fleet_config", None), "is_single", False)` to prevent `AttributeError` when `AgentLoop.__new__(AgentLoop)` is instantiated uninitialized in tests.
+
+### Verification Results
+
+- **Python test suite (`pytest -q -p no:cacheprovider`):**
+  - **1470 passed, 0 failed, 1 skipped** in 310.75s (count exceeds 1451 requirement).
+- **Rust test suite (`cargo test --workspace`):**
+  - **all workspace crates passed, 0 failed** (21 + 10 + 2 + 2 + 175 + 2 + 27 passed; 3 ignored).
