@@ -674,9 +674,14 @@ class TestWallClockBudget:
         memory._started -= 10_000
         assert memory.is_out_of_time is False
 
-    def test_the_default_is_not_unlimited(self):
+    def test_the_default_is_not_unlimited(self, monkeypatch):
         # The twelve-minute run crossed no limit because there was none to
         # cross. If this ever reverts to 0 the whole of A4 is inert.
+        #
+        # The user's own .env may set AGENT_MAX_SECONDS=0 (no limit) and is
+        # loaded into the environment at import, so this checks the shipped
+        # default with that variable absent rather than reading the real file.
+        monkeypatch.delenv("AGENT_MAX_SECONDS", raising=False)
         from grace.agent.loop import DEFAULT_MAX_SECONDS
 
         assert DEFAULT_MAX_SECONDS > 0

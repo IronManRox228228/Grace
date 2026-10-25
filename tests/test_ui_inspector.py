@@ -51,11 +51,11 @@ class TestUIInspector:
         assert "not found" in res["error"]
 
     def test_click_mismatch_names_the_resolved_element(self, monkeypatch):
-        """R10: a name-resolved element whose text is not a plausible match for
-        target_name is not clicked; the error names the mismatch.
+        """A shown id whose text differs from target_name is still clicked.
 
-        "search" is a substring of "researching", so name-based resolution
-        finds it, but the token overlap is zero, so the click is refused.
+        The model decides and the harness obeys (cockpit-1): the old R10
+        refusal is gone, and the disagreement comes back as a note naming the
+        element that was actually clicked.
         """
         from grace.perception.element_graph import ElementGraph, WindowRef
         from grace.perception.elements import ElementNode, FRAME_APP
@@ -74,23 +74,28 @@ class TestUIInspector:
                 return graph
 
         import grace.agent.perception as perception_mod
+        import grace.automation.computer_use as cu_mod
         monkeypatch.setattr(
             perception_mod.PerceptionEngine,
             "get_graph_builder",
             classmethod(lambda cls: FakeBuilder()),
         )
+        monkeypatch.setattr(cu_mod, "_foreground_title", lambda: "App")
+        monkeypatch.setattr(cu_mod, "_monitor_rects", lambda: [(0, 0, 1920, 1080)])
+        monkeypatch.setattr(cu_mod, "_settled_state", lambda: None)
+        monkeypatch.setattr(cu_mod, "_invalidate_graph", lambda: None)
+        clicked = []
         monkeypatch.setattr(
-            "grace.automation.computer_use._foreground_title",
-            lambda: "App",
+            "grace.automation.win32_driver.Win32Driver.click_at",
+            staticmethod(lambda x, y, *a, **k: clicked.append((x, y)) or True),
         )
 
         cu = ComputerUse()
-        res = cu.perform("click", {"target_name": "search"})
+        res = cu.perform("click", {"element_id": 1, "target_name": "search"})
 
-        assert res["ok"] is False
-        assert res["status"] == "element_not_found"
-        assert "nothing was clicked" in res.get("evidence", "") or "not found" in res.get("evidence", "").lower()
-
+        assert res["ok"] is True
+        assert clicked == [(50, 15)]
+        assert "clicked [1] 'Researching'; you described it as 'search'" in res["message"]
 
     def test_partial_match_is_one_directional(self):
         # The reverse test (`elem.name in q`) let a control named "Close"
