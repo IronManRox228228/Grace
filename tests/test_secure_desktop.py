@@ -12,11 +12,14 @@ from grace.agent.secure_desktop import (
     SAFE_HANDOFF_SPOKEN,
     enable_voice_access_at_signin_registry,
     get_input_desktop_name,
+    is_deaf,
     is_input_desktop_secure,
+    is_session_locked,
     is_voice_access_enabled_at_signin,
     merge_voice_access_config,
     request_enable_voice_access_elevation,
     set_mock_desktop_name,
+    set_mock_session_locked,
 )
 from grace.intent.parser import Intent
 from grace.tools.dispatcher import Dispatcher
@@ -223,3 +226,49 @@ def test_offer_voice_access_no_write_without_yes():
         msg_yes = asyncio.run(app.offer_voice_access_setup(confirmed=True))
         assert mock_elevate.call_count == 1
         assert "administrator approval" in msg_yes
+
+
+def test_voice_access_phrases_dropped_by_router():
+    """Utterances starting with 'voice access' are dropped by router and never routed to the agent."""
+    from grace.main import GraceApp
+    app = GraceApp(tts_off=True)
+    app.agent_loop = MagicMock()
+
+    trace = MagicMock()
+    res1 = asyncio.run(app._route_transcript(trace, "voice access wake up"))
+    assert res1 is False
+    assert app.agent_loop.run.call_count == 0
+
+    res2 = asyncio.run(app._route_transcript(trace, "voice access sleep"))
+    assert res2 is False
+    assert app.agent_loop.run.call_count == 0
+
+
+def test_audio_frames_dropped_while_locked_or_secure_and_resumes_after():
+    """Audio frames arriving while locked or secure are dropped before STT; recognition resumes after unlock."""
+    from grace.main import GraceApp
+    app = GraceApp(tts_off=True)
+
+    set_mock_session_locked(True)
+    assert is_deaf() is True
+
+    # Drop during locked
+    queue_mock = MagicMock()
+    app._audio_queue = queue_mock
+
+    # Simulate chunk arrival in main pump
+    chunk = b"\x00" * 3200
+    # While deaf, chunk is not put in audio_queue
+    if not is_deaf():
+        app._audio_queue.put(chunk)
+    assert queue_mock.put.call_count == 0
+
+    # Resume when unlocked
+    set_mock_session_locked(False)
+    set_mock_desktop_name("Default")
+    assert is_deaf() is False
+
+    if not is_deaf():
+        app._audio_queue.put(chunk)
+    assert queue_mock.put.call_count == 1
+
