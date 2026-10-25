@@ -927,6 +927,27 @@ class TestNoEffectRepeatNote:
         assert "completed." not in res["final_response"]
 
 
+    def test_three_identical_non_screen_actions_end_with_spoken_message(self):
+        """Even though non-screen tools (search_files, read_pdf) are exempt from
+        the screen-change detector's 'NO VISIBLE EFFECT' message, 3 identical
+        actions in a row still trigger the loop breaker and stop with an honest reason."""
+        search = (
+            '{"action": "search_files", "params": {"query": "report.pdf"}, '
+            '"expect": "find report"}'
+        )
+        loop, _, dispatcher = make_loop([search] * 20)
+        freeze_screen(loop)
+        dispatcher.execute.return_value = {
+            "status": "ok",
+            "files": ["C:\\test\\report.pdf"],
+            "text": "Found report.pdf",
+        }
+        res = asyncio.run(loop.run(user_goal="find the report"))
+        assert res["status"] == "no_progress"
+        assert res["final_response"]
+        assert "completed." not in res["final_response"]
+
+
 class TestToolResultFeedback:
     """Non-screen tool results must be fed back to the planner in the next prompt
     under '### Result of your last step', wrapped in wrap_untrusted and capped in size.

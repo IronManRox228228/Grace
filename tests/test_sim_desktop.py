@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -140,6 +141,24 @@ class TestReadPdfSim:
         assert sim.is_goal_state()
         snap = sim.get_snapshot()
         assert "report.pdf" in snap.active_window.title
+
+
+    def test_documents_root_from_argument(self, tmp_path):
+        custom_root = str(tmp_path / "custom_docs")
+        sim = ReadPdfSim(documents_root=custom_root)
+        assert sim._documents_root == custom_root
+        assert sim._pdf_path == os.path.join(custom_root, "report.pdf")
+        res = sim.dispatch(Intent(tool="search_files", params={"query": "report.pdf"}))
+        assert os.path.join(custom_root, "report.pdf") in res["files"]
+
+    def test_documents_root_from_environment(self, tmp_path, monkeypatch):
+        env_root = str(tmp_path / "env_docs")
+        monkeypatch.setenv("GRACE_DOCUMENTS_DIR", env_root)
+        sim = ReadPdfSim()
+        assert sim._documents_root == env_root
+        assert sim._pdf_path == os.path.join(env_root, "report.pdf")
+        res = sim.dispatch(Intent(tool="search_files", params={"query": "report.pdf"}))
+        assert os.path.join(env_root, "report.pdf") in res["files"]
 
 
 class TestSimDispatcherAndPerception:

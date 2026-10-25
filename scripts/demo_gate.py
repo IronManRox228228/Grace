@@ -5,9 +5,9 @@ Starts llama-server with Holo 3.1-4B once, runs:
 2. Intent evaluation: verifies all 'agent'-labelled intents route to agent.
 3. Tape drive: runs both agentic tapes (agentic_two_step, agentic_read_pdf).
    A tape verdict is PASS only on `status: ok` with the goal reached.
-   `no_progress` or an honest failure is `NOT PROVEN` (the tape harness serves
-   a frozen screen, so tapes can only prove routing and loop safety; task
-   completion is proven only by a real-desktop run).
+   `no_progress` or an honest failure is `NOT PROVEN` (tapes run against a
+   stateful sim desktop, a PASS means the sim reached its goal state, and only
+   a real-desktop run proves that real apps behave like the sim).
 
 Stops the server in finally, prints one PASS/FAIL/NOT PROVEN table, and exits
 non-zero on FAIL (exit code 1) or NOT PROVEN (exit code 2).
@@ -215,10 +215,11 @@ def run_intents_gate(url: str, dataset_path: str) -> tuple[bool, int, int]:
     return all_agent_ok, routed_agent, total_agent
 
 
-FROZEN_SCREEN_NOTE = (
-    "The tape harness serves a frozen screen, so tapes can only prove "
-    "routing and loop safety; task completion is proven only by a real-desktop run."
+SIM_DESKTOP_NOTE = (
+    "Tapes run against a stateful sim desktop, a PASS means the sim reached "
+    "its goal state, and only a real-desktop run proves that real apps behave like the sim."
 )
+FROZEN_SCREEN_NOTE = SIM_DESKTOP_NOTE
 
 
 def evaluate_tape_verdict(res: Optional[dict]) -> str:

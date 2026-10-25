@@ -11,6 +11,7 @@ if repo_root not in sys.path:
 
 from scripts.demo_gate import (
     FROZEN_SCREEN_NOTE,
+    SIM_DESKTOP_NOTE,
     compute_overall_status,
     evaluate_tape_verdict,
     extract_raw_planner_outputs,
@@ -159,10 +160,11 @@ def test_extract_raw_planner_outputs():
 
 def test_frozen_screen_note_content():
     expected_clause = (
-        "the tape harness serves a frozen screen, so tapes can only prove "
-        "routing and loop safety; task completion is proven only by a real-desktop run."
+        "tapes run against a stateful sim desktop, a pass means the sim reached "
+        "its goal state, and only a real-desktop run proves that real apps behave like the sim."
     )
     assert expected_clause in FROZEN_SCREEN_NOTE.lower()
+    assert expected_clause in SIM_DESKTOP_NOTE.lower()
 
 
 def test_main_exit_code_not_proven(monkeypatch):

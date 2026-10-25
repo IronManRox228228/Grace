@@ -17,7 +17,7 @@ Before walking on stage or starting the recording:
    python scripts/demo_gate.py
    ```
    Verifies local Holo 3.1-4B visual grounding, planner tool-calling, intent routing (100% of `agent` intents routed), and agentic tape drive execution without stuck loops. Smoke and routing checks must show `PASS`.
-   *Notice*: The tape harness serves a frozen screen, so tapes can only prove routing and loop safety; task completion is proven only by a real-desktop run. Under the harness, tape drives report `NOT PROVEN` (overall gate status `NOT PROVEN`, exit code 2).
+   *Notice*: Tapes run against a stateful sim desktop, a PASS means the sim reached its goal state, and only a real-desktop run proves that real apps behave like the sim.
 3. Run the preflight verification script:
    ```cmd
    python scripts/demo_check.py --demo
@@ -163,7 +163,7 @@ Demonstrates local PDF document ingestion, text extraction, sub-second TF-IDF ch
 
 ## Tape Review and Installation
 
-> **Notice**: The tape harness serves a frozen screen, so tapes can only prove routing and loop safety; task completion is proven only by a real-desktop run.
+> **Notice**: Tapes run against a stateful sim desktop, a PASS means the sim reached its goal state, and only a real-desktop run proves that real apps behave like the sim.
 
 All 5 demo flow replay tapes have been deterministically recorded and verified:
 - `multi_app_verify_retry`

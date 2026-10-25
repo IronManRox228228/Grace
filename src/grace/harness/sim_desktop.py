@@ -295,10 +295,19 @@ class ReadPdfSim(BaseTapeSim):
     State 3 ('pdf_opened'): PDF opened in viewer (GOAL STATE).
     """
 
-    def __init__(self):
+    def __init__(self, documents_root: Optional[str] = None):
         super().__init__("agentic_read_pdf")
-        user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
-        self._pdf_path = os.path.join(user_profile, "Documents", "report.pdf")
+        if documents_root is None:
+            documents_root = (
+                os.environ.get("GRACE_DOCUMENTS_DIR")
+                or os.environ.get("DOCUMENTS_ROOT")
+                or os.environ.get("DOCUMENTS_DIR")
+            )
+        if documents_root is None:
+            user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+            documents_root = os.path.join(user_profile, "Documents")
+        self._documents_root = documents_root
+        self._pdf_path = os.path.join(self._documents_root, "report.pdf")
         self._setup_states()
 
     def _setup_states(self) -> None:
@@ -442,7 +451,12 @@ def create_sim_for_tape(tape: Tape) -> BaseTapeSim:
     if "agentic_two_step" in name:
         return TwoStepSim()
     if "agentic_read_pdf" in name:
-        return ReadPdfSim()
+        doc_root = (
+            os.environ.get("GRACE_DOCUMENTS_DIR")
+            or os.environ.get("DOCUMENTS_ROOT")
+            or os.environ.get("DOCUMENTS_DIR")
+        )
+        return ReadPdfSim(documents_root=doc_root)
     return GenericTapeSim(tape)
 
 
