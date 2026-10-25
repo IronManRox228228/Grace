@@ -76,11 +76,20 @@ class Win32Driver:
 
     @classmethod
     def _is_foreground(cls, target_hwnd: int) -> bool:
-        """True if target_hwnd is already the foreground window."""
+        """True if target_hwnd (or its root ancestor) is already the foreground window."""
         try:
             import win32gui
 
-            return win32gui.GetForegroundWindow() == target_hwnd
+            fg = win32gui.GetForegroundWindow()
+            if fg == target_hwnd:
+                return True
+            try:
+                root = win32gui.GetAncestor(target_hwnd, 2)  # GA_ROOT
+                if root and (fg == root or win32gui.GetAncestor(fg, 2) == root):
+                    return True
+            except Exception:
+                pass
+            return False
         except Exception:
             return False
 
@@ -89,9 +98,12 @@ class Win32Driver:
         """Bring target window to the foreground and verify focus.
 
         Win32 blocks SetForegroundWindow for background processes unless the
-        caller is already in the foreground. We unlock that restriction with a
-        quick ALT keypress (a documented trick), then verify with
-        GetForegroundWindow and retry once.
+        caller is already in the foreground. Uses documented safe techniques:
+        - Resolving root ancestor if target_hwnd is a child control (e.g. Chrome/Edge render widget)
+        - AttachThreadInput to the foreground thread to share input queue rights
+        - AllowSetForegroundWindow(-1)
+        - Synthetic ALT-tap to unlock foreground lock
+        - ShowWindow(SW_RESTORE) and BringWindowToTop
 
         Returns True if target_hwnd is the foreground window on exit.
         """
@@ -99,31 +111,78 @@ class Win32Driver:
             import win32gui
             import win32con
 
-            def _is_active() -> bool:
-                try:
-                    return win32gui.GetForegroundWindow() == target_hwnd
-                except Exception:
-                    return False
-
-            if _is_active():
-                return True
-
+            # Resolve root ancestor if target is a child window
             try:
-                win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
+                root = win32gui.GetAncestor(target_hwnd, 2)  # GA_ROOT
+                if isinstance(root, int) and root > 0:
+                    target_hwnd = root
             except Exception:
                 pass
 
-            for attempt in range(2):
+            def _is_active(fg=None) -> bool:
                 try:
-                    # ALT-tap unlocks SetForegroundWindow for background activation
-                    cls._send_alt_tap()
-                    win32gui.SetForegroundWindow(target_hwnd)
-                    time.sleep(FOCUS_SETTLE_MS / 1000.0)
-                except Exception as e:
-                    logger.debug(f"SetForegroundWindow attempt {attempt + 1} failed: {e}")
+                    if fg is None:
+                        fg = win32gui.GetForegroundWindow()
+                    if fg == target_hwnd:
+                        return True
+                    root_fg = win32gui.GetAncestor(fg, 2)
+                    if isinstance(root_fg, int) and root_fg > 0 and root_fg == target_hwnd:
+                        return True
+                    return False
+                except Exception:
+                    return False
 
-                if _is_active():
-                    return True
+            fg_hwnd = win32gui.GetForegroundWindow()
+            if _is_active(fg_hwnd):
+                return True
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            cur_thread = kernel32.GetCurrentThreadId() if hasattr(kernel32, "GetCurrentThreadId") else 0
+            fg_thread = user32.GetWindowThreadProcessId(fg_hwnd, None) if (fg_hwnd and hasattr(user32, "GetWindowThreadProcessId")) else 0
+
+            attached = False
+            if fg_thread and cur_thread and fg_thread != cur_thread:
+                try:
+                    attached = bool(user32.AttachThreadInput(cur_thread, fg_thread, True))
+                except Exception as e:
+                    logger.debug(f"AttachThreadInput attach failed: {e}")
+
+            try:
+                try:
+                    user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
+                except Exception:
+                    pass
+
+                try:
+                    win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
+                except Exception:
+                    pass
+
+                try:
+                    win32gui.BringWindowToTop(target_hwnd)
+                except Exception:
+                    pass
+
+                for attempt in range(2):
+                    try:
+                        cls._send_alt_tap()
+                        win32gui.SetForegroundWindow(target_hwnd)
+                        time.sleep(FOCUS_SETTLE_MS / 1000.0)
+                    except Exception as e:
+                        logger.debug(f"SetForegroundWindow attempt {attempt + 1} failed: {e}")
+
+                    if _is_active():
+                        return True
+            finally:
+                if attached:
+                    try:
+                        user32.AttachThreadInput(cur_thread, fg_thread, False)
+                    except Exception as e:
+                        logger.debug(f"AttachThreadInput detach failed: {e}")
+
+            if _is_active():
+                return True
 
             logger.warning(f"Win32Driver: could not verify foreground focus for hwnd={target_hwnd}")
             return _is_active()

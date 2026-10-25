@@ -102,3 +102,39 @@ class TestWin32Driver:
             assert Win32Driver._ensure_foreground(99) is True
             assert gui.SetForegroundWindow.call_count >= 1
 
+    def test_ensure_foreground_uses_attach_thread_input_and_allow_set_foreground_window(self):
+        """Item 3 fix: Uses AttachThreadInput and AllowSetForegroundWindow to focus terminal-launched targets."""
+        gui = MagicMock()
+        con = MagicMock()
+        gui.GetForegroundWindow.side_effect = [10, 99]
+        gui.GetAncestor.return_value = None
+
+        with patch("ctypes.windll") as windll, \
+             patch.object(Win32Driver, "_send_alt_tap"), \
+             patch.dict(sys.modules, {"win32gui": gui, "win32con": con}):
+            user32 = MagicMock()
+            kernel32 = MagicMock()
+            windll.user32 = user32
+            windll.kernel32 = kernel32
+
+            kernel32.GetCurrentThreadId.return_value = 1001
+            user32.GetWindowThreadProcessId.return_value = 2002
+            user32.AttachThreadInput.return_value = 1
+
+            assert Win32Driver._ensure_foreground(99) is True
+
+            # Verified AttachThreadInput attached then detached
+            user32.AttachThreadInput.assert_any_call(1001, 2002, True)
+            user32.AttachThreadInput.assert_any_call(1001, 2002, False)
+            user32.AllowSetForegroundWindow.assert_called_with(-1)
+
+    def test_ensure_foreground_resolves_child_window_to_root(self):
+        """Child render window (e.g. Chrome/Edge widget) resolves to root top-level window."""
+        gui = MagicMock()
+        con = MagicMock()
+        # 555 is child window, 99 is root window
+        gui.GetAncestor.side_effect = lambda hwnd, flag: 99 if hwnd == 555 else None
+        gui.GetForegroundWindow.return_value = 99  # Already foreground on root
+
+        with patch.dict(sys.modules, {"win32gui": gui, "win32con": con}):
+            assert Win32Driver._ensure_foreground(555) is True
