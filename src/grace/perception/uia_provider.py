@@ -18,6 +18,7 @@ Three things this does that the previous inspector did not:
 
 import logging
 import threading
+import time
 from typing import Any, Optional
 
 from grace.perception.elements import (
@@ -26,6 +27,7 @@ from grace.perception.elements import (
     FRAME_PAGE,
     SOURCE_UIA,
     ElementNode,
+    is_password_element,
 )
 
 logger = logging.getLogger("grace.perception.uia")
