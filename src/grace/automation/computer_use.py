@@ -1277,28 +1277,54 @@ class ComputerUse:
         # Match by normalised title against live window list or EnumWindows
         if window_title:
             norm_query = window_title.lower().strip()
-            # First match against live_windows
-            for w in live_windows:
-                w_title = normalize_title(w.get("title", "")).lower().strip()
-                if norm_query in w_title or w_title in norm_query:
-                    return self._activate_hwnd(w["id"], w.get("title", window_title))
+            if norm_query:
+                def _pick_best_match(candidates):
+                    # candidates: list of (hwnd_or_id, raw_title)
+                    exact_matches = []
+                    containing_query = []
+                    query_containing = []
+                    for cid, raw_t in candidates:
+                        t = normalize_title(raw_t or "").lower().strip()
+                        if not t:
+                            continue
+                        if t == norm_query:
+                            exact_matches.append((cid, raw_t, t))
+                        elif norm_query in t:
+                            containing_query.append((cid, raw_t, t))
+                        elif t in norm_query:
+                            query_containing.append((cid, raw_t, t))
 
-            # Fallback match via EnumWindows
-            def enum_window(h, results):
+                    if exact_matches:
+                        return exact_matches[0][0], exact_matches[0][1]
+                    if containing_query:
+                        best = min(containing_query, key=lambda c: len(c[2]))
+                        return best[0], best[1]
+                    if query_containing:
+                        return query_containing[0][0], query_containing[0][1]
+                    return None
+
+                # First match against live_windows
+                live_candidates = [(w["id"], w.get("title", "")) for w in live_windows if isinstance(w, dict) and "id" in w]
+                best_live = _pick_best_match(live_candidates)
+                if best_live:
+                    return self._activate_hwnd(best_live[0], best_live[1] or window_title)
+
+                # Fallback match via EnumWindows
+                def enum_window(h, results):
+                    try:
+                        if win32gui.IsWindowVisible(h):
+                            t_raw = win32gui.GetWindowText(h) or ""
+                            results.append((h, t_raw))
+                    except Exception:
+                        pass
+                matched_hwnds = []
                 try:
-                    if win32gui.IsWindowVisible(h):
-                        t = normalize_title(win32gui.GetWindowText(h) or "").lower().strip()
-                        if norm_query and (norm_query in t or t in norm_query):
-                            results.append(h)
+                    win32gui.EnumWindows(enum_window, matched_hwnds)
                 except Exception:
                     pass
-            matched_hwnds = []
-            try:
-                win32gui.EnumWindows(enum_window, matched_hwnds)
-            except Exception:
-                pass
-            if matched_hwnds:
-                return self._activate_hwnd(matched_hwnds[0], window_title)
+                best_enum = _pick_best_match(matched_hwnds)
+                if best_enum:
+                    return self._activate_hwnd(best_enum[0], best_enum[1] or window_title)
 
         # If neither matches, return an error that lists the real windows (title plus id, capped at 8)
         wanted = window_title or raw_hwnd or "(no window named)"

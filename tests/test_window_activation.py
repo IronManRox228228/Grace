@@ -159,3 +159,83 @@ class TestWindowActivation:
         assert "'App 8' (id: 8)" in error_msg
         # Capped at 8
         assert "'App 9' (id: 9)" not in error_msg
+
+    def test_untitled_window_listed_before_edge_is_never_chosen(self):
+        """An untitled window listed before Edge is never chosen for activation."""
+        cu = ComputerUse()
+        mock_windows = [
+            {"id": 101, "title": "", "pid": 1},
+            {"id": 102, "title": "   ", "pid": 2},
+            {"id": 201, "title": "Microsoft Edge", "pid": 3},
+        ]
+        cu._list_windows = MagicMock(return_value={"ok": True, "windows": mock_windows})
+
+        activated_hwnds = []
+        cu._activate_hwnd = MagicMock(side_effect=lambda h, t: activated_hwnds.append(h) or {
+            "ok": True, "sent": True, "verified": True, "action": "activate", "hwnd": h, "message": f"Activated {t}"
+        })
+
+        res = cu._activate({"window": {"title": "Edge"}})
+        assert res["ok"] is True
+        assert activated_hwnds == [201], f"Expected hwnd 201 (Edge) to be activated, but got {activated_hwnds}"
+
+    def test_exact_match_beats_substring_match(self):
+        """An exact normalized match beats a substring match regardless of order."""
+        cu = ComputerUse()
+        mock_windows = [
+            {"id": 301, "title": "Microsoft Edge", "pid": 1},
+            {"id": 302, "title": "Edge", "pid": 2},
+        ]
+        cu._list_windows = MagicMock(return_value={"ok": True, "windows": mock_windows})
+
+        activated_hwnds = []
+        cu._activate_hwnd = MagicMock(side_effect=lambda h, t: activated_hwnds.append(h) or {
+            "ok": True, "sent": True, "verified": True, "action": "activate", "hwnd": h, "message": f"Activated {t}"
+        })
+
+        res = cu._activate({"window": {"title": "Edge"}})
+        assert res["ok"] is True
+        assert activated_hwnds == [302], f"Expected hwnd 302 (exact 'Edge') to be activated, but got {activated_hwnds}"
+
+    def test_shortest_title_preferred_among_substring_matches(self):
+        """Among matches containing the query, the shortest title is preferred."""
+        cu = ComputerUse()
+        mock_windows = [
+            {"id": 401, "title": "Microsoft Edge - Super Long Tab Name", "pid": 1},
+            {"id": 402, "title": "Microsoft Edge", "pid": 2},
+        ]
+        cu._list_windows = MagicMock(return_value={"ok": True, "windows": mock_windows})
+
+        activated_hwnds = []
+        cu._activate_hwnd = MagicMock(side_effect=lambda h, t: activated_hwnds.append(h) or {
+            "ok": True, "sent": True, "verified": True, "action": "activate", "hwnd": h, "message": f"Activated {t}"
+        })
+
+        res = cu._activate({"window": {"title": "Edge"}})
+        assert res["ok"] is True
+        assert activated_hwnds == [402], f"Expected shortest title hwnd 402 to be activated, but got {activated_hwnds}"
+
+    def test_untitled_window_skipped_in_enum_windows_fallback(self):
+        """EnumWindows fallback ignores untitled windows and matches valid title."""
+        cu = ComputerUse()
+        cu._list_windows = MagicMock(return_value={"ok": True, "windows": []})
+
+        activated_hwnds = []
+        cu._activate_hwnd = MagicMock(side_effect=lambda h, t: activated_hwnds.append(h) or {
+            "ok": True, "sent": True, "verified": True, "action": "activate", "hwnd": h, "message": f"Activated {t}"
+        })
+
+        def fake_enum_windows(callback, extra):
+            # Window 501 is untitled, Window 502 is Microsoft Edge
+            callback(501, extra)
+            callback(502, extra)
+
+        with patch("win32gui.EnumWindows", side_effect=fake_enum_windows), \
+             patch("win32gui.IsWindowVisible", return_value=True), \
+             patch("win32gui.GetWindowText", side_effect=lambda h: "" if h == 501 else "Microsoft Edge"):
+            res = cu._activate({"window": {"title": "Edge"}})
+
+        assert res["ok"] is True
+        assert activated_hwnds == [502], f"Expected hwnd 502 to be activated, but got {activated_hwnds}"
+
+
