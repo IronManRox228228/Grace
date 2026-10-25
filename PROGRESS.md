@@ -1761,3 +1761,74 @@ Not fixed: `_replan_stronger` does not pass `hide_tree`; `tests/test_window_acti
 
 Suite: see final line below.
 - Python: `1427 passed, 2 failed (test_window_activation, pre-existing at a4f7d2a on this machine), 1 skipped`. Rust: all crates passed, 0 failed.
+
+
+## Cockpit 1
+
+Implementation of Cockpit 1: two driving modes (single mode for visual/computer-use models, fleet mode for blind element-tree models), model decides what to press, harness obeys without judgment or false refusals.
+
+### Commits
+
+- `6de64f3` — `fix(config): unset GRACE_PRESET follows hardware tier`
+- `e582e0b` — `feat(agent): single mode drives by screenshot and pointing`
+- `84b3386` — `fix(agent): fleet mode always sees the element list`
+- `6dd34b7` — `fix(automation): execute the model's choice; mismatch and window wording become notes, not refusals`
+- `03a6be8` — `fix(agent): factual effect text, browser OCR, clean ruled-out list`
+- `d04c0a1` — `fix(agent): coordinate wobble in planner space, honest unshown id, single mode pointing`
+- `337894c` — `fix(agent): unshown id drops and falls back when target_name present, errors when shown list exists`
+- `d909dc4` — `fix(agent): preserve _raw_element_id for action equivalence on dropped unshown ids`
+
+### Step-7 Root Cause
+
+In run 8, Holo chose shown id 39 (`'SignalHome • 93K plays•Signal'`).
+At Step 6, the action was refused as `element_mismatch` by the R10 guard in `computer_use.py` because `target_name="Signal song result entry"` scored below 0.35 similarity against the raw element name.
+At Step 7, Holo chose shown id 39 again with `target_name="labelled 'Signal song result entry'"`.
+Root cause:
+1. Decision ladder rung: Because Step 6 was judged failed, attempt count reached 2, triggering `_rung(attempt=2, before_stop=3) == "reground"` in `src/grace/agent/loop.py`.
+2. Grounder invocation: Reground forced visual grounding (`force=True`) despite element 39 being a valid, shown ID in the prompt.
+3. Grounder coordinate error: Grounder located the text description at screen coordinates (495, 346), which was the artist link "Home" instead of song entry element 39.
+4. Coordinate priority: In `ComputerUse._click` (`src/grace/automation/computer_use.py`), pixel coordinates took priority over element ID, clicking (495, 346) rather than element 39's center (609, 342).
+Fix under Cockpit 1: In single mode, a shown `element_id` always takes absolute precedence: its center is clicked directly without calling the grounder, without name checks, and without regrounding.
+
+### Refusals Removed
+
+1. `src/grace/automation/computer_use.py:440-470` (`ComputerUse._preconditions`):
+   - Removed substring-based `wrong_window` refusal. Replaced with token-overlap window matching (`_fuzzy_window_match` / `_windows_match`), background window activation via `_activate_window_by_hwnd`, and honest `window_not_found` error only when no window matches or activation fails.
+2. `src/grace/automation/computer_use.py:497-515` (`ComputerUse._click` R10 guard):
+   - Removed R10 `element_mismatch` refusal. When a shown element ID is chosen whose name differs from `target_name`, the element's center is clicked anyway and an honest mismatch note is appended to the step feedback.
+3. `src/grace/automation/computer_use.py:123-160` (`_change_verdict`):
+   - Removed verdict words (`CONFIRMED`, `FAILED`, `NO VISIBLE EFFECT`). Replaced with factual descriptions naming what changed and what didn't (window title, keyboard focus, element count).
+4. `src/grace/agent/loop.py:827-840`:
+   - Removed blanket stripping of planner-written coordinates when `target_name` is present in single mode (`is_single`), allowing models to point directly in normalized [0-1000] space.
+
+### Old Tests Changed
+
+1. `tests/test_automation_preconditions.py::TestWindowFocusEnforcement::test_a_loosely_named_window_still_matches`:
+   - Updated from substring prefix match expectation to verify token-overlap fuzzy window matching.
+2. `tests/test_automation_preconditions.py::TestWindowFocusEnforcement::test_an_activation_that_cannot_find_a_window_refuses_cleanly`:
+   - Updated expected status to `window_not_found` (honest impossible error) rather than `wrong_window`.
+3. `tests/test_automation_preconditions.py::TestWindowFocusEnforcement::test_window_title_matching_is_case_insensitive`:
+   - Updated to verify token overlap case-insensitivity on token-reordered titles.
+4. `tests/test_automation_preconditions.py::TestTargetMismatchRefusal::test_mismatch_between_id_and_name_is_refused`:
+   - Renamed/updated to `test_mismatch_between_id_and_name_executes_with_note`: verifies shown ID executes with mismatch note rather than refusing with `element_mismatch`.
+5. `tests/test_automation_preconditions.py::TestTargetMismatchRefusal::test_matching_id_and_name_proceeds`:
+   - Verified that matching ID and name executes without mismatch note.
+6. `tests/test_agent_loop.py::TestEscalationLadder::test_a_repeat_is_regrounded`:
+   - Updated to use a target name without a shown element ID, because shown element IDs never reground in single mode under Cockpit 1.
+7. `tests/integration/test_planner_to_executor.py::TestActionContract::test_a_visible_change_is_reported_as_verified`:
+   - Adjusted `_change_verdict` evidence formatting to `"keyboard focus moved to [{id}] '{name}'"`, satisfying both factual requirements and `"focus" in evidence`.
+8. `tests/test_planner_xy_reground.py`:
+   - Updated to verify single-mode pointing (x/y in [0-1000] scaled to screen coordinates without stripping or regrounding) and fleet-mode coordinate stripping when `target_name` is present.
+9. `tests/test_youtube_music_holo_flow.py:97`:
+   - Updated expected click coordinates from grounder `(1140, 230)` to single-mode scaled coordinates `(960, 324)`, as single mode preserves and scales planner pointing coordinates rather than stripping them for the grounder.
+
+### Measured OCR Time
+
+- Measured on a full 1920×1080 frame: **97.0 ms average** (median 96.5 ms, min 92.4 ms, max 104.2 ms over 10 iterations via RapidOCR), well within the 400 ms budget specified in `cockpit-1.md`.
+
+### Verification
+
+- **Python test suite (`pytest -q -p no:cacheprovider`):**
+  - **1451 passed, 0 failed, 1 skipped** (exceeds count ≥ 1429 requirement).
+- **Rust test suite (`cargo test --workspace`):**
+  - **all workspace crates passed, 0 failed** (21 + 10 + 2 + 2 + 175 + 2 + 27 passed; 3 ignored).
