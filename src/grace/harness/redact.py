@@ -102,6 +102,25 @@ def redact_string(text: str, username: str = "", home: str = "") -> str:
             return word
         if re.search(r"\.(?:com|org|net|edu|gov|io|ai|app|dev|co|uk|de|jp|fr|ca|au|in|ru|ch|it|nl|se|no|es|mil|xyz|site|online|tech)\b", word, re.IGNORECASE):
             return word
+
+        # Execution statuses and system errors (e.g. element_not_found) are not user passphrases
+        _KNOWN_STATUSES = {
+            "element_not_found", "element_mismatch", "wrong_focus",
+            "safety_confirmation_required", "confirmation_required",
+            "needs_user_input", "max_iterations_reached", "planner_budget_exceeded",
+            "no_progress", "timed_out", "cancelled", "planner_failed", "rate_limited",
+            "secure_desktop", "action_not_found", "target_not_found", "window_not_found",
+            "app_not_found", "file_not_found", "not_found", "refused", "guard_failed",
+            "ok", "error",
+        }
+        word_lower = word.lower()
+        if (
+            word in _KNOWN_STATUSES
+            or word_lower in _KNOWN_STATUSES
+            or any(word_lower.endswith(suf) for suf in ("_not_found", "_required", "_reached", "_exceeded"))
+        ):
+            return word
+
         return "<redacted>"
     out = _PASSPHRASE_PATTERN.sub(_sub_passphrase, out)
 
@@ -129,8 +148,8 @@ def redact_data(data: Any, username: str = "", home: str = "") -> Any:
         is_element_node = "id" in data and "role" in data and "rect" in data
 
         for k, v in data.items():
-            # Tool names and contract event types are never user secrets
-            if k in ("tool", "type"):
+            # Tool names, contract event types, and execution statuses are never user secrets
+            if k in ("tool", "type", "status", "action"):
                 new_dict[k] = v
                 continue
 
