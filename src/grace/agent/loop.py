@@ -446,8 +446,8 @@ class AgentLoop:
         """Drive the loop until completion, the step cap, or a confirmation."""
         consecutive_failures = 0
         last_observation: Optional[str] = None
-        attempts: dict[str, int] = {}
-        step_failures: dict[str, int] = {}
+        attempt_history: list[PlannedStep] = []
+        failed_history: list[PlannedStep] = []
 
         while not memory.is_completed and not memory.is_exceeded:
             if self._cancel_requested or AgentLoop.is_cancel_requested():
@@ -481,13 +481,13 @@ class AgentLoop:
             # tried before is a repeat any more.
             if view.markdown != last_observation:
                 last_observation = view.markdown
-                attempts.clear()
+                attempt_history.clear()
 
             # How many times the previous action was already tried against this
             # exact view. Zero on the first step, or after the screen changed;
             # one or more means it ran and produced no visible movement.
             last_repeat_count = (
-                attempts.get(_step_signature(last_step), 0)
+                sum(1 for s in attempt_history if _are_actions_equivalent(s, last_step))
                 if last_step is not None
                 else 0
             )
@@ -550,14 +550,14 @@ class AgentLoop:
             # Retrying the identical action against the identical view. Doing
             # it once more is reasonable - a window may not have been ready -
             # but past that the loop is just spending time and quota.
-            signature = _step_signature(step)
-            attempts[signature] = attempts.get(signature, 0) + 1
-            rung = _rung(attempts[signature], self._max_repeated_actions)
+            attempt_count = sum(1 for s in attempt_history if _are_actions_equivalent(s, step)) + 1
+            attempt_history.append(step)
+            rung = _rung(attempt_count, self._max_repeated_actions)
 
             if rung == "stop":
                 logger.error(
                     f"AgentLoop: giving up - tried {step.action} with the same "
-                    f"parameters {attempts[signature]} times, through every "
+                    f"parameters {attempt_count} times, through every "
                     f"strategy available, and nothing changed."
                 )
                 memory.rule_out(f"{step.action} on this screen", "tried at every tier; nothing changed")
@@ -585,8 +585,8 @@ class AgentLoop:
                     stronger = None
                 if stronger is not None:
                     step = stronger
-                    signature = _step_signature(step)
-                    attempts[signature] = attempts.get(signature, 0) + 1
+                    attempt_count = sum(1 for s in attempt_history if _are_actions_equivalent(s, step)) + 1
+                    attempt_history.append(step)
 
             logger.info(f"AgentLoop step {step_no}: [{step.action}] {step.thought}")
 
@@ -690,11 +690,11 @@ class AgentLoop:
                 or inner.get("ok") is False
             )
             if action_failed:
-                sig = _step_signature(step)
-                step_failures[sig] = step_failures.get(sig, 0) + 1
+                fail_count = sum(1 for s in failed_history if _are_actions_equivalent(s, step)) + 1
+                failed_history.append(step)
                 reason = _failure_reason(exec_result) or inner.get("evidence") or "action had no observable effect"
                 memory.rule_out(f"{step.action} with {_short_params(step.params)}", reason)
-                if step_failures[sig] >= 2:
+                if fail_count >= 2:
                     action_name = step.action.replace("cua_", "")
                     question = f"I'm having trouble with {action_name}. Would you like me to try a different approach, or do something else?"
                     memory.final_response = question
@@ -1217,6 +1217,48 @@ def _step_signature(step: PlannedStep) -> str:
     """
     params = {k: v for k, v in sorted(step.params.items()) if k != "window"}
     return f"{step.action}:{params}"
+
+
+def _are_actions_equivalent(step_a: Optional[PlannedStep], step_b: Optional[PlannedStep]) -> bool:
+    """Check if two planned steps represent the same action against an unchanged view.
+
+    Counts 'same action type, same element or click point within 12 px' as identical,
+    even when target_name text or thought differs.
+    """
+    if step_a is None or step_b is None:
+        return False
+    if step_a.action != step_b.action:
+        return False
+
+    params_a = step_a.params or {}
+    params_b = step_b.params or {}
+
+    elem_a = params_a.get("element_id") if params_a.get("element_id") is not None else params_a.get("element_index")
+    elem_b = params_b.get("element_id") if params_b.get("element_id") is not None else params_b.get("element_index")
+
+    # If both reference an element ID / index
+    if elem_a is not None and elem_b is not None:
+        return str(elem_a) == str(elem_b)
+
+    # If either references an element ID while the other doesn't, they are different unless both specify coordinates
+    if (elem_a is not None) != (elem_b is not None) and not ("x" in params_a and "y" in params_a and "x" in params_b and "y" in params_b):
+        return False
+
+    # If both have x, y coordinates, match if within 12px
+    if "x" in params_a and "y" in params_a and "x" in params_b and "y" in params_b:
+        try:
+            x_a, y_a = float(params_a["x"]), float(params_a["y"])
+            x_b, y_b = float(params_b["x"]), float(params_b["y"])
+            if abs(x_a - x_b) <= 12 and abs(y_a - y_b) <= 12:
+                return True
+        except (ValueError, TypeError):
+            pass
+
+    # Compare other params ignoring superficial fields
+    ignored_keys = {"window", "target_name", "name", "thought", "user_update", "_ladder_rung", "_graph"}
+    core_a = {k: v for k, v in params_a.items() if k not in ignored_keys}
+    core_b = {k: v for k, v in params_b.items() if k not in ignored_keys}
+    return core_a == core_b
 
 
 def _short_params(params: dict[str, Any]) -> str:
