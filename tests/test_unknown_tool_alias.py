@@ -66,7 +66,7 @@ class TestResolveToolName:
     def test_exact_name_is_not_an_alias(self):
         assert resolve_tool_name("cua_click") == ("cua_click", "exact")
 
-    @pytest.mark.parametrize("given", ["frobnicate", "cua_frobnicate", "", "cua_"])
+    @pytest.mark.parametrize("given", ["frobnicate", "qqzzxx", "", "cua_"])
     def test_unknown_stays_unknown(self, given):
         assert resolve_tool_name(given)[0] is None
 
@@ -100,18 +100,18 @@ class TestLoopResolvesBeforeSafety:
 @pytest.mark.asyncio
 class TestUnknownToolIsPlannerVisible:
     async def test_unknown_tool_never_parks_a_confirmation(self):
-        loop, gemma, dispatcher = _loop([_plan("cua_frobnicate"), KEY, DONE])
+        loop, gemma, dispatcher = _loop([_plan("qqzzxx"), KEY, DONE])
         res = await loop.run("do a thing")
         assert res["status"] == "ok"
         assert loop._pending is None
         tools = [c.args[0].tool for c in dispatcher.execute.await_args_list]
-        assert "cua_frobnicate" not in tools
+        assert "qqzzxx" not in tools
         second_prompt = gemma.generate_text.await_args_list[1].kwargs["prompt"]
-        assert "Unknown tool cua_frobnicate. Valid tools:" in second_prompt
+        assert "Unknown tool 'qqzzxx'. Valid tools:" in second_prompt
         assert "describe_screen" in second_prompt
 
     async def test_repeated_unknown_tools_end_the_run(self):
-        loop, _, dispatcher = _loop([_plan("cua_frobnicate")] * 10)
+        loop, _, dispatcher = _loop([_plan("qqzzxx")] * 10)
         res = await loop.run("do a thing")
         assert res["status"] == "planner_failed"
         dispatcher.execute.assert_not_awaited()
@@ -123,3 +123,31 @@ class TestUnknownToolIsPlannerVisible:
         assert res["final_response"] == "Playing."
         tools = [c.args[0].tool for c in dispatcher.execute.await_args_list]
         assert tools == ["cua_press_key"]
+
+
+@pytest.mark.asyncio
+class TestFuzzySuggestions:
+    async def test_near_miss_gets_suggestions_and_nothing_executes(self):
+        loop, gemma, dispatcher = _loop([_plan("cua_describe_scren"), KEY, DONE])
+        res = await loop.run("look")
+        assert res["status"] == "ok"
+        assert loop._pending is None
+        tools = [c.args[0].tool for c in dispatcher.execute.await_args_list]
+        assert tools == ["cua_press_key"]
+        prompt = gemma.generate_text.await_args_list[1].kwargs["prompt"]
+        assert "Unknown tool 'cua_describe_scren'. Did you mean: describe_screen" in prompt
+        assert "Use one of the valid tool names." in prompt
+
+    async def test_fuzzy_match_is_never_auto_executed_even_for_risky_tools(self):
+        loop, _, dispatcher = _loop([_plan("delete_fil", {"name": "a.txt"}), KEY, DONE])
+        res = await loop.run("x")
+        assert res["status"] == "ok"
+        tools = [c.args[0].tool for c in dispatcher.execute.await_args_list]
+        assert "delete_file" not in tools
+
+    @pytest.mark.filterwarnings('ignore::pytest.PytestWarning')
+    def test_suggest_caps_at_three(self):
+        from grace.intent.tools import suggest_tool_names
+        assert 1 <= len(suggest_tool_names("cua_describe_scren")) <= 3
+        assert suggest_tool_names("cua_describe_scren")[0] == "describe_screen"
+        assert suggest_tool_names("zzzzzzzz") == []

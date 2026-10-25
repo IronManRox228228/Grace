@@ -334,6 +334,41 @@ def resolve_tool_name(name: str) -> tuple[Optional[str], str]:
     return None, "unknown"
 
 
+def suggest_tool_names(name: str, limit: int = 3, cutoff: float = 0.6) -> list[str]:
+    """Up to ``limit`` real tool names that look like ``name``, best first.
+
+    Suggestions only: the caller must never execute one, because a fuzzy guess
+    can land on a riskier tool than the one the model meant.
+    """
+    raw = (name or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not raw:
+        return []
+    listed = planner_tool_names()
+    probes = {raw}
+    if raw.startswith("cua_"):
+        probes.add(raw[4:])
+    else:
+        probes.add("cua_" + raw)
+    scores: dict[str, float] = {}
+    try:
+        from rapidfuzz import fuzz
+
+        def score(a: str, b: str) -> float:
+            return fuzz.ratio(a, b) / 100.0
+    except ImportError:
+        import difflib
+
+        def score(a: str, b: str) -> float:
+            return difflib.SequenceMatcher(None, a, b).ratio()
+
+    for tool in listed:
+        best = max(score(p, tool) for p in probes)
+        if best >= cutoff:
+            scores[tool] = best
+    ranked = sorted(scores, key=lambda t: (-scores[t], listed.index(t)))
+    return ranked[:limit]
+
+
 def _signature(tool: ToolDefinition) -> str:
     """`name(param: type, optional: type=default)` for one tool."""
     parts = []

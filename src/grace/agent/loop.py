@@ -24,7 +24,7 @@ from grace.agent.planner import Planner, PlannedStep, PlannerBudgetExceeded, par
 from grace.agent.safety import SafetyGuard
 from grace.automation.computer_use import normalize_title
 from grace.intent.parser import Intent
-from grace.intent.tools import planner_tool_names, resolve_tool_name
+from grace.intent.tools import planner_tool_names, resolve_tool_name, suggest_tool_names
 from grace.llm.gemma_client import GemmaClient, RateLimitError
 from grace.tools.dispatcher import Dispatcher
 from grace.util.timing import stage
@@ -626,10 +626,19 @@ class AgentLoop:
                     step.action = "converse"
                 else:
                     consecutive_failures += 1
-                    error = (
-                        f"Unknown tool {step.action}. Valid tools: "
-                        f"{self._valid_tools_text()}"
-                    )
+                    # Suggestions only, never executed: a fuzzy guess could be
+                    # a riskier tool than the one Holo meant.
+                    suggestions = suggest_tool_names(step.action)
+                    if suggestions:
+                        error = (
+                            f"Unknown tool '{step.action}'. Did you mean: "
+                            f"{', '.join(suggestions)}? Use one of the valid tool names."
+                        )
+                    else:
+                        error = (
+                            f"Unknown tool '{step.action}'. Valid tools: "
+                            f"{self._valid_tools_text()}"
+                        )
                     logger.warning(f"AgentLoop: {error}")
                     last_step = step
                     last_result = {"status": "error", "error": error, "text": error}
