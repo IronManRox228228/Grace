@@ -181,6 +181,7 @@ class Config:
     # from its element list rather than from a marked screenshot. Raising it
     # sends more apps down the vision path: slower, and more likely to be right.
     observability_min_actionable: int = field(default_factory=lambda: int( os.getenv("OBSERVABILITY_MIN_ACTIONABLE", "8")))
+    observe_settle_max_ms: int = field(default_factory=lambda: int(os.getenv("OBSERVE_SETTLE_MAX_MS", "3000")))
 
     # Browser DOM access. Attach-only: Grace never launches a browser with a
     # debug flag and never touches the user's profile. Unset (0) = disabled,

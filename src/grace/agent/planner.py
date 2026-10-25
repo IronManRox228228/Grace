@@ -184,9 +184,9 @@ _RENDERED_ID_PATTERNS = [
 ]
 
 
-def extract_rendered_element_ids(text: str) -> set[int]:
+def extract_rendered_element_ids(text: Any) -> set[int]:
     """Extract all element IDs that appear in rendered element prompts."""
-    if not text:
+    if not text or not isinstance(text, str):
         return set()
     found: set[int] = set()
     for pattern in _RENDERED_ID_PATTERNS:
@@ -374,7 +374,7 @@ class Planner:
         if raw_id is not None:
             try:
                 eid = int(raw_id)
-                if eid not in rendered_element_ids:
+                if hide_tree or (rendered_element_ids and eid not in rendered_element_ids):
                     target_name = step.params.get("target_name") or step.params.get("name")
                     logger.info(
                         f"Dropping unshown element_id {eid} (rendered in prompt: {rendered_element_ids}); "
@@ -388,7 +388,7 @@ class Planner:
         if raw_idx is not None:
             try:
                 eidx = int(raw_idx)
-                if eidx not in rendered_element_ids:
+                if hide_tree or (rendered_element_ids and eidx not in rendered_element_ids):
                     target_name = step.params.get("target_name") or step.params.get("name")
                     logger.info(
                         f"Dropping unshown element_index {eidx} (rendered in prompt: {rendered_element_ids}); "

@@ -158,10 +158,14 @@ class AgentLoop:
         config: Optional[Any] = None,
         memory_store: Optional[Any] = None,
         run_capture: Optional[Any] = None,
+        settler: Optional[Any] = None,
     ):
         self._config = config
         self._memory_store = memory_store
         self._run_capture = run_capture
+        from grace.agent.screen_settler import ScreenSettler
+        settle_max_ms = _config_int("observe_settle_max_ms", 3000, config=config)
+        self._settler = settler or ScreenSettler(max_ms=settle_max_ms)
         self._gemma = gemma
         self._vision_llm = vision_llm or gemma
         self._dispatcher = dispatcher
@@ -498,6 +502,7 @@ class AgentLoop:
         last_observation: Optional[str] = None
         attempt_history: list[PlannedStep] = []
         failed_history: list[PlannedStep] = []
+        screen_still_loading = False
 
         while not memory.is_completed and not memory.is_exceeded:
             if self._cancel_requested or AgentLoop.is_cancel_requested():
@@ -519,6 +524,13 @@ class AgentLoop:
 
             step_no = memory.current_iteration + 1
             step_start_time = time.monotonic()
+
+            from grace.agent.screen_settler import action_can_change_page
+            if last_step is not None and action_can_change_page(last_step.action, last_step.params):
+                settle_res = await self._settler.wait_for_settle()
+                screen_still_loading = not settle_res.settled
+            else:
+                screen_still_loading = False
 
             async with stage(f"observe#{step_no}"):
                 snapshot = await self._observe()
@@ -545,7 +557,8 @@ class AgentLoop:
                 else 0
             )
             expectation_note = self._expectation_note(
-                last_step, last_result, snapshot, repeat_count=last_repeat_count
+                last_step, last_result, snapshot, repeat_count=last_repeat_count,
+                screen_still_loading=screen_still_loading,
             )
 
             try:
@@ -918,6 +931,7 @@ class AgentLoop:
         snapshot,
         *,
         repeat_count: int = 0,
+        screen_still_loading: bool = False,
     ) -> str:
         """Report the previous step's stated expectation against what happened.
 
@@ -982,6 +996,9 @@ class AgentLoop:
             lines.append(f"EFFECT UNKNOWN: {evidence}")
             lines.append("Do not treat that as failure. Look at the screen description "
                          "below and judge for yourself.")
+
+        if screen_still_loading:
+            lines.append("Note: screen may still be loading.")
 
         # Repeat-without-progress signal. The tool's `verified` field tells us
         # whether the individual dispatch landed; it does not tell us whether
