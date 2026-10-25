@@ -50,6 +50,50 @@ class TestUIInspector:
         assert res["status"] == "element_not_found"
         assert "not found" in res["error"]
 
+    def test_click_mismatch_names_the_resolved_element(self, monkeypatch):
+        """R10: a name-resolved element whose text is not a plausible match for
+        target_name is not clicked; the error names the mismatch.
+
+        "search" is a substring of "researching", so name-based resolution
+        finds it, but the token overlap is zero, so the click is refused.
+        """
+        from grace.perception.element_graph import ElementGraph, WindowRef
+        from grace.perception.elements import ElementNode, FRAME_APP
+
+        element = ElementNode(
+            id=1, role="button", name="Researching", rect=(0, 0, 100, 30),
+            center=(50, 15), frame=FRAME_APP,
+        )
+        graph = ElementGraph(
+            elements=[element],
+            window=WindowRef(hwnd=1, title="App", class_name="App"),
+        )
+
+        class FakeBuilder:
+            def get(self):
+                return graph
+
+        import grace.agent.perception as perception_mod
+        monkeypatch.setattr(
+            perception_mod.PerceptionEngine,
+            "get_graph_builder",
+            classmethod(lambda cls: FakeBuilder()),
+        )
+        monkeypatch.setattr(
+            "grace.automation.computer_use._foreground_title",
+            lambda: "App",
+        )
+
+        cu = ComputerUse()
+        res = cu.perform("click", {"target_name": "search"})
+
+        assert res["ok"] is False
+        assert res["status"] == "element_mismatch"
+        assert "Researching" in res["error"]
+        assert "search" in res["error"]
+        assert "nothing was clicked" in res["evidence"]
+
+
     def test_partial_match_is_one_directional(self):
         # The reverse test (`elem.name in q`) let a control named "Close"
         # match any query containing "close", so "close the tab" resolved to a

@@ -20,12 +20,15 @@ from grace.perception.elements import (
     FRAME_CHROME,
     FRAME_PAGE,
     SOURCE_DOM,
+    SOURCE_OCR,
     SOURCE_UIA,
     ElementNode,
+    NAME_MATCH_THRESHOLD,
     elements_to_json,
     elements_to_prompt,
     find_at_point,
     find_by_name,
+    name_match_score,
 )
 from grace.perception.uia_provider import _parse_aria_properties, is_browser_window
 
@@ -283,3 +286,34 @@ class TestGraphBasics:
         assert graph.resolve(element_id=1) is None
         assert graph.focused() is None
         assert len(graph) == 0
+
+
+class TestNameMatchScoring:
+    def test_full_token_overlap_scores_one(self):
+        el = node(1, "button", "Search box", (0, 0, 10, 10))
+        assert name_match_score("Search", el) == 1.0
+
+    def test_substring_inside_another_word_scores_zero(self):
+        # "search" is a substring of "researching" but not a plausible match.
+        el = node(1, "button", "Researching", (0, 0, 10, 10))
+        assert name_match_score("search", el) == 0.0
+
+    def test_partial_token_overlap(self):
+        el = node(1, "button", "Search settings", (0, 0, 10, 10))
+        assert name_match_score("Search box", el) == 0.5
+
+    def test_threshold_constant(self):
+        assert NAME_MATCH_THRESHOLD == 0.5
+
+
+class TestOcrPromptLabel:
+    def test_ocr_element_shows_source_in_compact_prompt(self):
+        el = node(1, "text", "(9)", (0, 0, 10, 10), source=SOURCE_OCR)
+        prompt = elements_to_prompt([el])
+        assert '"source": "ocr"' in prompt
+        assert "not interactive controls" in prompt
+
+    def test_uia_element_omits_default_source_in_compact_prompt(self):
+        el = node(1, "button", "OK", (0, 0, 10, 10))  # source defaults to uia
+        prompt = elements_to_prompt([el])
+        assert '"source"' not in prompt

@@ -216,6 +216,8 @@ class ElementNode:
             data["placeholder"] = self.placeholder
         if self.container:
             data["container"] = self.container
+        if self.source != SOURCE_UIA:
+            data["source"] = self.source
         if self.focused:
             data["focused"] = True
         if not self.enabled:
@@ -251,6 +253,11 @@ def elements_to_prompt(
             "always frame=\"page\"."
         )
     header.append(elements_to_json(subset, compact=True))
+    if any(e.source == SOURCE_OCR for e in subset):
+        header.append(
+            'Note: elements with `source` = "ocr" are recognised text fragments (OCR), '
+            "not interactive controls - do not click them as buttons."
+        )
     if limit and len(elements) > limit:
         header.append(f"({len(elements) - limit} further elements not shown)")
     return "\n".join(header)
@@ -259,6 +266,33 @@ def elements_to_prompt(
 def count_actionable(elements: list[ElementNode]) -> int:
     """How many of these could a step actually aim at."""
     return sum(1 for e in elements if e.is_actionable)
+
+
+def _tokens(text: str) -> set[str]:
+    """Split text into lowercase tokens, dropping empties."""
+    return {t for t in (text or "").lower().split() if t}
+
+
+#: Minimum fraction of the query's tokens that must appear in an element's text
+#: for the element to count as a plausible match. A query word that only lands
+#: inside another word (e.g. "search" inside "researching") scores 0.
+NAME_MATCH_THRESHOLD = 0.5
+
+
+def name_match_score(query: str, element: ElementNode) -> float:
+    """Token-overlap ratio of ``query`` against the element's searchable text.
+
+    1.0 = every query token appears in the element; 0.0 = none. Used to decide
+    whether a resolved element plausibly matches the ``target_name`` the planner
+    asked for, so a weakly-matching OCR fragment or control is never clicked.
+    """
+    q_tokens = _tokens(query)
+    if not q_tokens:
+        return 0.0
+    e_tokens = _tokens(element.search_text())
+    if not e_tokens:
+        return 0.0
+    return len(q_tokens & e_tokens) / len(q_tokens)
 
 
 def find_by_id(elements: list[ElementNode], element_id: int) -> Optional[ElementNode]:

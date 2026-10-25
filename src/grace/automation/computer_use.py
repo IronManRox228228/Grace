@@ -431,6 +431,30 @@ class ComputerUse:
         # with renumbered ids. Two full observations per click, for nothing.
         graph_target = self._resolve_from_graph(params, element_index, target_name)
         if graph_target is not None:
+            from grace.perception.elements import NAME_MATCH_THRESHOLD, name_match_score
+            # R10: never click an element whose text does not plausibly match
+            # the target_name the planner asked for. An explicit element id is
+            # authoritative (the planner named the id itself), so only gate on
+            # name-based resolution. Return an error that names the mismatch.
+            element_id_given = params.get("element_id") is not None or element_index is not None
+            if target_name and not element_id_given and name_match_score(target_name, graph_target) < NAME_MATCH_THRESHOLD:
+                logger.warning(
+                    f"_click mismatch: resolved [{graph_target.id}] {graph_target.role} "
+                    f"'{graph_target.name}' does not plausibly match target '{target_name}'"
+                )
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "verified": False,
+                    "status": "element_mismatch",
+                    "action": "click",
+                    "error": (f"Resolved element '[{graph_target.id}] {graph_target.role}' "
+                              f"'{graph_target.name}' does not plausibly match target '{target_name}'"),
+                    "message": (f"I couldn't confirm that element [{graph_target.id}] "
+                                f"'{graph_target.name}' is the '{target_name}' you asked for. "
+                                f"Nothing was clicked."),
+                    "evidence": "nothing was clicked",
+                }
             return self._click_at(graph_target.center[0], graph_target.center[1],
                                   click_count, f"graph:{graph_target.role}", graph_target.name,
                                   probe=True, before=before, params=params, initial_fg=initial_fg)
