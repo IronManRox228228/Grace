@@ -91,11 +91,21 @@ CUA_TOOLS: list[ToolDefinition] = [
     ),
     ToolDefinition(
         name="cua_drag",
-        description="Drag one control onto another, e.g. to reorder a list or move a file.",
+        description=(
+            "Drag with the mouse held down. Between two controls (`from_element_id` to "
+            "`to_element_id`), from `x`,`y` to `to_x`,`to_y`, or along a freehand `path` "
+            "of [x, y] points (drawing, sliders, canvases). Coordinates are in [0-1000] "
+            "space of the screenshot."
+        ),
         params=[
             ToolParam("window", "Target window object", True, None, "dict"),
-            ToolParam("from_element_id", "The `id` of the element to drag", True, None, "int"),
-            ToolParam("to_element_id", "The `id` of the element to drop it on", True, None, "int"),
+            ToolParam("from_element_id", "The `id` of the element to drag", False, None, "int"),
+            ToolParam("to_element_id", "The `id` of the element to drop it on", False, None, "int"),
+            ToolParam("x", "Start X in normalised [0-1000] space of the screenshot", False, None, "int"),
+            ToolParam("y", "Start Y in normalised [0-1000] space of the screenshot", False, None, "int"),
+            ToolParam("to_x", "End X in normalised [0-1000] space of the screenshot", False, None, "int"),
+            ToolParam("to_y", "End Y in normalised [0-1000] space of the screenshot", False, None, "int"),
+            ToolParam("path", "Freehand stroke: a list of [x, y] points in [0-1000] space, pressed at the first and released at the last", False, None, "list"),
         ],
         requires_cua=True,
     ),

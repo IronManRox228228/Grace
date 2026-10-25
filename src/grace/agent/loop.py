@@ -863,6 +863,18 @@ class AgentLoop:
                     step.params["_id_won_over_xy"] = True
                     step.params.pop("x", None)
                     step.params.pop("y", None)
+            elif is_single and step.action == "cua_drag":
+                # Start, end and path points all arrive in the screenshot's
+                # normalised space; the executor takes screen pixels.
+                img_size = (
+                    getattr(snapshot, "image_width", 0) or getattr(snapshot, "width", 1920),
+                    getattr(snapshot, "image_height", 0) or getattr(snapshot, "height", 1080),
+                )
+                scr_size = (getattr(snapshot, "width", 1920), getattr(snapshot, "height", 1080))
+                coord_fmt = getattr(self._grounder, "_coordinate_format", "0-1000")
+                if not isinstance(coord_fmt, str):
+                    coord_fmt = "0-1000"
+                _scale_drag_points(step.params, img_size, scr_size, coord_fmt)
             elif is_single:
                 if step.params.get("x") is not None and step.params.get("y") is not None:
                     try:
@@ -1559,6 +1571,33 @@ class AgentLoop:
         if step is not None:
             return step.to_dict()
         return None
+
+
+def _scale_drag_points(params: dict[str, Any], img_size, scr_size, coord_fmt: str) -> None:
+    """Convert a drag's x/y, to_x/to_y and path from model space to screen pixels, in place."""
+    def conv(x, y):
+        try:
+            return scale_to_screen(float(x), float(y), img_size, scr_size, coord_fmt)
+        except (ValueError, TypeError):
+            return None
+
+    for kx, ky in (("x", "y"), ("to_x", "to_y")):
+        if params.get(kx) is not None and params.get(ky) is not None:
+            scaled = conv(params[kx], params[ky])
+            if scaled is not None:
+                params[kx], params[ky] = scaled
+    path = params.get("path")
+    if isinstance(path, (list, tuple)):
+        out = []
+        for item in path:
+            try:
+                point = (item["x"], item["y"]) if isinstance(item, dict) else (item[0], item[1])
+            except (KeyError, IndexError, TypeError):
+                continue
+            scaled = conv(*point)
+            if scaled is not None:
+                out.append(list(scaled))
+        params["path"] = out
 
 
 def _window_title(snapshot) -> str:

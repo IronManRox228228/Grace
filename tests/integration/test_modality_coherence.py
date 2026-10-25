@@ -167,7 +167,7 @@ class TestCoordinatesAreNotOffered:
     """
 
     POSITIONAL = {"x", "y", "from_x", "from_y", "to_x", "to_y"}
-    ALLOWED_POINTING_TOOLS = {"cua_click", "cua_secondary_action"}
+    ALLOWED_POINTING_TOOLS = {"cua_click", "cua_secondary_action", "cua_drag"}
 
     def test_no_unexpected_tool_declares_a_coordinate_parameter(self):
         offenders = {

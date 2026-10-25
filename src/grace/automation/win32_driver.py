@@ -316,3 +316,87 @@ class Win32Driver:
         except Exception as e:
             logger.warning(f"SendInput click error: {e}")
             return False
+
+    @classmethod
+    def _send_mouse(cls, x: int, y: int, button_flag: int) -> bool:
+        """One absolute mouse event (move, left down or left up) via SendInput."""
+        DPIHelper.ensure_dpi_aware()
+        try:
+            user32 = ctypes.windll.user32
+            vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+            vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+            vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+            vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+            if vw <= 0 or vh <= 0:
+                vx, vy, vw, vh = 0, 0, 1920, 1080
+            norm_x = int((x - vx) * 65535 / max(vw - 1, 1))
+            norm_y = int((y - vy) * 65535 / max(vh - 1, 1))
+            flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | button_flag
+            inputs = (INPUT * 1)()
+            inputs[0].type = INPUT_MOUSE
+            inputs[0].u.mi = MOUSEINPUT(norm_x, norm_y, 0, flags, 0, None)
+            return user32.SendInput(1, ctypes.byref(inputs), ctypes.sizeof(INPUT)) == 1
+        except Exception as e:
+            logger.warning(f"SendInput mouse event error: {e}")
+            return False
+
+    @classmethod
+    def mouse_move(cls, x: int, y: int) -> bool:
+        return cls._send_mouse(int(x), int(y), MOUSEEVENTF_MOVE)
+
+    @classmethod
+    def mouse_down(cls, x: int, y: int) -> bool:
+        return cls._send_mouse(int(x), int(y), MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN)
+
+    @classmethod
+    def mouse_up(cls, x: int, y: int) -> bool:
+        return cls._send_mouse(int(x), int(y), MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP)
+
+    @classmethod
+    def drag_path(cls, points: list[tuple[int, int]], step_px: int = 12, step_delay: float = 0.006) -> bool:
+        """Press at the first point, move through the rest in small steps, release at the last.
+
+        The same SendInput route a click uses. A move is sent right after the
+        press so apps that start a drag on the first move see it, and every
+        segment is cut into steps of about `step_px` so a canvas gets a
+        continuous stroke rather than a straight jump.
+        """
+        if len(points) < 2:
+            return False
+        first = (int(points[0][0]), int(points[0][1]))
+        try:
+            import win32gui
+
+            target_hwnd = win32gui.WindowFromPoint(first)
+            if target_hwnd and win32gui.IsWindowVisible(target_hwnd) and not cls._is_foreground(target_hwnd):
+                if not cls._ensure_foreground(target_hwnd):
+                    logger.warning(f"Win32Driver: failed to focus target window {target_hwnd}")
+                    return False
+        except Exception as e:
+            logger.debug(f"Win32Driver focus step skipped: {e}")
+
+        try:
+            ctypes.windll.user32.SetCursorPos(*first)
+            time.sleep(HOVER_SETTLE_FAST_MS / 1000.0)
+        except Exception as e:
+            logger.debug(f"SetCursorPos failed: {e}")
+
+        if not cls.mouse_down(*first):
+            return False
+        last = first
+        try:
+            cls.mouse_move(*first)
+            for px, py in points[1:]:
+                px, py = int(px), int(py)
+                dist = max(abs(px - last[0]), abs(py - last[1]))
+                steps = max(1, -(-dist // max(1, step_px)))
+                for i in range(1, steps + 1):
+                    cls.mouse_move(
+                        last[0] + (px - last[0]) * i // steps,
+                        last[1] + (py - last[1]) * i // steps,
+                    )
+                    time.sleep(step_delay)
+                last = (px, py)
+        finally:
+            cls.mouse_up(*last)
+        return True

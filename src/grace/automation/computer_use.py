@@ -1290,6 +1290,12 @@ class ComputerUse:
             except (ValueError, TypeError):
                 return default
 
+        # A coordinate drag or a freehand path (Paint, a slider, a canvas) goes
+        # out through the same SendInput driver a click uses.
+        stroke = self._stroke_points(params)
+        if stroke is not None:
+            return self._drag_stroke(stroke)
+
         # Endpoints by element first. A drag assembled from two invented
         # coordinates is two chances to be wrong, and unlike a stray click it
         # can rearrange the user's data on the way past.
@@ -1342,6 +1348,88 @@ class ComputerUse:
             "evidence": evidence,
             "action": "drag",
             "message": f"Dragged from ({from_x},{from_y}) to ({to_x},{to_y})",
+        }
+
+    @staticmethod
+    def _stroke_points(params: dict[str, Any]) -> Optional[list[tuple[int, int]]]:
+        """Screen points of a coordinate or path drag, or None for an element drag.
+
+        `path` is a list of [x, y]; otherwise `x, y` -> `to_x, to_y`. An end
+        named by element id means the element drag handles it.
+        """
+        if params.get("from_element_id") is not None or params.get("to_element_id") is not None:
+            return None
+        raw_path = params.get("path")
+        points: list[tuple[int, int]] = []
+        if isinstance(raw_path, (list, tuple)):
+            for item in raw_path:
+                try:
+                    if isinstance(item, dict):
+                        points.append((int(item["x"]), int(item["y"])))
+                    else:
+                        points.append((int(item[0]), int(item[1])))
+                except (KeyError, IndexError, TypeError, ValueError):
+                    continue
+            if len(points) >= 2:
+                return points
+            return []
+        sx = params.get("x", params.get("from_x"))
+        sy = params.get("y", params.get("from_y"))
+        ex, ey = params.get("to_x"), params.get("to_y")
+        if None in (sx, sy, ex, ey):
+            return None
+        try:
+            return [(int(sx), int(sy)), (int(ex), int(ey))]
+        except (TypeError, ValueError):
+            return None
+
+    def _drag_stroke(self, points: list[tuple[int, int]]) -> dict[str, Any]:
+        if len(points) < 2:
+            return {
+                "ok": False,
+                "sent": False,
+                "verified": False,
+                "evidence": "nothing was dragged",
+                "status": "element_not_found",
+                "action": "drag",
+                "error": "A drag `path` needs at least two [x, y] points.",
+            }
+        for px, py in (points[0], points[-1]):
+            offscreen = _offscreen_fact(px, py, None)
+            if offscreen:
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "verified": False,
+                    "evidence": "nothing was dragged",
+                    "status": "element_offscreen",
+                    "action": "drag",
+                    "error": offscreen,
+                }
+        from grace.automation.win32_driver import Win32Driver
+
+        before = _screen_state()
+        if not Win32Driver.drag_path(points):
+            _invalidate_graph()
+            return {
+                "ok": False,
+                "sent": False,
+                "verified": False,
+                "action": "drag",
+                "error": "Could not focus the target window or dispatch the drag",
+                "evidence": "drag aborted because window focus could not be established",
+            }
+        _invalidate_graph()
+        verified, evidence = _change_verdict(before, _settled_state())
+        (fx, fy), (tx, ty) = points[0], points[-1]
+        shape = f"along a path of {len(points)} points " if len(points) > 2 else ""
+        return {
+            "ok": True,
+            "sent": True,
+            "verified": verified,
+            "evidence": evidence,
+            "action": "drag",
+            "message": f"Dragged {shape}from ({fx},{fy}) to ({tx},{ty})",
         }
 
     def _point_for(self, params: dict[str, Any], end: str) -> Optional[tuple[int, int]]:
