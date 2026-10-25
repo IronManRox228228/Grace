@@ -1632,6 +1632,8 @@ Session addressing all 7 findings from `real-desktop-3.md` following real-deskto
    - **Fix:** In `src/grace/intent/tools.py` (`cua_click`), changed `window` description from `{'title': 'Edge', 'id': 1234}` to `{'title': 'Edge'}; id only if copied from cua_list_windows`.
    - **Tests:** `tests/test_tool_schema_no_fake_id.py` verifying no tool description contains literal numeric window ids.
 
+8. **Follow-up (`8385383` `fix(automation): activation never matches untitled windows`):** `_activate` skips empty normalized titles and ranks exact match > title containing query (shortest first) > query containing title (Python suite: 1336 passed, 0 failed).
+
 ### Suite Verification Counts
 
 - **Python (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`):**
