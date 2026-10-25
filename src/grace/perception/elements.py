@@ -218,16 +218,27 @@ class ElementNode:
             is_password=self.is_password,
         )
 
-    def to_dict(self, compact: bool = False) -> dict[str, Any]:
+    def to_dict(
+        self,
+        compact: bool = False,
+        is_single: bool = False,
+        screen_size: Optional[tuple[int, int]] = None,
+    ) -> dict[str, Any]:
         """Serialise. ``compact`` drops defaults to keep prompts small."""
         data: dict[str, Any] = {
             "id": self.id,
             "role": self.role,
             "name": self.name,
-            "rect": list(self.rect),
-            "center": list(self.center),
-            "frame": self.frame,
         }
+        if is_single and screen_size and screen_size[0] > 0 and screen_size[1] > 0:
+            sw, sh = screen_size
+            cx = round(self.center[0] * 1000 / sw)
+            cy = round(self.center[1] * 1000 / sh)
+            data["center"] = [cx, cy]
+        else:
+            data["rect"] = list(self.rect)
+            data["center"] = list(self.center)
+        data["frame"] = self.frame
         val = self.safe_value
         if not compact:
             data.update(
@@ -265,16 +276,23 @@ def elements_to_json(
     elements: list[ElementNode],
     limit: Optional[int] = None,
     compact: bool = True,
+    is_single: bool = False,
+    screen_size: Optional[tuple[int, int]] = None,
 ) -> str:
     """Render elements as a JSON array for the planner prompt."""
     subset = elements[:limit] if limit else elements
-    return json.dumps([e.to_dict(compact=compact) for e in subset], ensure_ascii=False)
+    return json.dumps([
+        e.to_dict(compact=compact, is_single=is_single, screen_size=screen_size)
+        for e in subset
+    ], ensure_ascii=False)
 
 
 def elements_to_prompt(
     elements: list[ElementNode],
     limit: Optional[int] = 40,
     prioritize_page: bool = True,
+    is_single: bool = False,
+    screen_size: Optional[tuple[int, int]] = None,
 ) -> str:
     """Render the element graph as a labelled JSON block for the prompt."""
     if not elements:
@@ -294,7 +312,7 @@ def elements_to_prompt(
             "\"page\" for content inside the web page. A site's own search box is "
             "always frame=\"page\"."
         )
-    header.append(elements_to_json(subset, compact=True))
+    header.append(elements_to_json(subset, compact=True, is_single=is_single, screen_size=screen_size))
     if any(e.source == SOURCE_OCR for e in subset):
         header.append(
             'Note: elements with `source` = "ocr" are recognised text fragments (OCR), '

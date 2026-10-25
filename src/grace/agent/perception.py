@@ -331,7 +331,7 @@ class ScreenSnapshot:
         lines.append(f"DPI Scale: {self.dpi_scale:.2f} (logical -> physical)")
         return lines
 
-    def to_markdown(self) -> str:
+    def to_markdown(self, is_single: bool = False) -> str:
         """Format the screen state into clean markdown for Gemma."""
         lines = self.header_markdown()
         window_title_hint = self.active_window.title if self.active_window else ""
@@ -340,23 +340,27 @@ class ScreenSnapshot:
         # the chrome/page distinction, none of which the flat list had.
         if self.graph is not None and len(self.graph):
             lines.append("")
-            lines.append(self.graph.to_prompt(limit=40))
+            lines.append(self.graph.to_prompt(
+                limit=40,
+                is_single=is_single,
+                screen_size=(self.width, self.height),
+            ))
         elif self.ui_elements:
             lines.append("\n### Active Interactive Accessibility Controls (Use element_index to click):")
             for elem in self.ui_elements[:35]:
                 cl, ct, cr, cb = elem.bounds
-                # FIX BUG #2: Include window parameter hint in prompt
                 window_str = f', window="{window_title_hint}"' if window_title_hint else ""
                 lines.append(f"[{elem.index}] {elem.control_type}: \"{elem.name}\" | Bounds: [{cl}, {ct}, {cr}, {cb}] -> `cua_click(element_index={elem.index}{window_str})`")
 
-        if self.ocr_lines:
-            lines.append("\n### Screen Text (OCR Output):")
-            from grace.agent.planner import wrap_untrusted
-            ordered = sorted(self.ocr_lines, key=lambda l: (l.bounding_box[1] // 20, l.bounding_box[0]))[:15]
-            ocr_text = "\n".join(f"- {line.text.strip()}" for line in ordered if line.text.strip())
-            lines.append(wrap_untrusted(ocr_text))
-        else:
-            lines.append("\n### Screen Text: (No readable text detected)")
+        if not is_single:
+            if self.ocr_lines:
+                lines.append("\n### Screen Text (OCR Output):")
+                ordered = sorted(self.ocr_lines, key=lambda l: (l.bounding_box[1] // 20, l.bounding_box[0]))[:15]
+                ocr_text = "\n".join(f"- {line.text.strip()}" for line in ordered if line.text.strip())
+                # Fix double untrusted-marker wrap: outer prompt already wraps What is on screen
+                lines.append(ocr_text)
+            else:
+                lines.append("\n### Screen Text: (No readable text detected)")
 
         return "\n".join(lines)
 
@@ -449,13 +453,13 @@ def observe_for_planner(snapshot: "ScreenSnapshot", is_single: bool = False) -> 
 
     if is_single and isinstance(getattr(snapshot, "png_bytes", None), (bytes, bytearray)) and snapshot.png_bytes:
         return Observation(
-            markdown=snapshot.to_markdown(),
+            markdown=snapshot.to_markdown(is_single=True),
             image_b64=base64.b64encode(snapshot.png_bytes).decode("ascii"),
             mode=OBSERVABILITY_RICH,
         )
 
     if not snapshot.is_blind:
-        return Observation(markdown=snapshot.to_markdown(), mode=OBSERVABILITY_RICH)
+        return Observation(markdown=snapshot.to_markdown(is_single=is_single), mode=OBSERVABILITY_RICH)
 
     graph = snapshot.graph
     elements = list(getattr(graph, "elements", []) or [])
@@ -485,7 +489,7 @@ def observe_for_planner(snapshot: "ScreenSnapshot", is_single: bool = False) -> 
             )
 
     logger.debug("Blind window but no markable screenshot; using the text rendering")
-    return Observation(markdown=snapshot.to_markdown(), mode=OBSERVABILITY_BLIND)
+    return Observation(markdown=snapshot.to_markdown(is_single=is_single), mode=OBSERVABILITY_BLIND)
 
 
 class PerceptionEngine:
@@ -529,7 +533,7 @@ class PerceptionEngine:
         except ImportError:
             logger.info("Windows Media OCR (winrt) not installed, fallback OCR mode active")
 
-    def capture_snapshot(self) -> ScreenSnapshot:
+    def capture_snapshot(self, is_single: bool = False) -> ScreenSnapshot:
         """Capture desktop screenshot, run OCR, and query active window info."""
         from grace.util.timing import stage
 
@@ -562,7 +566,7 @@ class PerceptionEngine:
             is_browser = any(getattr(e, "frame", "") == FRAME_PAGE for e in graph.elements)
         elif getattr(graph, "window", None) and getattr(graph.window, "is_browser", False):
             is_browser = True
-        should_ocr = self._run_ocr and img_bytes and (actionable < _min_actionable() or is_browser)
+        should_ocr = self._run_ocr and not is_single and img_bytes and (actionable < _min_actionable() or is_browser)
         if should_ocr:
             with stage("ocr") as ocr_stage:
                 ocr_lines = self._perform_ocr(img_bytes, width, height)
@@ -634,9 +638,9 @@ class PerceptionEngine:
             recorder.record_snapshot(_snapshot_tape(snapshot))
         return snapshot
 
-    async def capture_snapshot_async(self) -> ScreenSnapshot:
+    async def capture_snapshot_async(self, is_single: bool = False) -> ScreenSnapshot:
         """Asynchronously capture desktop perception snapshot without blocking the event loop."""
-        return await asyncio.to_thread(self.capture_snapshot)
+        return await asyncio.to_thread(self.capture_snapshot, is_single=is_single)
 
     def _get_active_window_info(self) -> Optional[WindowInfo]:
         """Query foreground window details via win32gui."""

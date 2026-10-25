@@ -1051,10 +1051,17 @@ class AgentLoop:
         return text + (", ..." if len(names) > limit else "")
 
     async def _observe(self):
-        snap_res = self._perception.capture_snapshot_async()
+        is_single = bool(getattr(self._fleet_config, "is_single", False))
+        try:
+            snap_res = self._perception.capture_snapshot_async(is_single=is_single)
+        except TypeError:
+            snap_res = self._perception.capture_snapshot_async()
         if asyncio.iscoroutine(snap_res):
             return await snap_res
-        return self._perception.capture_snapshot()
+        try:
+            return self._perception.capture_snapshot(is_single=is_single)
+        except TypeError:
+            return self._perception.capture_snapshot()
 
     async def _dispatch(self, step: PlannedStep, memory: AgentMemory,
                         confirmed: bool = False) -> dict[str, Any]:

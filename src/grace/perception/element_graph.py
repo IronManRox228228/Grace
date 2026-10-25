@@ -133,8 +133,18 @@ class ElementGraph:
 
         return None
 
-    def to_prompt(self, limit: Optional[int] = 40) -> str:
-        return elements_to_prompt(self.elements, limit=limit)
+    def to_prompt(
+        self,
+        limit: Optional[int] = 40,
+        is_single: bool = False,
+        screen_size: Optional[tuple[int, int]] = None,
+    ) -> str:
+        return elements_to_prompt(
+            self.elements,
+            limit=limit,
+            is_single=is_single,
+            screen_size=screen_size,
+        )
 
 
 class ElementGraphBuilder:

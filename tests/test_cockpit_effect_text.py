@@ -122,4 +122,5 @@ def test_browser_ocr_triggered_and_rendered_in_reading_order():
         assert "Line 3" in md
         ocr_section = md[md.index("### Screen Text (OCR Output):"):]
         assert ocr_section.index("Line 1") < ocr_section.index("Line 2") < ocr_section.index("Line 3")
-        assert "<<<UNTRUSTED_DATA_START" in md
+        # Double-wrap removed in Cockpit 2: outer prompt already wraps What is on screen
+        assert "<<<UNTRUSTED_DATA_START" not in md
