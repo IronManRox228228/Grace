@@ -744,6 +744,23 @@ class AgentLoop:
             except Exception:
                 pass
 
+            # The planner prompt says there is no x/y, so one that arrives is in
+            # an unknown space (Holo tends to answer in [0, 1000]) and would be
+            # clicked raw. When the step also says what it is aiming at, drop
+            # it and let the grounder, which converts properly, place it.
+            if (
+                step.action in ("cua_click", "cua_secondary_action", "cua_set_value")
+                and step.params.get("x") is not None
+                and step.params.get("y") is not None
+                and (step.params.get("target_name") or step.params.get("describe"))
+            ):
+                logger.info(
+                    f"AgentLoop: ignoring planner-written x/y "
+                    f"({step.params.get('x')}, {step.params.get('y')}); grounding by name"
+                )
+                step.params.pop("x", None)
+                step.params.pop("y", None)
+
             grounded_point = None
             was_grounded = False
             if step.needs_grounding or rung == "reground":
