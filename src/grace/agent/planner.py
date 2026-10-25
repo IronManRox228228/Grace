@@ -236,6 +236,7 @@ class Planner:
         # 0 or negative disables the cap entirely.
         self._max_calls = max_calls if max_calls and max_calls > 0 else math.inf
         self._calls = 0
+        self.last_failure = ""
         self._last_rendered_ids: set[int] = set()
         if is_single is not None:
             self._is_single = is_single
@@ -400,13 +401,16 @@ class Planner:
         if raw:
             logger.debug(f"Planner raw output: {raw}")
 
+        self.last_failure = ""
         if not raw:
             logger.warning("Planner returned an empty response")
+            self.last_failure = "no_response"
             return None
 
         step, error_reason = parse_planned_step_with_reason(raw)
         if step is None:
             logger.warning(f"Planner output was not parseable ({error_reason}): {raw[:300]}")
+            self.last_failure = "unparseable"
             return None
 
         step.rendered_element_ids = set(rendered_element_ids)
@@ -458,6 +462,57 @@ def parse_planned_step(text: str) -> Optional[PlannedStep]:
     return step
 
 
+_TOOL_KEYS = ("tool", "name", "action", "function")
+_PARAM_KEYS = ("params", "arguments", "args", "parameters")
+_ENVELOPE_KEYS = ("expect", "is_completed", "user_update", "final_response", "thought")
+
+
+def _first_params(d: dict) -> dict:
+    """First dict under a params-like key; a JSON-string `arguments` is parsed."""
+    for key in _PARAM_KEYS:
+        val = d.get(key)
+        if isinstance(val, str) and val.strip():
+            try:
+                val = json.loads(val)
+            except (ValueError, TypeError):
+                continue
+        if isinstance(val, dict):
+            return val
+    return {}
+
+
+def _unwrap_action(data: dict) -> tuple[dict, Any, dict]:
+    """Normalise the model's dialects to (envelope, action, params).
+
+    Accepts `{"action": "x", "params": {}}`, the nested
+    `{"action": {"tool": "x", "params": {}, "expect": ...}}`, and the bare
+    `{"tool": "x", "params": {}}` / `{"name": "x", "arguments": {}}` forms.
+    Envelope fields come from the top level first, then from inside the
+    action object; inner params win over top-level ones.
+    """
+    top_params = _first_params(data)
+    inner = data.get("action")
+    if isinstance(inner, dict):
+        name = next(
+            (inner[k] for k in _TOOL_KEYS if isinstance(inner.get(k), str) and inner[k].strip()),
+            None,
+        )
+        params = dict(top_params)
+        params.update(_first_params(inner))
+        envelope = dict(data)
+        for k in _ENVELOPE_KEYS:
+            if envelope.get(k) in (None, "") and k in inner:
+                envelope[k] = inner[k]
+        return envelope, name, params
+    if isinstance(inner, str) and inner.strip():
+        return data, inner, top_params
+    name = next(
+        (data[k] for k in ("tool", "name", "function") if isinstance(data.get(k), str) and data[k].strip()),
+        None,
+    )
+    return data, name, top_params
+
+
 def parse_planned_step_with_reason(text: str) -> tuple[Optional[PlannedStep], str]:
     """Parse the planner's JSON, tolerating fences and surrounding prose, returning (step, reason)."""
     if not text or not isinstance(text, str):
@@ -473,14 +528,10 @@ def parse_planned_step_with_reason(text: str) -> tuple[Optional[PlannedStep], st
     if data is None:
         return None, err or "no valid JSON object found"
 
-    action = data.get("action")
+    data, action, params = _unwrap_action(data)
     if not isinstance(action, str) or not action.strip():
         # A response with no action is not a step, even if it parsed.
         return None, "missing or empty 'action' field"
-
-    params = data.get("params")
-    if not isinstance(params, dict):
-        params = {}
 
     m = _CALL_SYNTAX_RE.match(action)
     if m:

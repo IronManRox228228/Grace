@@ -530,3 +530,59 @@ class TestSafetyKeyNormalisation:
 
     def test_non_string_key_is_safe(self):
         assert SafetyGuard.evaluate("cua_press_key", {"key": None})[0] is True
+
+
+HOLO_NESTED = (
+    '{"thought": "click the search bar", "action": {"tool": "cua_click", "params": '
+    '{"window": {"title": "music.youtube.com - Microsoft Edge Beta - Personal 3"}, '
+    '"element_id": 5, "x": 421, "y": 37, "target_name": "search bar", "click_count": 1}, '
+    '"expect": "The search bar is focused and ready for input.", "is_completed": false, '
+    '"user_update": "Search bar is active", "final_response": ""}}'
+)
+
+
+def test_nested_action_object_parses():
+    from grace.agent.planner import parse_planned_step
+
+    step = parse_planned_step(HOLO_NESTED)
+    assert step is not None
+    assert step.action == "cua_click"
+    assert step.params["element_id"] == 5
+    assert (step.params["x"], step.params["y"]) == (421, 37)
+    assert step.expect == "The search bar is focused and ready for input."
+    assert step.user_update == "Search bar is active"
+    assert step.is_completed is False
+
+
+def test_nested_action_arguments_as_json_string():
+    from grace.agent.planner import parse_planned_step
+
+    step = parse_planned_step(
+        '{"action": {"name": "cua_type", "arguments": "{\\"text\\": \\"hi\\"}"}, "expect": "typed"}'
+    )
+    assert step is not None
+    assert step.action == "cua_type"
+    assert step.params == {"text": "hi"}
+    assert step.expect == "typed"
+
+
+def test_top_level_tool_and_params_without_action_key():
+    from grace.agent.planner import parse_planned_step
+
+    step = parse_planned_step('{"tool": "cua_click", "params": {"element_id": 3}, "expect": "ok"}')
+    assert step is not None and step.action == "cua_click"
+    assert step.params == {"element_id": 3} and step.expect == "ok"
+    step = parse_planned_step('{"name": "cua_click", "arguments": {"element_id": 4}}')
+    assert step is not None and step.action == "cua_click" and step.params == {"element_id": 4}
+
+
+def test_inner_params_win_over_top_level_and_top_level_envelope_wins():
+    from grace.agent.planner import parse_planned_step
+
+    step = parse_planned_step(
+        '{"params": {"a": 1, "b": 2}, "expect": "outer", '
+        '"action": {"tool": "t", "params": {"b": 3}, "expect": "inner", "thought": "inner thought"}}'
+    )
+    assert step.params == {"a": 1, "b": 3}
+    assert step.expect == "outer"
+    assert step.thought == "inner thought"
