@@ -1355,3 +1355,47 @@ are pre-existing on HEAD).
 
 ---
 
+### Item 11 — explicit coordinates — DONE
+
+Commit `e8ccb52` `test(grounder): cover downscaled-screenshot pixel coordinate mapping (real-desktop #11)` — pushed to origin/main.
+
+**Findings:** The downscaling mapping already exists and is correctly wired:
+- `src/grace/agent/grounder.py::scale_to_screen` with `coordinate_format="pixels"` maps
+  `x * screen_w / image_w`, `y * screen_h / image_h`.
+- `src/grace/agent/loop.py` passes `image_size=(snapshot.image_width, snapshot.image_height)`
+  (the downscaled screenshot) and `screen_size` (the full screen) to `Grounder.locate`, so
+  downscaled-image coordinates are mapped back to physical screen pixels.
+- `src/grace/config.py` reads `GROUNDER_COORDINATE_FORMAT` (default `0-1000`); `.env` sets
+  `GROUNDER_COORDINATE_FORMAT=0-1000` and `SCREENSHOT_MAX_WIDTH=1280`.
+
+**Verification (could not run Holo to confirm its native output scale, and Rule 1 prohibits
+driving the real desktop in tests):** `scale_to_screen(640, 40, (1280, 720), (1920, 1080),
+"pixels") == (960, 60)` — scale factor 1920/1280 = 1.5 applied to both axes. The operator
+should confirm Holo emits 0-1000 normalized coordinates (matching `.env`'s `0-1000`); if Holo
+emits image pixels instead, switch `.env`'s `GROUNDER_COORDINATE_FORMAT` to `pixels`.
+
+**Test:** `tests/test_grounder_parser.py::TestCoordinateFormats::test_format_pixels_downscaled_screenshot_maps_to_screen`.
+
+**Suite:** `6 failed, 1274 passed, 1 skipped` (no regressions; the 6 failures are pre-existing
+on HEAD).
+
+---
+
+### Item 12 — browser shortcut — DONE
+
+Commit `f215406` `feat(intent): open X in my browser shortcut opens the URL directly (real-desktop #12)` — pushed to origin/main.
+
+**Root cause:** "open youtube music in my browser, search for the song signal by home, and play it" drove the browser's address bar (element 1 = the "(9)" tab-count badge), and the first offline intent dropped the URL entirely.
+
+**Fix:**
+- `src/grace/intent/tools.py`: added `SITE_URLS` (youtube music -> https://music.youtube.com, plus google, gmail, reddit, github, twitter, amazon, wikipedia, netflix, spotify, chatgpt, bing, duckduckgo and more) and `site_url()` to resolve a spoken site name to a URL.
+- `src/grace/main.py`: added `_open_site_in_browser_shortcut`, invoked in `_route_transcript` before the agent loop. "open X in my browser" (whole request only) dispatches `open_app(name=site, url=URL)` directly via the dispatcher (which validates http(s) and opens via webbrowser.open) and answers directly. Multi-step requests such as "open youtube music..., search for ..., and play it" still reach the agent loop.
+- `src/grace/intent/prompt.py`: the intent prompt now guides the model to call open_app with both name and url for browser requests, so the URL is not dropped.
+
+**Tests:** `tests/test_intent_parser.py` (site_url resolution incl. case-insensitivity/trim/unknown->None; prompt keeps url+address-bar guidance; shortcut dispatches open_app with name+url and answers directly; unknown site falls through; multi-step requests don't shortcut; plain open_app doesn't shortcut).
+
+**Suite:** `6 failed, 1283 passed, 1 skipped` (up from 1274; no regressions; the 6 failures are pre-existing on HEAD).
+
+---
+
+
