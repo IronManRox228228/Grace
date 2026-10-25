@@ -1643,3 +1643,50 @@ Session addressing all 7 findings from `real-desktop-3.md` following real-deskto
   - `21 passed`, `10 passed`, `2 passed`, `2 passed`, `175 passed`, `2 passed`, `27 passed` — **all workspace crates passed, 0 failed**.
 - **Files to download:** None.
 - **Tapes generated/diffed:** None.
+
+---
+
+## Real-desktop retest 4
+
+Session addressing the two root causes and cleanups identified from the run capture (`runs/2026-10-25_18-19-06/`) following real-desktop retest with Holo3.1-4B (`real-desktop-4.md`).
+
+### Items and Commits
+
+1. **Root Cause 1: Hallucinated `element_id` is treated as authoritative**
+   - **Commits:** `fd66c2d` `fix(automation): element ids only count if the planner was shown them`, `6973740` `fix(automation): scope element metadata to cua actions and guard element scorer`
+   - **Root Cause:** In target-guidance mode (`hide_tree=True`), the planner was given no element IDs in its prompt. Holo hallucinated `element_id: 20` (and in steps 6, 7, 8, 14 other IDs). In `loop.py`, having `element_id` in action params bypassed the Decision Ladder targeting steps, and in `computer_use.py` (`_click`), an explicit element ID was treated as unconditionally authoritative, bypassing the Rule 10 name-mismatch guard. Grace clicked graph element 20 ('Planetary Warfare Play', a sidebar playlist) instead of the search result.
+   - **Fix:**
+     - `extract_rendered_element_ids` extracts the exact element IDs shown in the step prompt. If running in target-guidance mode (`hide_tree=True`) or if the ID is not in `rendered_element_ids`, the unshown `element_id` is dropped with an INFO log and resolved by `target_name` or coordinates.
+     - In `computer_use.py` (`_click`), an explicit `element_id` is never exempted from the name-mismatch guard when `target_name` is present.
+     - Internal automation parameters (`_graph`, `_rendered_element_ids`, `_target_guidance`) are scoped strictly to `cua_*` tools and ignored in `_are_actions_equivalent`, preventing non-CUA action pollution or spurious repeat miscounts.
+     - In `element_scorer.py`, empty candidate scores are guarded against index errors.
+   - **Tests:** `tests/test_rendered_element_ids.py` (10 tests) covering target guidance dropping hallucinated element IDs, single mode retaining shown element IDs, mismatch refusal even when ID is shown, and CUA click resolving by target name when ID is unshown.
+
+2. **Root Cause 2: Observation taken before the page rendered (Screen Settling)**
+   - **Commits:** `e76cad6` `feat(agent): wait for the screen to settle before observing`, `d7b4eac` `fix(agent): guard screen settler against touching display during pytest`
+   - **Root Cause:** After page-changing actions (such as pressing Return in YouTube Music search), the Single Page Application was in the middle of transitioning, and Grace observed immediately, acting on a stale screen.
+   - **Fix:**
+     - Created `ScreenSettler` (`src/grace/agent/screen_settler.py`) polling a lightweight signal: downscaled 64x64 grayscale screenshot pixel diff < 1% plus UIA element count.
+     - Evaluated after page-changing actions (`cua_press_key` Return/Enter, `cua_click`, `cua_type_text` with submit, `open_app`, `activate`).
+     - Polls every 250ms (`OBSERVE_SETTLE_POLL_MS`), caps at 3000ms (`OBSERVE_SETTLE_MAX_MS`, configurable in `.env` and `config.py`), and notes "screen may still be loading" in the planner's last-step result if never stable.
+     - Timing logged to `turn_trace` stages (`settle_ms`, `settled`).
+     - Guarded `_default_sample` in tests against touching host display or MSS during automated test runs.
+   - **Tests:** `tests/test_screen_settler.py` (14 tests) covering settling detection, stabilization, timeout fallback, zero-overhead on stable frames, and loop integration.
+
+3. **Section 3: Cleanups (Activation Fallback, Diag Script Encoding, Capture Log Redaction)**
+   - **Commit:** `eb8ac39` `fix: activation fallback, diag script encoding, capture log redaction`
+   - **Fixes:**
+     - **Activation fallback:** Dropped technique 4 (`ShowWindow(SW_MINIMIZE)` -> `SW_RESTORE`) from `_activate_hwnd()`, which left the wrong window in front. Fallback order is now `1 -> 2 -> 3 -> 5`.
+     - **`scripts/diag_activate.py`:** Reconfigured stdout to UTF-8 (`sys.stdout.reconfigure(encoding="utf-8", errors="replace")`) to avoid crashes on zero-width spaces (`\u200b`) under Windows cp1252. Added foreground window reset between technique runs for independent testing.
+     - **Capture log redaction:** `_PASSPHRASE_PATTERN` in `redact.py` was over-redacting logger names (e.g. `grace.agent.loop`). Exempted `grace.*` and known logger names, and protected `record.name` in `RedactingFileHandler` while preserving full secret value redaction.
+   - **Tests:** `tests/test_real_desktop_4_cleanups.py` (7 tests).
+
+### Suite Verification Counts
+
+- **Python (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`):**
+  - Before: `1336 passed, 1 skipped`
+  - After: `1367 passed, 1 skipped, 1 warning in 312.44s` — **0 failed** (+31 tests passed).
+- **Rust (`cargo test --workspace`):**
+  - `21 passed`, `10 passed`, `2 passed`, `2 passed`, `175 passed`, `2 passed`, `27 passed` (3 ignored) — **all workspace crates passed, 0 failed**.
+- **Files to download:** None.
+- **Tapes generated/diffed:** None.
