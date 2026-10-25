@@ -183,9 +183,18 @@ class AgentLoop:
             "agent_max_repeated_actions", DEFAULT_MAX_REPEATED_ACTIONS, config=config
         )
         self._max_seconds = _config_int("agent_max_seconds", DEFAULT_MAX_SECONDS, config=config)
-        self._stronger_model = _config_str(
-            "stronger_planner_model", DEFAULT_STRONGER_PLANNER_MODEL, config=config
-        )
+        # Stronger model for escalation (Item 4: offline never claims a cloud model)
+        use_cloud = bool(getattr(config, "use_cloud_llm", False))
+        cfg_stronger = _config_str("stronger_planner_model", "", config=config)
+        if use_cloud and cfg_stronger:
+            self._stronger_model = cfg_stronger
+            self._escalation_label = cfg_stronger
+        elif use_cloud:
+            self._stronger_model = DEFAULT_STRONGER_PLANNER_MODEL
+            self._escalation_label = DEFAULT_STRONGER_PLANNER_MODEL
+        else:
+            self._stronger_model = None
+            self._escalation_label = "the same model (strategy-change note)" 
         self._pending: Optional[dict[str, Any]] = None
         self._cancel_requested = False
         self._cancel_hook = None
@@ -557,7 +566,7 @@ class AgentLoop:
             if rung == "stronger":
                 logger.warning(
                     f"AgentLoop: escalating - re-planning '{step.action}' with "
-                    f"{self._stronger_model or 'the same model'}."
+                    f"{self._escalation_label}."
                 )
                 try:
                     stronger = await self._replan_stronger(memory, view, snapshot, expectation_note)
