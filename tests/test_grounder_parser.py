@@ -67,6 +67,13 @@ class TestCoordinateFormats(unittest.TestCase):
         res = scale_to_screen(640, 360, (1280, 720), (1920, 1080), coordinate_format="pixels")
         self.assertEqual(res, (960, 540))
 
+    def test_format_pixels_downscaled_screenshot_maps_to_screen(self):
+        # Item 11: explicit coordinates from a downscaled screenshot (SCREENSHOT_MAX_WIDTH=1280)
+        # must be mapped back to physical screen pixels. Image (640, 40) on a 1280x720
+        # downscaled screenshot of a 1920x1080 screen lands at screen (960, 60) (scale 1.5).
+        res = scale_to_screen(640, 40, (1280, 720), (1920, 1080), coordinate_format="pixels")
+        self.assertEqual(res, (960, 60))
+
 
 class TestMalformedModelOutput(unittest.TestCase):
     """parse_grounder_response must return None for output it cannot ground."""
