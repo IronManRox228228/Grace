@@ -6,6 +6,7 @@ intent generation → tool execution → response TTS → repeat.
 """
 
 import asyncio
+import collections
 import logging
 import os
 import queue
@@ -96,7 +97,7 @@ def build_llama_server_args(cfg: Config, thread_budget: Optional[Any] = None) ->
     if cfg.llama_parallel_slots:
         args.extend(["-np", str(cfg.llama_parallel_slots)])
     if getattr(cfg, "llama_flash_attn", False):
-        args.append("-fa")
+        args.extend(["-fa", "on"])
     if cfg.llama_mmproj_path:
         args.extend(["--mmproj", cfg.llama_mmproj_path])
     return args
@@ -525,12 +526,33 @@ class GraceApp:
         server_dir = os.path.dirname(cfg.llama_server_exe)
         log.info(f"Starting llama-server from {server_dir}...")
         log.debug(f"Args: {' '.join(args)}")
+        self._llama_stderr_tail = collections.deque(maxlen=30)
         self._llama_process = subprocess.Popen(
             args,
             cwd=server_dir,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
         )
+
+        def _drain_stderr():
+            try:
+                if self._llama_process and self._llama_process.stderr:
+                    for line in self._llama_process.stderr:
+                        self._llama_stderr_tail.append(line.rstrip())
+            except Exception:
+                pass
+
+        threading.Thread(target=_drain_stderr, daemon=True, name="grace-llama-stderr").start()
+
+    def _log_llama_stderr(self) -> None:
+        """Log the last 30 lines of llama-server's stderr when it exits unexpectedly."""
+        tail = getattr(self, "_llama_stderr_tail", None)
+        if tail:
+            log.error(f"llama-server stderr (last {len(tail)} lines):")
+            for line in tail:
+                log.error(f"  [llama-server] {line}")
 
     def _stop_llama_server(self) -> None:
         """Stop the llama-server subprocess."""
@@ -570,6 +592,11 @@ class GraceApp:
         deadline = asyncio.get_event_loop().time() + timeout
         async with aiohttp.ClientSession() as session:
             while asyncio.get_event_loop().time() < deadline:
+                if self._llama_process is not None and self._llama_process.poll() is not None:
+                    exit_code = self._llama_process.poll()
+                    log.error(f"llama-server process exited unexpectedly with code {exit_code}")
+                    self._log_llama_stderr()
+                    return False
                 try:
                     async with session.get(f"{url}/health", timeout=aiohttp.ClientTimeout(total=2)) as resp:
                         if resp.status == 200:
@@ -579,8 +606,9 @@ class GraceApp:
                                 return True
                 except Exception:
                     pass
-                await asyncio.sleep(2)
+                await asyncio.sleep(0.5)
         log.error(f"llama-server did not become healthy within {timeout}s")
+        self._log_llama_stderr()
         return False
 
     async def _check_model_ready(self, session, url: str) -> bool:

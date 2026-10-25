@@ -13,9 +13,11 @@ needs the GPU, there is no contention, and llama-server just starts once.
 """
 
 import asyncio
+import collections
 import logging
 import os
 import subprocess
+import threading
 from dataclasses import dataclass
 from typing import Optional
 
@@ -35,6 +37,7 @@ class LocalModelSpec:
     ngl: int = 999
     cache_type_k: str = "f16"
     cache_type_v: str = "f16"
+    flash_attn: bool = False
 
 
 class ModelSwapManager:
@@ -98,7 +101,13 @@ class ModelSwapManager:
             proc.kill()
             await asyncio.to_thread(proc.wait)
 
-    async def _start(self, spec: LocalModelSpec) -> bool:
+    def _build_args(self, spec: LocalModelSpec) -> list[str]:
+        """Build the llama-server argument list for one model spec.
+
+        llama.cpp requires '-fa on|off|auto'; a bare '-fa' swallows the
+        flag that follows it (which is how --mmproj got eaten and the
+        server exited on the real desktop).
+        """
         args = [
             self._exe,
             "--host", self._host,
@@ -109,18 +118,45 @@ class ModelSwapManager:
             "--cache-type-k", spec.cache_type_k,
             "--cache-type-v", spec.cache_type_v,
         ]
+        if getattr(spec, "flash_attn", False):
+            args.extend(["-fa", "on"])
         if spec.mmproj_path and os.path.exists(spec.mmproj_path):
             args += ["--mmproj", spec.mmproj_path]
+        return args
+
+    async def _start(self, spec: LocalModelSpec) -> bool:
+        args = self._build_args(spec)
 
         server_dir = os.path.dirname(self._exe)
         logger.info(f"Starting llama-server for {spec.name!r}: {spec.model_path}")
+        self._stderr_tail = collections.deque(maxlen=30)
         self._process = subprocess.Popen(
             args,
             cwd=server_dir or None,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
         )
+
+        def _drain_stderr():
+            try:
+                if self._process and self._process.stderr:
+                    for line in self._process.stderr:
+                        self._stderr_tail.append(line.rstrip())
+            except Exception:
+                pass
+
+        threading.Thread(target=_drain_stderr, daemon=True, name="grace-model-swap-stderr").start()
         return await self._wait_for_health()
+
+    def _log_stderr(self) -> None:
+        """Log the last 30 lines of llama-server's stderr when it exits unexpectedly."""
+        tail = getattr(self, "_stderr_tail", None)
+        if tail:
+            logger.error(f"llama-server stderr (last {len(tail)} lines):")
+            for line in tail:
+                logger.error(f"  [llama-server] {line}")
 
     async def _wait_for_health(self) -> bool:
         """Poll /health, then confirm with a tiny completion once it's up.
@@ -133,7 +169,9 @@ class ModelSwapManager:
         async with aiohttp.ClientSession() as session:
             while asyncio.get_event_loop().time() < deadline:
                 if self._process is not None and self._process.poll() is not None:
-                    logger.error("llama-server exited during startup")
+                    exit_code = self._process.poll()
+                    logger.error(f"llama-server exited during startup with code {exit_code}")
+                    self._log_stderr()
                     return False
                 try:
                     async with session.get(
@@ -157,6 +195,7 @@ class ModelSwapManager:
                     pass
                 await asyncio.sleep(0.5)
         logger.error(f"llama-server did not become healthy within {self._health_timeout}s")
+        self._log_stderr()
         return False
 
     async def shutdown(self) -> None:
