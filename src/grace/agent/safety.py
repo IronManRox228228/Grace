@@ -41,6 +41,8 @@ class SafetyGuard:
         "rollback_voice_model",
         "cua_list_windows",
         "cua_get_window",
+        "cua_list_apps",
+        "cua_text",
         "cua_screenshot",
         "cua_get_cursor_position",
         "cua_scroll",
