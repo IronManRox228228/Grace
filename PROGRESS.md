@@ -1301,5 +1301,30 @@ different one.
 tests pass, the 7 failures are the pre-existing 6 plus item 6's own `test_model_swap_manager_emits_fa_on`
 which is fixed in item 6).
 
+### Item 6 — `-fa` launch bug — DONE
+
+Commit `5c71bbe` `fix(llm): emit '-fa on' and fail fast on dead llama-server (real-desktop #6)` — pushed to origin/main.
+
+**Root cause:** `main.py` appended a bare `-fa`; the current llama.cpp needs `-fa on|off|auto`, so the
+bare flag swallowed the following `--mmproj` and llama-server exited. `ModelSwapManager` had the same
+latent issue and captured no stderr.
+
+**Fix:**
+- `src/grace/main.py` (committed as part of this item): `args.extend(["-fa", "on"])` when
+  `llama_flash_attn`; capture stderr into a 30-line deque; health wait notices a dead process
+  (`poll() is not None`), fails fast (0.5s poll, <2s), logs the last 30 stderr lines.
+- `src/grace/llm/model_swap.py`: added `flash_attn: bool = False` to `LocalModelSpec`, a new
+  `_build_args(spec)` emitting `-fa on` when enabled (used by both `_start` and tests), stderr
+  capture + tail logging, dead-process fast fail in `_wait_for_health`.
+- `tests/test_llama_server_launch.py`: args-correctness test (`-fa on` before `--mmproj`) and
+  dead-process fast-fail tests for both `GraceApp._wait_for_llama_server` and
+  `ModelSwapManager._wait_for_health`.
+
+**Tests** (new file `tests/test_llama_server_launch.py`): 4 tests, all pass. Also
+`tests/test_model_swap.py` (pre-existing, 7 tests) still passes.
+
+**Suite:** `6 failed, 1267 passed, 1 skipped` (up from 1266; `test_model_swap_manager_emits_fa_on`
+now passes — no regressions; the 6 failures are pre-existing on HEAD).
+
 ---
 
