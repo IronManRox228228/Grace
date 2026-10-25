@@ -186,19 +186,29 @@ class AgentLoop:
         )
         self._max_seconds = _config_int("agent_max_seconds", DEFAULT_MAX_SECONDS, config=config)
         # Stronger model for escalation (Item 4: offline never claims a cloud model)
-        use_cloud = bool(getattr(config, "use_cloud_llm", False)) if config is not None else False
-        env_stronger = os.getenv("STRONGER_PLANNER_MODEL")
-        cfg_stronger = getattr(config, "stronger_planner_model", None) if config is not None else None
-        stronger_setting = cfg_stronger or env_stronger
-        if stronger_setting:
-            self._stronger_model = stronger_setting
-            self._escalation_label = stronger_setting
-        elif use_cloud:
-            self._stronger_model = DEFAULT_STRONGER_PLANNER_MODEL
-            self._escalation_label = DEFAULT_STRONGER_PLANNER_MODEL
+        if config is not None:
+            use_cloud = bool(getattr(config, "use_cloud_llm", False))
+            if not use_cloud:
+                self._stronger_model = None
+                self._escalation_label = "the same model (strategy-change note)"
+            else:
+                cfg_stronger = getattr(config, "stronger_planner_model", None)
+                env_stronger = os.getenv("STRONGER_PLANNER_MODEL")
+                stronger = cfg_stronger or env_stronger or DEFAULT_STRONGER_PLANNER_MODEL
+                self._stronger_model = stronger
+                self._escalation_label = stronger
         else:
-            self._stronger_model = None
-            self._escalation_label = "the same model (strategy-change note)" 
+            env_stronger = os.getenv("STRONGER_PLANNER_MODEL")
+            use_cloud = os.getenv("USE_CLOUD_LLM", "false").lower() in ("true", "1", "yes")
+            if env_stronger:
+                self._stronger_model = env_stronger
+                self._escalation_label = env_stronger
+            elif use_cloud:
+                self._stronger_model = DEFAULT_STRONGER_PLANNER_MODEL
+                self._escalation_label = DEFAULT_STRONGER_PLANNER_MODEL
+            else:
+                self._stronger_model = None
+                self._escalation_label = "the same model (strategy-change note)" 
         self._pending: Optional[dict[str, Any]] = None
         self._cancel_requested = False
         self._cancel_hook = None

@@ -1528,16 +1528,21 @@ The failures cited in previous logs plus escalation regressions were diagnosed a
      causing `find_latest_checkpoint()` in `training/common.py` to pick step 5 instead of step 6.
    - *Fix:* In `training/common.py`, implemented `_sort_key` ordering by `(step_num, mtime_ns)`, ensuring unambiguous
      latest-checkpoint selection.
+8. **Regression fix in offline escalation reporting (`src/grace/agent/loop.py`)**
+   - *Regression:* `Config.stronger_planner_model` defaults to `"gemini-3.1-flash"`, so with a real `Config` and `use_cloud_llm=False`, `cfg_stronger` was truthy and caused offline escalation to claim `"gemini-3.1-flash"` and pass `model="gemini-3.1-flash"` to the planner.
+   - *Fix:* Offline (`use_cloud_llm False`) always sets `_stronger_model = None` and label `"the same model (strategy-change note)"`, regardless of config or environment settings. Online (`use_cloud_llm True`) respects configured/env value or defaults to `DEFAULT_STRONGER_PLANNER_MODEL`.
+   - *Tests:* `tests/test_escalation_offline.py` augmented with tests built from real `grace.config.Config` instances for both offline and online modes.
 
 - **Commits:**
   - `ec77d52` `fix(tests): resolve contract, wiring, harness, and escalation test regressions` — pushed to `origin/main`.
   - `d7ca6f4` `fix(agent,training): escalate model cleanly offline/online; sort checkpoints by step` — pushed to `origin/main`.
+  - `fix(agent): offline escalation never names or passes a cloud model` — pushed to `origin/main`.
 
 ---
 
 ### Final Suite Counts
 
 - **Python (serial, `pytest -q -p no:cacheprovider`):**
-  `1310 passed, 1 skipped, 2 warnings in 304.25s (0:05:04)` — **0 failed**.
+  `1312 passed, 1 skipped, 2 warnings in 273.84s (0:04:33)` — **0 failed**.
 - **Rust (`cargo test --workspace`):**
   `test result: ok. 21 passed`, `10 passed`, `2 passed`, `2 passed`, `2 passed`, `175 passed`, `2 passed`, `27 passed` — **all workspace crates passed, 0 failed**.
