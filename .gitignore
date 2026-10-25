@@ -58,3 +58,7 @@ libs/*.jar
 # they reference is large and lives alongside the repo, not in it.
 recordings/
 corpus/**/pcm/
+
+# Real-desktop run captures (scripts/real_run.ps1). Reviewed by the user, read
+# by Claude - never committed.
+runs/
