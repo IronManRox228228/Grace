@@ -3,6 +3,7 @@
 import sys
 import os
 import asyncio
+import types
 
 import pytest
 
@@ -202,6 +203,9 @@ class TestOpenAppUrlSafety:
         calls = []
         monkeypatch.setattr(webbrowser, 'open', lambda u: calls.append(u))
         dispatcher = Dispatcher(computer_use=None)
+        # No installed app matches, so the url stands. A stub index keeps the
+        # test off the real disk.
+        dispatcher.set_app_indexer(types.SimpleNamespace(is_installed=lambda n: False))
         intent = Intent(tool='open_app', params={'name': 'YouTube Music', 'url': 'music.youtube.com'})
         result = asyncio.run(dispatcher.execute(intent))
         assert result['status'] == 'ok'

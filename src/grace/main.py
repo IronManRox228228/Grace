@@ -1742,6 +1742,8 @@ class GraceApp:
             await self.ws_server.emit({"type": "ConversationFinished"})
             return True
 
+        if hasattr(self.dispatcher, "set_goal"):
+            self.dispatcher.set_goal(transcript)
         intent = None
         if intent_json:
             log.info(f"LLM output: {intent_json[:200]}")
@@ -2104,6 +2106,8 @@ class GraceApp:
             )
             return True
 
+        if hasattr(self.dispatcher, "set_goal"):
+            self.dispatcher.set_goal(transcript)
         intent = None
         if intent_json:
             try:

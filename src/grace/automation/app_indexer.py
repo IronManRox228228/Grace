@@ -217,6 +217,20 @@ class AppIndexer:
     # never carry one through to a process launch.
     _UNSAFE_NAME_CHARS = set('&|<>^"%')
 
+    PROTOCOL_MAP = {
+        "whatsapp": "whatsapp://",
+        "settings": "ms-settings:",
+        "calculator": "calc:",
+        "calc": "calc:",
+    }
+
+    def is_installed(self, name: str) -> bool:
+        """True when `launch(name)` would open an installed app (index or protocol handler)."""
+        clean = (name or "").lower().strip()
+        if not clean or any(ch in clean for ch in self._UNSAFE_NAME_CHARS):
+            return False
+        return clean in self.PROTOCOL_MAP or self.find_app(clean) is not None
+
     def launch(self, name: str) -> dict[str, Any]:
         """Launch an application by name or search query."""
         if not name:
@@ -230,12 +244,7 @@ class AppIndexer:
         clean_name = name.lower().strip()
 
         # Direct Windows Protocol URI Handlers (WhatsApp, Settings, Calculator)
-        PROTOCOL_MAP = {
-            "whatsapp": "whatsapp://",
-            "settings": "ms-settings:",
-            "calculator": "calc:",
-            "calc": "calc:",
-        }
+        PROTOCOL_MAP = self.PROTOCOL_MAP
         if clean_name in PROTOCOL_MAP:
             try:
                 os.startfile(PROTOCOL_MAP[clean_name])

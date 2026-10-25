@@ -1556,7 +1556,21 @@ class ComputerUse:
             user32.SwitchToThisWindow(hwnd, True)
 
     def _activate_hwnd(self, target_hwnd: int, wanted: str) -> dict[str, Any]:
-        """Activate target_hwnd trying techniques 1 -> 2 -> 3 -> 5, verifying after each."""
+        """Activate target_hwnd trying techniques 1 -> 2 -> 3 -> 5, verifying after each.
+
+        A minimised window is restored first: SetForegroundWindow alone leaves
+        it minimised, so "activated" would be a lie. This is a plain
+        SW_RESTORE of a window that is already iconic, not a minimise-then-
+        restore trick.
+        """
+        try:
+            import win32con
+            import win32gui
+
+            if win32gui.IsIconic(target_hwnd):
+                win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
+        except Exception as e:
+            logger.debug(f"Restore of minimised window {target_hwnd} skipped: {e}")
         last_fg_title = ""
         for tech in (1, 2, 3, 5):
             try:

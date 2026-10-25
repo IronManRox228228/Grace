@@ -176,6 +176,7 @@ class Dispatcher:
         self._app_indexer = None
         self._app_indexer_lock = asyncio.Lock()
         self._training_scheduler = None
+        self._goal = ""
 
     def set_memory_store(self, memory_store: Any) -> None:
         """Install persistent memory store for fact storage and retrieval."""
@@ -184,6 +185,10 @@ class Dispatcher:
     def set_kokoro_engine(self, engine: Any) -> None:
         """Install Kokoro engine for runtime speech parameter adjustments."""
         self._kokoro_engine = engine
+
+    def set_goal(self, goal: str) -> None:
+        """The user's current spoken goal; `open_app` reads it for "browser", "web" or "online"."""
+        self._goal = goal or ""
 
     def set_app_indexer(self, indexer) -> None:
         """Install a pre-built index (main.py builds one during startup warmup)."""
@@ -388,11 +393,85 @@ class Dispatcher:
         response = params.get("response", "")
         return {"status": "ok", "text": response}
 
+    async def _ensure_app_indexer(self):
+        # Building the index globs Program Files recursively, so it must never
+        # run on the loop. The lock stops two concurrent "open X" requests
+        # building it twice.
+        if self._app_indexer is None:
+            async with self._app_indexer_lock:
+                if self._app_indexer is None:
+                    from grace.automation.app_indexer import AppIndexer
+
+                    self._app_indexer = await asyncio.to_thread(AppIndexer)
+        return self._app_indexer
+
+    async def _list_windows_for_launch(self) -> list[dict]:
+        if not self._cua or not self._cua.is_ready:
+            return []
+        res = await self._execute_cua("cua_list_windows", {})
+        inner = res.get("result") if isinstance(res.get("result"), dict) else {}
+        return list(inner.get("windows") or [])
+
+    async def _bring_forward(self, display_name: str, before: list[dict], domain: str = "",
+                             timeout: float = 3.0) -> Optional[str]:
+        """Wait up to `timeout` s for the launched app's window, then activate it.
+
+        Returns a one-line fact for the result, or None when there is no
+        desktop backend to ask. A launch behind the foreground window used to
+        leave the model reopening the same app.
+        """
+        from grace.automation.computer_use import window_titles_match
+
+        if not self._cua or not self._cua.is_ready:
+            return None
+        before_ids = {w.get("id"): w.get("title", "") for w in before}
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        candidate = None
+        while True:
+            for w in await self._list_windows_for_launch():
+                title = w.get("title", "")
+                if not title:
+                    continue
+                matches = window_titles_match(display_name, title) or bool(domain and domain in title.lower())
+                is_new = w.get("id") not in before_ids
+                changed = not is_new and title != before_ids.get(w.get("id"))
+                if is_new or changed or matches:
+                    candidate = w
+                    # A title match is the better answer; otherwise keep the new window.
+                    if matches:
+                        break
+            if candidate is not None or loop.time() >= deadline:
+                break
+            await asyncio.sleep(0.2)
+
+        if candidate is None:
+            return f"Opened {display_name}; no window for it appeared, so it could not be brought to the front."
+        res = await self._execute_cua(
+            "cua_activate", {"id": candidate.get("id"), "window_title": candidate.get("title")}
+        )
+        inner = res.get("result") if isinstance(res.get("result"), dict) else {}
+        if res.get("status") == "ok" and inner.get("ok", True):
+            return f"Opened {display_name}; it is now in front."
+        return f"Opened {display_name}; it could not be brought to the front."
+
     async def _open_app(self, params: dict) -> dict:
         name = params.get("name", "").strip()
         url = params.get("url", "").strip()
         if not name and not url:
             return {"status": "error", "error": "Missing 'name' or 'url' parameter"}
+
+        # An installed app beats a web address. The intent model tends to add a
+        # `url` for any well-known name ("WhatsApp" -> web.whatsapp.com), which
+        # opens a logged-out web page instead of the app the user has. The url
+        # stands only when no installed app matches, or the goal asks for the web.
+        if name and url and not re.search(r"\b(?:browser|web|website|online)\b", self._goal, re.IGNORECASE):
+            indexer = await self._ensure_app_indexer()
+            if await asyncio.to_thread(indexer.is_installed, name):
+                logger.info(f"open_app: '{name}' is installed; ignoring url '{url}'")
+                url = ""
+
+        before = await self._list_windows_for_launch()
 
         # 1. An explicit `url` used to reach `webbrowser.open` completely
         # unvalidated - `open_app` is a fast-path tool with no confirmation
@@ -423,19 +502,22 @@ class Dispatcher:
             import webbrowser
             webbrowser.open(target_url)
             display_name = name or target_url
-            return {"status": "ok", "text": f"I've opened {display_name} in your browser."}
+            result = {"status": "ok", "text": f"I've opened {display_name} in your browser."}
+            domain = (urlparse(target_url).hostname or "")
+            domain = domain[4:] if domain.startswith("www.") else domain
+            fact = await self._bring_forward(display_name, before, domain=domain)
+            if fact:
+                result["text"] = fact
+            return result
 
-        # 2. Launch installed application via AppIndexer. Building the index
-        # globs Program Files recursively, so it must never run on the loop.
-        # The lock stops two concurrent "open X" requests building it twice.
-        if self._app_indexer is None:
-            async with self._app_indexer_lock:
-                if self._app_indexer is None:
-                    from grace.automation.app_indexer import AppIndexer
-
-                    self._app_indexer = await asyncio.to_thread(AppIndexer)
-
-        return await asyncio.to_thread(self._app_indexer.launch, name)
+        # 2. Launch installed application via AppIndexer.
+        indexer = await self._ensure_app_indexer()
+        result = await asyncio.to_thread(indexer.launch, name)
+        if isinstance(result, dict) and result.get("status") == "ok":
+            fact = await self._bring_forward(name, before)
+            if fact:
+                result["text"] = fact
+        return result
 
     async def _close_app(self, params: dict) -> dict:
         name = params.get("name", "")
