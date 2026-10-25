@@ -154,7 +154,7 @@ def get_planner_system_prompt(is_single: bool = True) -> str:
     is now internally consistent: planner speaks JSON, grounder handles coordinates.
     """
     if is_single:
-        screen_guidance = """The screen is shown to you as the current screenshot of the active window, and an interactive element list is provided as a secondary reference.
+        screen_guidance = """The screen is shown to you as the current screenshot of the whole screen, and an interactive element list is provided as a secondary reference.
 
 You may interact in any of these ways:
 - **By position (pointing):** `cua_click` (and `cua_secondary_action`) accepts `x` and `y` in normalised `[0-1000]` coordinates of the screenshot you are shown. `(0, 0)` is the top-left corner, and `(1000, 1000)` is the bottom-right corner.

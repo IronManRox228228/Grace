@@ -263,6 +263,42 @@ def window_titles_match(wanted: str, candidate: str) -> bool:
     return all(tok in longer for tok in shorter)
 
 
+def pick_best_window_match(
+    wanted: str,
+    candidates: list[tuple[Any, str]],
+) -> Optional[tuple[Any, str]]:
+    """Pick the candidate window title closest to wanted.
+
+    Prefers candidate containing ALL of wanted title's tokens,
+    then most overlapping tokens, then closest length.
+    Never 'shortest wins'.
+    """
+    if not wanted:
+        return None
+    tokens_w = _normalize_title_tokens(wanted)
+    set_w = set(tokens_w)
+    matches = []
+    for cid, raw_t in candidates:
+        if not raw_t:
+            continue
+        if window_titles_match(wanted, raw_t):
+            matches.append((cid, raw_t))
+    if not matches:
+        return None
+
+    def _score(c):
+        tokens_c = set(_normalize_title_tokens(c[1]))
+        contains_all = set_w.issubset(tokens_c) if set_w else False
+        overlap = len(set_w & tokens_c)
+        length_diff = -abs(len(c[1]) - len(wanted))
+        return (contains_all, overlap, length_diff)
+
+    return max(matches, key=_score)
+
+
+_pick_best_match = pick_best_window_match
+
+
 def _wrong_window(
     params: dict[str, Any],
     action: str,
@@ -1400,16 +1436,7 @@ class ComputerUse:
             norm_query = window_title.lower().strip()
             if norm_query:
                 def _pick_best_match(candidates):
-                    # candidates: list of (hwnd_or_id, raw_title)
-                    matches = []
-                    for cid, raw_t in candidates:
-                        if not raw_t:
-                            continue
-                        if window_titles_match(norm_query, raw_t):
-                            matches.append((cid, raw_t))
-                    if matches:
-                        return min(matches, key=lambda c: len(c[1]))
-                    return None
+                    return pick_best_window_match(window_title, candidates)
 
                 # First match against live_windows
                 live_candidates = [(w["id"], w.get("title", "")) for w in live_windows if isinstance(w, dict) and "id" in w]
