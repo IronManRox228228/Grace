@@ -120,7 +120,7 @@ def redact_data(data: Any, username: str = "", home: str = "") -> Any:
         # Check if this object represents an element node with a password role
         role = data.get("role")
         name = data.get("name")
-        is_pwd_element = _is_password_field(role, name)
+        is_pwd_element = _is_password_field(role, name) or data.get("is_password")
         is_element_node = "id" in data and "role" in data and "rect" in data
 
         for k, v in data.items():
@@ -134,7 +134,11 @@ def redact_data(data: Any, username: str = "", home: str = "") -> Any:
 
             # Redact password field values in element snapshots
             if is_pwd_element and k_lower in ("value", "text"):
-                new_dict[k] = "<redacted>"
+                new_dict[k] = (
+                    "[password field, filled]"
+                    if (v and v != "[password field, empty]")
+                    else "[password field, empty]"
+                )
                 continue
 
             # Keep ordinary text field values visible in element snapshots unless secret-shaped

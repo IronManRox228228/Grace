@@ -198,10 +198,18 @@ class DomProvider:
             role = AX_ROLE_MAP.get((raw.get("role") or "").lower(), (raw.get("role") or "generic").lower())
             raw_val = (raw.get("value") or "")[:120]
             raw_type = (raw.get("type") or "").lower()
-            from grace.perception.elements import redact_element_value_if_secret
-            is_pwd = raw_type == "password" or role == "password"
-            clean_val = "<redacted>" if is_pwd else redact_element_value_if_secret(
-                raw_val, role=role, name=name, placeholder=placeholder, automation_id=automation_id
+            from grace.perception.elements import redact_element_value_if_secret, is_password_element
+            is_pwd = (
+                raw_type == "password"
+                or role == "password"
+                or is_password_element(role=role, name=name, placeholder=placeholder, automation_id=automation_id)
+            )
+            clean_val = (
+                ("[password field, filled]" if raw_val else "[password field, empty]")
+                if is_pwd
+                else redact_element_value_if_secret(
+                    raw_val, role=role, name=name, placeholder=placeholder, automation_id=automation_id
+                )
             )
             elements.append(
                 ElementNode(
@@ -221,6 +229,7 @@ class DomProvider:
                     offscreen=False,
                     automation_id=automation_id[:60],
                     source=SOURCE_DOM,
+                    is_password=is_pwd,
                 )
             )
 

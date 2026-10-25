@@ -304,10 +304,16 @@ class UiaProvider:
             name = name[:MAX_NAME_LEN]
 
         raw_val = str(_cached(element, uia.props["value"], "") or "")[:120]
-        is_pwd = bool(_cached(element, uia.props.get("is_password", 0), False))
+        is_pwd = bool(_cached(element, uia.props.get("is_password", 0), False)) or is_password_element(
+            role=role, name=name, placeholder=placeholder, automation_id=automation_id
+        )
         from grace.perception.elements import redact_element_value_if_secret
-        clean_val = "<redacted>" if is_pwd else redact_element_value_if_secret(
-            raw_val, role=role, name=name, placeholder=placeholder, automation_id=automation_id
+        clean_val = (
+            ("[password field, filled]" if raw_val else "[password field, empty]")
+            if is_pwd
+            else redact_element_value_if_secret(
+                raw_val, role=role, name=name, placeholder=placeholder, automation_id=automation_id
+            )
         )
 
         node = ElementNode(
@@ -326,6 +332,7 @@ class UiaProvider:
             offscreen=bool(_cached(element, uia.props["offscreen"], False)),
             automation_id=automation_id[:60],
             source=SOURCE_UIA,
+            is_password=is_pwd,
         )
         counter[0] += 1
         return node

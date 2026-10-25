@@ -55,12 +55,15 @@ def redact_element_value_if_secret(
     name: Optional[str] = "",
     placeholder: Optional[str] = "",
     automation_id: Optional[str] = "",
+    is_password: bool = False,
 ) -> str:
-    """Return '<redacted>' if this element is a password field or value is secret-shaped."""
+    """Return '[password field, filled/empty]' or '<redacted>' if this element is a password field or secret-shaped."""
+    if is_password or is_password_element(role, name, placeholder, automation_id):
+        if value and value != "[password field, empty]":
+            return "[password field, filled]"
+        return "[password field, empty]"
     if not value or value == "<redacted>":
         return value
-    if is_password_element(role, name, placeholder, automation_id):
-        return "<redacted>"
     if looks_like_secret(name or role or "", value) or looks_like_secret_value(value):
         return "<redacted>"
     return value
@@ -112,6 +115,17 @@ class ElementNode:
     offscreen: bool = False
     automation_id: str = ""
     source: str = SOURCE_UIA
+    is_password: bool = False
+
+    def __post_init__(self):
+        if self.is_password or is_password_element(
+            self.role, self.name, self.placeholder, self.automation_id
+        ):
+            self.is_password = True
+            if self.value and self.value != "[password field, empty]":
+                self.value = "[password field, filled]"
+            else:
+                self.value = "[password field, empty]"
 
     @property
     def width(self) -> int:
@@ -153,12 +167,19 @@ class ElementNode:
 
     @property
     def safe_value(self) -> str:
+        if self.is_password or is_password_element(
+            self.role, self.name, self.placeholder, self.automation_id
+        ):
+            if self.value and self.value != "[password field, empty]":
+                return "[password field, filled]"
+            return "[password field, empty]"
         return redact_element_value_if_secret(
             self.value,
             role=self.role,
             name=self.name,
             placeholder=self.placeholder,
             automation_id=self.automation_id,
+            is_password=self.is_password,
         )
 
     def to_dict(self, compact: bool = False) -> dict[str, Any]:
