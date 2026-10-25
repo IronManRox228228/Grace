@@ -562,11 +562,14 @@ fn expectation_note(last_step: Option<&PlannedStep>, last_result: Option<&Value>
         return String::new();
     }
 
-    let mut lines = vec![format!(
-        "You ran `{}` and expected: {}",
-        last_step.action,
-        if last_step.expect.is_empty() { "(nothing stated)" } else { &last_step.expect }
-    )];
+    let mut lines = if last_step.expect.trim().is_empty() {
+        vec!["You did not state what you expected.".to_string()]
+    } else {
+        vec![format!(
+            "You expected: \"{}\". Compare this with the screenshot now.",
+            last_step.expect.trim()
+        )]
+    };
 
     let inner = last_result.get("result").filter(|v| v.is_object());
     let reason = failure_reason(last_result);
@@ -607,7 +610,6 @@ fn expectation_note(last_step: Option<&PlannedStep>, last_result: Option<&Value>
         lines.push("Nothing currently has keyboard focus.".to_string());
     }
 
-    lines.push("Compare the screenshot with what you expected.".to_string());
     lines.join("\n")
 }
 

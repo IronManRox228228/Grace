@@ -1134,6 +1134,7 @@ class AgentLoop:
         repeat_count: int = 0,
         tool_error_count: int = 0,
         screen_still_loading: bool = False,
+        is_single: Optional[bool] = None,
     ) -> str:
         """Report the previous step's stated expectation against what happened.
 
@@ -1152,7 +1153,14 @@ class AgentLoop:
         if last_step is None or not last_result:
             return ""
 
-        lines = [f"You ran `{last_step.action}` and expected: {last_step.expect or '(nothing stated)'}"]
+        if is_single is None:
+            is_single = bool(getattr(self._fleet_config, "is_single", False))
+        target = "screenshot" if is_single else "screen description"
+        expect = (last_step.expect or "").strip()
+        if expect:
+            lines = [f'You expected: "{expect}". Compare this with the {target} now.']
+        else:
+            lines = ["You did not state what you expected."]
 
         status = last_result.get("status", "ok")
         inner = last_result.get("result") if isinstance(last_result.get("result"), dict) else {}
@@ -1233,9 +1241,6 @@ class AgentLoop:
         elif last_step.action == "cua_click":
             lines.append("Nothing currently has keyboard focus.")
 
-        is_single = bool(getattr(self._fleet_config, "is_single", False))
-        target = "screenshot" if is_single else "screen description"
-        lines.append(f"Compare the {target} with what you expected.")
         return "\n".join(lines)
 
     @staticmethod

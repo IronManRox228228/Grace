@@ -309,6 +309,31 @@ class TestExpectationFeedback:
         assert "YouTube - Edge" in note
         assert "Tool error" not in note
 
+    def test_expect_is_fed_back_on_next_step_single_and_fleet(self):
+        """expect is fed back at the start of the result section in single and fleet modes, including empty expect."""
+        loop, _, _ = make_loop([])
+        step = PlannedStep(action="cua_click", params={}, expect="the search box is focused")
+
+        note_single = loop._expectation_note(step, {"status": "ok"}, snapshot(), is_single=True)
+        assert note_single.startswith('You expected: "the search box is focused". Compare this with the screenshot now.')
+
+        note_fleet = loop._expectation_note(step, {"status": "ok"}, snapshot(), is_single=False)
+        assert note_fleet.startswith('You expected: "the search box is focused". Compare this with the screen description now.')
+
+        empty_step = PlannedStep(action="cua_click", params={}, expect="")
+        note_empty = loop._expectation_note(empty_step, {"status": "ok"}, snapshot(), is_single=True)
+        assert note_empty.startswith("You did not state what you expected.")
+
+    def test_system_prompt_requires_expect(self):
+        """System prompt explicitly requires expect on every action step."""
+        from grace.agent.planner import get_planner_system_prompt
+        prompt_single = get_planner_system_prompt(is_single=True)
+        assert "Every action step must fill `expect`" in prompt_single
+        assert "required" in prompt_single
+        prompt_fleet = get_planner_system_prompt(is_single=False)
+        assert "Every action step must fill `expect`" in prompt_fleet
+        assert "required" in prompt_fleet
+
     def test_error_status_counts_as_failure(self):
         loop, _, _ = make_loop([])
         step = PlannedStep(action="open_app", params={}, expect="app opens")
