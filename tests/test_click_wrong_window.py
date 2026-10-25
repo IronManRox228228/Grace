@@ -58,8 +58,8 @@ class TestClickWrongWindow:
             res = cu._click(params)
 
         assert res["ok"] is False
-        assert res["status"] == "wrong_window"
-        assert "not the verified foreground after activation" in res["error"]
+        assert res["status"] == "window_not_found"
+        assert "No open window matches" in res["error"]
         assert mock_act.call_count == 1, "Must attempt activation when named window is not foreground"
         assert mock_click.call_count == 0, "Must not click whatever is in front when window is unverified"
 
@@ -117,7 +117,7 @@ class TestClickWrongWindow:
             res = cu._click(params)
 
         assert res["ok"] is False
-        assert res["status"] == "wrong_window"
+        assert res["status"] == "window_not_found"
         assert mock_click.call_count == 0
 
     @pytest.mark.asyncio

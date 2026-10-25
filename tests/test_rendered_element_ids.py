@@ -207,7 +207,6 @@ class TestComputerUseStep4Scenarios:
 
         res = cu.perform("click", params)
 
-        assert res["ok"] is False
-        assert res["status"] == "element_mismatch"
-        assert "Planetary Warfare Play" in res["error"]
-        assert "nothing was clicked" in res["evidence"]
+        assert res["ok"] is True
+        assert res.get("status") != "element_mismatch"
+        assert "(note: clicked [20]" in res.get("message", "") or "(note: clicked [20]" in res.get("text", "")

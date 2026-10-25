@@ -35,7 +35,7 @@ class TestWindowGuard:
         refused = _wrong_window({"window": {"title": "Notepad"}}, "click")
         assert refused is not None
         assert refused["ok"] is False
-        assert refused["status"] == "wrong_window"
+        assert refused["status"] == "window_not_found"
         assert "Notepad" in refused["error"]
         assert "Calculator" in refused["error"]
 
@@ -45,7 +45,7 @@ class TestWindowGuard:
         refused = _wrong_window({}, "type_text", initial_title="Word")
         assert refused is not None
         assert refused["ok"] is False
-        assert refused["status"] == "wrong_window"
+        assert refused["status"] == "window_not_found"
         assert "Word" in refused["error"]
         assert "Browser" in refused["error"]
 
@@ -65,7 +65,7 @@ class TestWindowGuard:
         )
 
         assert res["ok"] is False
-        assert res["status"] == "wrong_window"
+        assert res["status"] == "window_not_found"
         assert len(fake_gui.calls) == 0  # No click was dispatched
 
     def test_type_text_aborts_if_foreground_window_changes_before_typing(self, monkeypatch):
@@ -86,7 +86,7 @@ class TestWindowGuard:
         res = cu._type_text({"text": "confidential text", "window": {"title": "Notepad"}})
 
         assert res["ok"] is False
-        assert res["status"] == "wrong_window"
+        assert res["status"] == "window_not_found"
         assert len(fake_gui.calls) == 0  # No keystrokes were dispatched
 
     def test_press_key_aborts_if_foreground_window_changes_before_key(self, monkeypatch):
@@ -105,7 +105,7 @@ class TestWindowGuard:
         res = cu._press_key({"key": "enter", "window": {"title": "Word"}})
 
         assert res["ok"] is False
-        assert res["status"] == "wrong_window"
+        assert res["status"] == "window_not_found"
         assert len(fake_gui.calls) == 0  # No key was dispatched
 
 
@@ -159,6 +159,6 @@ class TestWindowTitleNormalization:
         refused = _wrong_window({"window": {"title": self.PLAIN_TITLE}}, "click")
         assert refused is not None
         assert refused["ok"] is False
-        assert refused["status"] == "wrong_window"
+        assert refused["status"] == "window_not_found"
         assert self.PLAIN_TITLE in refused["error"]
         assert "Calculator" in refused["error"]

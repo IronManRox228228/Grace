@@ -301,7 +301,7 @@ class TestPreconditions:
                           window={"title": "WhatsApp"}))
 
         inner = result.get("result", result)
-        assert inner.get("status") == "wrong_window", result
+        assert inner.get("status") == "window_not_found", result
         assert inner.get("sent") is False
         assert gui.calls == []
         assert "Notepad" in inner.get("error", ""), (
@@ -319,7 +319,7 @@ class TestPreconditions:
         )
         result = run(plan("cua_type_text", text="hello", window={"title": "Chrome"}))
         inner = result.get("result", result)
-        assert inner.get("status") != "wrong_window", result
+        assert inner.get("status") != "window_not_found", result
         assert ("write", "hello") in gui.calls
 
     def test_a_plan_that_names_no_window_is_not_refused(self, chain, monkeypatch):
@@ -329,5 +329,5 @@ class TestPreconditions:
         )
         result = run(plan("cua_type_text", text="hello"))
         inner = result.get("result", result)
-        assert inner.get("status") != "wrong_window", result
+        assert inner.get("status") != "window_not_found", result
         assert ("write", "hello") in gui.calls

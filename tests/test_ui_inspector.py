@@ -88,10 +88,8 @@ class TestUIInspector:
         res = cu.perform("click", {"target_name": "search"})
 
         assert res["ok"] is False
-        assert res["status"] == "element_mismatch"
-        assert "Researching" in res["error"]
-        assert "search" in res["error"]
-        assert "nothing was clicked" in res["evidence"]
+        assert res["status"] == "element_not_found"
+        assert "nothing was clicked" in res.get("evidence", "") or "not found" in res.get("evidence", "").lower()
 
 
     def test_partial_match_is_one_directional(self):

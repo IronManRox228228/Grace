@@ -209,20 +209,42 @@ def _foreground_title() -> str:
         return ""
 
 
+def _normalize_title_tokens(title: str) -> list[str]:
+    if not title:
+        return []
+    t = re.sub(r"[\u200b-\u200f\ufeff]", "", str(title))
+    t = t.lower()
+    t = re.sub(r"\band\s+\d+\s+more\s+pages?\b", " ", t)
+    t = re.sub(r"[-|—–:•/\\_.]", " ", t)
+    stopwords = {"and", "more", "page", "pages"}
+    return [tok for tok in t.split() if tok not in stopwords]
+
+
+def window_titles_match(wanted: str, candidate: str) -> bool:
+    """Match named window by normalised token overlap, not substring.
+    Every distinctive token of the shorter title appears in the longer one,
+    ignoring '-', '|', U+200B and words like 'and 1 more page'.
+    """
+    if not wanted or not candidate:
+        return False
+    tokens_w = _normalize_title_tokens(wanted)
+    tokens_c = _normalize_title_tokens(candidate)
+    if not tokens_w or not tokens_c:
+        return False
+    if len(tokens_w) <= len(tokens_c):
+        shorter, longer = tokens_w, set(tokens_c)
+    else:
+        shorter, longer = tokens_c, set(tokens_w)
+    return all(tok in longer for tok in shorter)
+
+
 def _wrong_window(
     params: dict[str, Any],
     action: str,
     initial_title: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
-    """Refuse an action aimed at a window that is not in front (R11/R12/R22).
-
-    Modelled on the `wrong_focus` guard `_type_text` already had, which is the
-    one precondition in the file that ever worked: it names both sides, and
-    because `ok is False` the loop turns it into an explicit correction on the
-    very next planner call at no extra cost.
-
-    Re-checks that the target window is still the foreground window right before
-    typing or clicking. Aborts the action if focus changed.
+    """Check window target against foreground (R11/R12/R22).
+    Uses normalised token overlap rather than substring matching.
     """
     wanted = _normalize_window(params.get("window")).get("title") or ""
     wanted = normalize_title(str(wanted)).strip()
@@ -234,37 +256,32 @@ def _wrong_window(
                 "ok": False,
                 "sent": False,
                 "verified": False,
-                "status": "wrong_window",
+                "status": "window_not_found",
                 "action": action,
-                "error": (f"You aimed at '{wanted}' but foreground window could not be verified. "
-                          f"Activate the window you meant first."),
+                "error": f"You aimed at '{wanted}' but foreground window could not be verified.",
                 "evidence": "foreground window is empty",
             }
-        a, b = wanted.lower(), actual.lower()
-        if a in b or b in a:
+        if window_titles_match(wanted, actual):
             return None
         return {
             "ok": False,
             "sent": False,
             "verified": False,
-            "status": "wrong_window",
+            "status": "window_not_found",
             "action": action,
-            "error": (f"You aimed at '{wanted}' but '{actual}' is in front. "
-                      f"Activate the window you meant first."),
+            "error": f"You aimed at '{wanted}' but '{actual}' is in front. Activate the window you meant first.",
             "evidence": f"foreground window is '{actual}'",
         }
 
     if initial_title and actual:
-        a, b = normalize_title(initial_title).lower(), actual.lower()
-        if not (a in b or b in a):
+        if not window_titles_match(initial_title, actual):
             return {
                 "ok": False,
                 "sent": False,
                 "verified": False,
-                "status": "wrong_window",
+                "status": "window_not_found",
                 "action": action,
-                "error": (f"Target window changed from '{normalize_title(initial_title)}' to '{actual}' before {action}. "
-                          f"Action aborted to prevent misdirected input."),
+                "error": f"Target window changed from '{normalize_title(initial_title)}' to '{actual}' before {action}. Action aborted to prevent misdirected input.",
                 "evidence": f"foreground window changed to '{actual}'",
             }
 
@@ -444,33 +461,11 @@ class ComputerUse:
             or (isinstance(window_raw, str) and window_raw.strip())
         )
         if has_named_window:
-            wanted_norm = normalize_title(str(wanted_title or "")).strip()
-            actual = normalize_title(_foreground_title())
-            is_fg = bool(wanted_norm and actual and (wanted_norm.lower() in actual.lower() or actual.lower() in wanted_norm.lower()))
-            if not is_fg:
-                # Attempt activation
-                act_params = {"window": window_raw} if window_raw else {"window_title": wanted_title}
-                act_res = self._activate(act_params)
-                actual = normalize_title(_foreground_title())
-                is_fg = bool(act_res.get("verified")) and bool(actual) and (not wanted_norm or wanted_norm.lower() in actual.lower() or actual.lower() in wanted_norm.lower())
-                if not is_fg:
-                    return {
-                        "ok": False,
-                        "sent": False,
-                        "verified": False,
-                        "status": "wrong_window",
-                        "action": "click",
-                        "error": (
-                            f"Target window '{wanted_title or window_raw}' is not the verified foreground after activation. "
-                            f"Foreground is '{actual}'. Click refused to prevent misdirected input."
-                        ),
-                        "evidence": f"foreground window is '{actual}'",
-                    }
+            refused = self._ensure_window_active(params, "click")
+            if refused is not None:
+                return refused
 
         initial_fg = _foreground_title()
-        refused = _wrong_window(params, "click", initial_title=initial_fg)
-        if refused is not None:
-            return refused
 
         before = _screen_state()
 
@@ -495,31 +490,19 @@ class ComputerUse:
         )
         if graph_target is not None:
             from grace.perception.elements import NAME_MATCH_THRESHOLD, name_match_score
-            # R10: never click an element whose text does not plausibly match
-            # the target_name the planner asked for. Even for a shown id,
-            # apply the name-mismatch guard when target_name is given, and
-            # refuse on mismatch.
+            mismatch_note = ""
             if target_name and name_match_score(target_name, graph_target) < NAME_MATCH_THRESHOLD:
-                logger.warning(
-                    f"_click mismatch: resolved [{graph_target.id}] {graph_target.role} "
-                    f"'{graph_target.name}' does not plausibly match target '{target_name}'"
+                mismatch_note = (
+                    f" (note: clicked [{graph_target.id}] '{graph_target.name}'; "
+                    f"you described it as '{target_name}')"
                 )
-                return {
-                    "ok": False,
-                    "sent": False,
-                    "verified": False,
-                    "status": "element_mismatch",
-                    "action": "click",
-                    "error": (f"Resolved element '[{graph_target.id}] {graph_target.role}' "
-                              f"'{graph_target.name}' does not plausibly match target '{target_name}'"),
-                    "message": (f"I couldn't confirm that element [{graph_target.id}] "
-                                f"'{graph_target.name}' is the '{target_name}' you asked for. "
-                                f"Nothing was clicked."),
-                    "evidence": "nothing was clicked",
-                }
-            return self._click_at(graph_target.center[0], graph_target.center[1],
+            res = self._click_at(graph_target.center[0], graph_target.center[1],
                                   click_count, f"graph:{graph_target.role}", graph_target.name,
                                   probe=True, before=before, params=params, initial_fg=initial_fg)
+            if mismatch_note and isinstance(res, dict):
+                res["message"] = (str(res.get("message")) if res.get("message") else "") + mismatch_note
+                res["text"] = (str(res.get("text")) if res.get("text") else res["message"])
+            return res
 
         # Fall back to the legacy cascade for coordinate-only or unmatched targets.
         resolver = CoordinateResolver()
@@ -651,6 +634,59 @@ class ComputerUse:
                 f"[{found.id}] {found.role} '{found.name}' frame={found.frame} at {found.center}"
             )
         return found
+
+    def _ensure_window_active(self, params: dict[str, Any], action: str) -> Optional[dict[str, Any]]:
+        window_raw = params.get("window")
+        window = _normalize_window(window_raw)
+        wanted_title = window.get("title") or params.get("window_title")
+        has_named_window = bool(
+            wanted_title
+            or window.get("id")
+            or (isinstance(window_raw, str) and window_raw.strip())
+        )
+        if not has_named_window:
+            return None
+
+        wanted = str(wanted_title or window.get("id") or window_raw).strip()
+        actual = _foreground_title()
+
+        # 1. If named window fuzzy-matches current foreground, act on it directly.
+        if actual and window_titles_match(wanted, actual):
+            return None
+
+        # 2. If it matches another window, activate it and act.
+        act_params = {"window": window_raw} if window_raw else {"window_title": wanted}
+        act_res = self._activate(act_params)
+
+        actual_after = _foreground_title()
+        if act_res.get("ok") and (not wanted or window_titles_match(wanted, actual_after)):
+            return None
+
+        # 3. If no window matches or activation can't bring it forward, return honest impossible error
+        live_windows = []
+        if hasattr(self, "_list_windows"):
+            lw_res = self._list_windows()
+            if isinstance(lw_res, dict):
+                live_windows = lw_res.get("windows", [])
+            elif isinstance(lw_res, list):
+                live_windows = lw_res
+        elif hasattr(self, "list_windows"):
+            live_windows = self.list_windows()
+        if live_windows:
+            open_list = [f"'{w.get('title')}' (id: {w.get('id')})" for w in live_windows[:8]]
+            open_summary = f"Open windows: {', '.join(open_list)}"
+        else:
+            open_summary = "Use cua_list_windows to see what is open, or launch it first."
+
+        return {
+            "ok": False,
+            "sent": False,
+            "verified": False,
+            "status": "window_not_found",
+            "action": action,
+            "error": f"No open window matches {wanted!r}. {open_summary}",
+            "evidence": f"the foreground window is '{actual_after}'",
+        }
 
     def _click_at(self, x: int, y: int, click_count: int, method: str,
                   name: Optional[str] = None, probe: bool = False,
@@ -1333,27 +1369,14 @@ class ComputerUse:
             if norm_query:
                 def _pick_best_match(candidates):
                     # candidates: list of (hwnd_or_id, raw_title)
-                    exact_matches = []
-                    containing_query = []
-                    query_containing = []
+                    matches = []
                     for cid, raw_t in candidates:
-                        t = normalize_title(raw_t or "").lower().strip()
-                        if not t:
+                        if not raw_t:
                             continue
-                        if t == norm_query:
-                            exact_matches.append((cid, raw_t, t))
-                        elif norm_query in t:
-                            containing_query.append((cid, raw_t, t))
-                        elif t in norm_query:
-                            query_containing.append((cid, raw_t, t))
-
-                    if exact_matches:
-                        return exact_matches[0][0], exact_matches[0][1]
-                    if containing_query:
-                        best = min(containing_query, key=lambda c: len(c[2]))
-                        return best[0], best[1]
-                    if query_containing:
-                        return query_containing[0][0], query_containing[0][1]
+                        if window_titles_match(norm_query, raw_t):
+                            matches.append((cid, raw_t))
+                    if matches:
+                        return min(matches, key=lambda c: len(c[1]))
                     return None
 
                 # First match against live_windows
@@ -1402,8 +1425,7 @@ class ComputerUse:
         """Did the window we asked for actually come to the front?"""
         time.sleep(SETTLE_SECONDS)
         actual = _foreground_title()
-        wanted_l, actual_l = normalize_title(wanted).lower(), actual.lower()
-        verified = bool(actual) and (wanted_l in actual_l or actual_l in wanted_l)
+        verified = bool(actual) and window_titles_match(wanted, actual)
         return {
             "ok": verified,
             "sent": True,

@@ -376,7 +376,7 @@ def find_by_name(
         if element.placeholder.lower().strip() == q:
             return element
     for element in candidates:
-        if q in element.search_text():
+        if name_match_score(q, element) >= NAME_MATCH_THRESHOLD:
             return element
     return None
 

@@ -279,3 +279,68 @@ async def test_cua_screenshot_leads_to_next_step_prompt_saying_attached():
     assert gemma.generate_text.call_count == 2
     second_prompt = gemma.generate_text.call_args_list[1][1]["prompt"]
     assert "screenshot attached to your next step" in second_prompt
+
+
+
+def test_step1_holo_reordered_title_acts_on_foreground(monkeypatch):
+    """Step 1: Holo reordered title acts on foreground YouTube Music window without wrong_window."""
+    from grace.automation.computer_use import ComputerUse
+
+    fg = "YouTube Music and 1 more page - Personal - Microsoft\u200b Edge Beta"
+    monkeypatch.setattr("grace.automation.computer_use._foreground_title", lambda: fg)
+    monkeypatch.setattr("grace.automation.win32_driver.Win32Driver.click_at", lambda *a, **k: True)
+
+    cu = ComputerUse()
+    res = cu._click({
+        "window": {"title": "YouTube Music - Microsoft Edge Beta - Personal"},
+        "x": 100,
+        "y": 100,
+    })
+
+    assert res["ok"] is True
+    assert res.get("status") != "wrong_window"
+    assert res.get("status") != "window_not_found"
+
+
+def test_step6_shown_id_clicks_centre_and_carries_mismatch_note(monkeypatch):
+    """Step 6: element_id=39 (shown) and target_name='SignalHome song entry' clicks 39 center and carries note."""
+    from grace.automation.computer_use import ComputerUse
+
+    el = make_test_node(39, "SignalHome • 93K plays•Signal", frame=FRAME_PAGE, rect=(100, 200, 300, 250))
+    graph = ElementGraph(elements=[el])
+
+    monkeypatch.setattr("grace.automation.computer_use._foreground_title", lambda: "YouTube Music")
+    monkeypatch.setattr("grace.automation.win32_driver.Win32Driver.click_at", lambda *a, **k: True)
+
+    cu = ComputerUse()
+    res = cu._click({
+        "element_id": 39,
+        "target_name": "SignalHome song entry",
+        "_graph": graph,
+        "_rendered_element_ids": {39},
+    })
+
+    assert res["ok"] is True
+    assert res["x"] == 200
+    assert res["y"] == 225
+    assert "(note: clicked [39] 'SignalHome • 93K plays•Signal'; you described it as 'SignalHome song entry')" in res["message"]
+
+
+def test_truly_absent_window_returns_window_not_found(monkeypatch):
+    """A genuinely absent window returns impossible error listing open windows."""
+    from grace.automation.computer_use import ComputerUse
+
+    monkeypatch.setattr("grace.automation.computer_use._foreground_title", lambda: "YouTube Music")
+    cu = ComputerUse()
+    monkeypatch.setattr(cu, "_list_windows", lambda *a, **k: {"ok": True, "windows": [{"id": 101, "title": "YouTube Music"}]})
+    monkeypatch.setattr(cu, "_activate", lambda params: {"ok": False, "sent": True, "verified": False})
+
+    res = cu._click({
+        "window": {"title": "Calculator"},
+        "x": 100,
+        "y": 100,
+    })
+
+    assert res["ok"] is False
+    assert res["status"] == "window_not_found"
+    assert "Open windows: 'YouTube Music' (id: 101)" in res["error"]
