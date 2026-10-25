@@ -15,6 +15,7 @@ observation is checked against it, which is what makes the loop able to notice
 it went wrong instead of blindly retrying.
 """
 
+import ast
 import json
 import logging
 import math
@@ -323,6 +324,9 @@ class Planner:
         return step
 
 
+_CALL_SYNTAX_RE = re.compile(r"^\s*([a-z_][a-z0-9_]*)\s*\((.*)\)\s*$", re.DOTALL)
+
+
 def parse_planned_step(text: str) -> Optional[PlannedStep]:
     """Parse the planner's JSON, tolerating fences and surrounding prose."""
     if not text or not isinstance(text, str):
@@ -345,6 +349,35 @@ def parse_planned_step(text: str) -> Optional[PlannedStep]:
     if not isinstance(params, dict):
         params = {}
 
+    m = _CALL_SYNTAX_RE.match(action)
+    if m:
+        action_name = m.group(1)
+        args_str = m.group(2).strip()
+        call_params = {}
+        if args_str:
+            try:
+                tree = ast.parse(f"f({args_str})", mode="eval")
+            except SyntaxError:
+                return None
+            if not isinstance(tree.body, ast.Call) or tree.body.args:
+                return None
+            for kw in tree.body.keywords:
+                if kw.arg is None or kw.arg in ("tool", "action"):
+                    continue
+                try:
+                    val = ast.literal_eval(kw.value)
+                except (ValueError, SyntaxError):
+                    return None
+                call_params[kw.arg] = val
+        # Explicit params keys win over call-syntax keys
+        merged = dict(call_params)
+        merged.update({k: v for k, v in params.items() if k not in ("tool", "action")})
+        params = merged
+        action = action_name
+    else:
+        action = action.strip()
+        params = {k: v for k, v in params.items() if k not in ("tool", "action")}
+
     final_response = data.get("final_response") or ""
     if not isinstance(final_response, str):
         final_response = ""
@@ -355,7 +388,7 @@ def parse_planned_step(text: str) -> Optional[PlannedStep]:
 
     return PlannedStep(
         thought=str(data.get("thought") or ""),
-        action=action.strip(),
+        action=action,
         params=params,
         expect=str(data.get("expect") or ""),
         is_completed=bool(data.get("is_completed")),

@@ -97,6 +97,43 @@ class TestParsePlannedStep:
         step = parse_planned_step('{"action": "cua_scroll", "params": {}}')
         assert "cua_scroll" in step.user_update
 
+    def test_call_syntax_action_parsed_with_params(self):
+        raw = '{"action": "open_app(name=\'msedge\', url=\'https://music.youtube.com\')"}'
+        step = parse_planned_step(raw)
+        assert step is not None
+        assert step.action == "open_app"
+        assert step.params == {"name": "msedge", "url": "https://music.youtube.com"}
+        is_safe, prompt = SafetyGuard.evaluate(step.action, step.params)
+        assert is_safe is True
+        assert prompt is None
+
+    def test_call_syntax_cua_click(self):
+        raw = '{"action": "cua_click(element_id=3)"}'
+        step = parse_planned_step(raw)
+        assert step is not None
+        assert step.action == "cua_click"
+        assert step.params == {"element_id": 3}
+
+    def test_call_syntax_press_key(self):
+        raw = '{"action": "press_key(key=\'enter\')"}'
+        step = parse_planned_step(raw)
+        assert step is not None
+        assert step.action == "press_key"
+        assert step.params == {"key": "enter"}
+
+    def test_call_syntax_malicious_expression_gives_none(self):
+        raw = '{"action": "open_app(name=__import__(\'os\').system(\'x\'))"}'
+        assert parse_planned_step(raw) is None
+
+    def test_call_syntax_explicit_params_win_and_drop_tool_action_keys(self):
+        raw = '{"action": "open_app(name=\'msedge\', url=\'https://old.com\', tool=\'drop_me\')", "params": {"url": "https://music.youtube.com", "action": "drop_me_too"}}'
+        step = parse_planned_step(raw)
+        assert step is not None
+        assert step.action == "open_app"
+        assert step.params == {"name": "msedge", "url": "https://music.youtube.com"}
+        assert "tool" not in step.params
+        assert "action" not in step.params
+
 
 class TestNeedsGrounding:
     """The grounder should be invoked only when nothing else can resolve the target."""
