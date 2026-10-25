@@ -80,3 +80,41 @@ def test_password_value_never_appears_in_prompt_or_logs(caplog):
     assert raw_secret not in prompt
     assert raw_secret not in caplog.text
     assert "[password field, filled]" in prompt
+
+
+def test_words_containing_pin_substring_are_not_passwords():
+    for text in ["mapping", "shopping", "spinner", "Pinned tabs"]:
+        assert not is_password_element(name=text), f"{text} should not be a password element"
+        node = ElementNode(
+            id=1,
+            role="text",
+            name=text,
+            rect=(0, 0, 10, 10),
+            center=(5, 5),
+            value=text,
+        )
+        assert not node.is_password, f"ElementNode with name '{text}' should not have is_password=True"
+        assert node.value == text
+
+
+def test_whole_word_and_tokenized_password_hints():
+    # True positives: "PIN", "Enter PIN", "Password"
+    for text in ["PIN", "Enter PIN", "Password", "pin code"]:
+        assert is_password_element(name=text), f"'{text}' should be recognized as password"
+    # Automation IDs: pinInput, txtPassword
+    assert is_password_element(automation_id="pinInput"), "pinInput should be recognized as password"
+    assert is_password_element(automation_id="txtPassword"), "txtPassword should be recognized as password"
+
+
+def test_ocr_element_is_never_password_field():
+    ocr_node = ElementNode(
+        id=99,
+        role="text",
+        name="Password",
+        rect=(0, 0, 10, 10),
+        center=(5, 5),
+        value="Password",
+        source="ocr",
+    )
+    assert not ocr_node.is_password, "OCR element named Password must not be marked as a password field"
+    assert ocr_node.value == "Password"

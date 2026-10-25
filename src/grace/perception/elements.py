@@ -24,6 +24,7 @@ The fields that resolve that ambiguity are:
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -35,18 +36,50 @@ PASSWORD_HINTS = (
 )
 
 
+_CAMEL_RE_1 = re.compile(r"([a-z\d])([A-Z])")
+_CAMEL_RE_2 = re.compile(r"([A-Z]+)([A-Z][a-z\d])")
+_NON_WORD_RE = re.compile(r"[^a-zA-Z0-9]+")
+
+_PASSWORD_TOKENS = frozenset({"password", "passwd", "pwd", "pin", "passcode"})
+
+
+def _extract_tokens_and_norm(text: str) -> tuple[set[str], str]:
+    if not text:
+        return set(), ""
+    s = _CAMEL_RE_1.sub(r"\1 \2", text)
+    s = _CAMEL_RE_2.sub(r"\1 \2", s)
+    s = _NON_WORD_RE.sub(" ", s).lower()
+    return set(s.split()), s
+
+
+def _has_password_hint(text: str) -> bool:
+    if not text:
+        return False
+    tokens, norm_s = _extract_tokens_and_norm(text)
+    if tokens & _PASSWORD_TOKENS:
+        return True
+    if "pin code" in norm_s:
+        return True
+    return False
+
+
 def is_password_element(
     role: Optional[str] = "",
     name: Optional[str] = "",
     placeholder: Optional[str] = "",
     automation_id: Optional[str] = "",
+    source: Optional[str] = "",
 ) -> bool:
     """Return True if an element's role or attributes identify it as a password/PIN field."""
+    if source == "ocr" or (source and source.lower() == "ocr"):
+        return False
     role_str = (role or "").lower()
     if role_str == "password":
         return True
-    combined = f"{name or ''} {placeholder or ''} {automation_id or ''}".lower()
-    return any(hint in combined for hint in ("password", "passwd", "pwd", "pin"))
+    for field_val in (name, placeholder, automation_id):
+        if field_val and _has_password_hint(field_val):
+            return True
+    return False
 
 
 def redact_element_value_if_secret(
@@ -118,8 +151,11 @@ class ElementNode:
     is_password: bool = False
 
     def __post_init__(self):
+        if self.source == SOURCE_OCR or (self.source and self.source.lower() == "ocr"):
+            self.is_password = False
+            return
         if self.is_password or is_password_element(
-            self.role, self.name, self.placeholder, self.automation_id
+            self.role, self.name, self.placeholder, self.automation_id, self.source
         ):
             self.is_password = True
             if self.value and self.value != "[password field, empty]":
