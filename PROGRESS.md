@@ -1444,3 +1444,100 @@ Commit `b728f48` `feat(hardware): detect discrete NVIDIA dGPU as its own tier (r
 
 ---
 
+
+## Real-desktop retest 2
+
+Scope: address all items from `real-desktop-2.md` following user run of
+`grace.exe --text "open youtube music in my browser and play something" --no-tts`:
+3 Grace bugs preventing browser launch, plus resolution of all pre-existing suite failures to achieve **0 failed**.
+
+### Item 1 — Bare domains refused — DONE
+
+Commit `c8421f9` `fix(tools): accept bare domains as https links` — pushed to `origin/main`.
+
+- **Root cause:** Offline intent emitted `url: "music.youtube.com"` without an explicit scheme.
+  `tools/dispatcher.py` and `automation/computer_use.py` refused it with
+  `Refusing to open 'music.youtube.com': only http/https links are allowed.`, breaking both pre-exec and agent step 1.
+- **Fix:** If the URL has no scheme and matches host regex `^[a-z0-9-]+(\.[a-z0-9-]+)+(/\S*)?$`,
+  `https://` is prepended before running URL validation in both `src/grace/tools/dispatcher.py` and
+  `src/grace/automation/computer_use.py`. Non-http schemes (`file:`, `javascript:`, UNC paths, etc.) remain strictly refused.
+- **Tests:** `tests/test_dispatcher.py` and `tests/test_cua_bridge.py`: `music.youtube.com` opens `https://music.youtube.com`;
+  `youtube.com/watch?v=x` opens `https://youtube.com/watch?v=x`; `file:///C:/x`, `\\host\share`, `ms-settings:`,
+  and `javascript:alert(1)` remain refused.
+
+### Item 2 — Call-syntax action not parsed — DONE
+
+Commit `9ebd5cd` `fix(agent): parse call-syntax actions from the planner` — pushed to `origin/main`.
+
+- **Root cause:** Planner emitted `"action": "open_app(name='msedge', url='https://music.youtube.com')"` without `params`.
+  `parse_planned_step` preserved the entire string as the action name with `params={}`, causing `SafetyGuard` to treat
+  it as an unknown tool and park a confirmation.
+- **Fix:** In `src/grace/agent/planner.py` (`parse_planned_step`), if `action` matches `^\s*([a-z_][a-z0-9_]*)\s*\((.*)\)\s*$`,
+  split into action name and keyword arguments. Arguments are parsed securely via `ast.parse(mode="eval")` on a dummy call,
+  and each argument value is evaluated strictly via `ast.literal_eval`. Explicit `params` take precedence; positional arguments,
+  syntax errors, or non-literal expressions cause step parse failure (`None`).
+- **Tests:** `tests/test_planner.py`: call-syntax parsing for `open_app`, `cua_click(element_id=3)`, `press_key(key='enter')`,
+  rejection of code execution attempts (`open_app(name=__import__('os').system('x'))`), explicit params precedence,
+  and safety guard verification that parsed `open_app` passes without requiring parked confirmation.
+
+### Item 3 — OCR text flagged as a password field — DONE
+
+Commit `4d55625` `fix(perception): whole-word password hints; OCR text is never a password field` — pushed to `origin/main`.
+
+- **Root cause:** `is_password_element` in `src/grace/perception/elements.py` used naive substring matching for `"pin"`,
+  flagging OCR text like "coordinate mapping downscaled screenshots" (substring "pin" in "mapping") as a password field.
+- **Fix:** In `src/grace/perception/elements.py`, tokenized hint matching was introduced to check whole words and split
+  camelCase / hyphen / underscore automation IDs (`password`, `passwd`, `pwd`, `pin`, `passcode`, `pin code`).
+  Additionally, OCR-sourced elements (`source == "ocr"`) are recognized as text rather than interactive input controls and
+  are never marked as password fields.
+- **Tests:** `tests/test_password_fields.py`: verifies that "mapping", "shopping", "spinner", "Pinned tabs" are not password fields;
+  "PIN", "Enter PIN", `pinInput`, `txtPassword`, and "Password" are recognized; and OCR elements named "Password" are not flagged.
+  Existing secrets tests remain green.
+
+---
+
+### Resolution of Pre-existing Test Failures (Target: 0 Failed)
+
+The failures cited in previous logs plus escalation regressions were diagnosed and resolved:
+
+1. **`tests/contract/test_event_contract_live.py::test_every_emitted_event_is_in_the_schema`**
+   - *Error:* Emitted event `PillUpdate` failed schema validation against `contract/grace-events.schema.json`.
+   - *Fix:* In `src/grace/agent/loop.py` (`_handle_secure_desktop`), replaced out-of-schema `PillUpdate` event with valid
+     contract events `ToolExecutionStarted` (with `label=SAFE_HANDOFF_PILL_TEXT`) and `ToolExecutionFinished`.
+2. **`tests/unit/test_tool_wiring.py::TestToolDefinitionsAndHandlersMatch::test_no_phantom_handlers`**
+   - *Error:* Dispatcher registered `_forget_secret` handler, but `forget_secret` was missing from `SYSTEM_TOOLS`/`ALL_TOOLS`.
+   - *Fix:* Added `ToolDefinition(name="forget_secret", ...)` to `SYSTEM_TOOLS` in `src/grace/intent/tools.py`.
+3. **`tests/unit/test_tool_wiring.py::TestToolRoutingIsExhaustive::test_a_tool_cannot_quietly_become_unrouted`**
+   - *Error:* `type_saved_secret` was not classified in `AGENTIC_TOOLS`, `FAST_PATH_TOOLS`, or `CONVERSATIONAL_TOOLS`.
+   - *Fix:* In `src/grace/intent/router.py`, added `type_saved_secret` to `AGENTIC_TOOLS` and `forget_secret` to `FAST_PATH_TOOLS`.
+4. **`tests/unit/test_harness_generate.py::TestHarnessReplacesEverySideEffectingTool::test_every_side_effecting_tool_leaf_is_replaced`**
+   - *Error:* `_type_saved_secret` and `_forget_secret` were missing from `SIDE_EFFECTING_HANDLERS`.
+   - *Fix:* Added both handlers to `SIDE_EFFECTING_HANDLERS` in `src/grace/harness/generate.py`.
+5. **`tests/unit/test_harness_recorder.py::TestHarnessRecorderRedaction::test_recorder_redacts_password_fields`**
+   - *Error:* Tape dispatch emitted `[password field, filled]` instead of `<redacted>`.
+   - *Fix:* In `src/grace/harness/redact.py` (`_redact_element_text`), ensured redaction checks `is_element_node` so `type_text`
+     parameters correctly retain `<redacted>`.
+6. **`tests/integration/test_config_wiring.py::TestAgentLoopReadsTheConfig::test_the_stronger_planner_model_reaches_the_loop` & `tests/test_agent_loop.py::TestEscalationLadder::test_the_third_attempt_asks_a_stronger_model`**
+   - *Error:* Tension between offline honest escalation reporting and explicit config/environment wiring.
+   - *Fix:* In `src/grace/agent/loop.py`, if `STRONGER_PLANNER_MODEL` or `config.stronger_planner_model` is explicitly configured,
+     it is respected as `_stronger_model`. Otherwise, when `use_cloud_llm` is enabled it defaults to `gemini-3.1-flash`;
+     when offline with no explicit setting, `_stronger_model = None` and label is `"the same model (strategy-change note)"`.
+     `_replan_stronger` calls `planner.plan(..., model=self._stronger_model)`.
+7. **`tests/test_opportunistic_training.py::test_mid_chunk_immediate_pause`**
+   - *Error:* Rapid back-to-back checkpoint generation on Windows resulted in identical filesystem `st_mtime` timestamps,
+     causing `find_latest_checkpoint()` in `training/common.py` to pick step 5 instead of step 6.
+   - *Fix:* In `training/common.py`, implemented `_sort_key` ordering by `(step_num, mtime_ns)`, ensuring unambiguous
+     latest-checkpoint selection.
+
+- **Commits:**
+  - `ec77d52` `fix(tests): resolve contract, wiring, harness, and escalation test regressions` — pushed to `origin/main`.
+  - `d7ca6f4` `fix(agent,training): escalate model cleanly offline/online; sort checkpoints by step` — pushed to `origin/main`.
+
+---
+
+### Final Suite Counts
+
+- **Python (serial, `pytest -q -p no:cacheprovider`):**
+  `1310 passed, 1 skipped, 2 warnings in 304.25s (0:05:04)` — **0 failed**.
+- **Rust (`cargo test --workspace`):**
+  `test result: ok. 21 passed`, `10 passed`, `2 passed`, `2 passed`, `2 passed`, `175 passed`, `2 passed`, `27 passed` — **all workspace crates passed, 0 failed**.
