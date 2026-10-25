@@ -15,7 +15,7 @@ import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from grace.agent.element_scorer import ElementScorer, ScoredSelection
 from grace.fleet import FleetConfig, get_fleet_config

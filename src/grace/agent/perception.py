@@ -7,6 +7,7 @@ and Win32 UI control hierarchy context to feed Gemma's reasoning loop.
 import asyncio
 import hashlib
 import io
+import os
 import logging
 import threading
 from dataclasses import dataclass
@@ -489,7 +490,9 @@ class PerceptionEngine:
                 graph = self.get_graph_builder().build()
                 graph_stage.detail(f"{len(graph)} elements via {'+'.join(graph.sources) or 'none'}")
         except Exception as e:
-            logger.debug(f"Element graph build skipped: {e}")
+            logger.warning(f"Element graph build failed [{type(e).__name__}]: {e}")
+            if isinstance(e, (NameError, ImportError, AttributeError)) and os.environ.get("PYTEST_CURRENT_TEST"):
+                raise
 
         # OCR is only needed where the accessibility tree comes up empty, e.g.
         # canvas-rendered or remote-desktop UIs. Skipping it when the graph is
@@ -534,7 +537,9 @@ class PerceptionEngine:
                     ui_elements = self.get_shared_inspector().inspect_active_window()
                     uia_stage.detail(f"{len(ui_elements)} elements")
             except Exception as e:
-                logger.debug(f"UIInspector query in perception engine skipped: {e}")
+                logger.warning(f"UIInspector query in perception engine failed [{type(e).__name__}]: {e}")
+                if isinstance(e, (NameError, ImportError, AttributeError)) and os.environ.get("PYTEST_CURRENT_TEST"):
+                    raise
 
         # Fix Bug #2: capture the active per-monitor DPI scale so the agent
         # prompt exposes the logical->physical coordinate mapping.

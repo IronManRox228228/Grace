@@ -10,7 +10,7 @@ from __future__ import annotations
 import getpass
 import os
 import re
-from typing import Any
+from typing import Any, Optional
 
 # Secret patterns (API keys, tokens, credentials, payment cards)
 _SECRET_PATTERNS = [

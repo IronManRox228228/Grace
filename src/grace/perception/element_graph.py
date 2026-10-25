@@ -12,6 +12,7 @@ window, and the same ids are used all the way through to the click.
 """
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -193,7 +194,9 @@ class ElementGraphBuilder:
                 start_id=len(elements) + 1,
             )
         except Exception as e:
-            logger.debug(f"UIA snapshot failed: {e}")
+            logger.warning(f"UIA snapshot failed [{type(e).__name__}]: {e}")
+            if isinstance(e, (NameError, ImportError, AttributeError)) and os.environ.get("PYTEST_CURRENT_TEST"):
+                raise
             uia_elements = []
 
         if uia_elements:
@@ -240,7 +243,9 @@ class ElementGraphBuilder:
 
             return DomProvider(self._cdp_port).snapshot(window)
         except Exception as e:
-            logger.debug(f"DOM provider unavailable ({e}); using UIA only")
+            logger.warning(f"DOM provider unavailable [{type(e).__name__}]: {e}; using UIA only")
+            if isinstance(e, (NameError, ImportError, AttributeError)) and os.environ.get("PYTEST_CURRENT_TEST"):
+                raise
             return []
 
 
