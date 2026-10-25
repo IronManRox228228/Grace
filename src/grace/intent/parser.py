@@ -114,10 +114,16 @@ class IntentParser:
                 f"Unknown tool '{tool}'. Valid tools: {sorted(VALID_TOOLS)}"
             )
 
-        # Extract params
-        params = data.get("params", {})
-        if not isinstance(params, dict):
-            raise IntentParseError(f"'params' must be a dict, got {type(params).__name__}")
+        # Extract params (accepting flat parameters as well as nested params)
+        raw_params = data.get("params")
+        if raw_params is not None and not isinstance(raw_params, dict):
+            raise IntentParseError(f"'params' must be a dict, got {type(raw_params).__name__}")
+        params = dict(raw_params) if isinstance(raw_params, dict) else {}
+
+        # Merge flat parameters without ever letting a flat key override 'tool'
+        for k, v in data.items():
+            if k not in ("tool", "params", "response") and k not in params:
+                params[k] = v
 
         # Extract optional response (can be top-level or in params)
         response = data.get("response") or params.get("response")

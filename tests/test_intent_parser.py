@@ -110,3 +110,25 @@ class TestIntentParser:
 
         sys_intent = Intent(tool="open_app", params={})
         assert sys_intent.needs_cua is False
+
+    def test_parse_flat_params_open_app(self):
+        """Holo emitted flat params `{"tool": "open_app", "name": "Edge"}`."""
+        json_str = '{"tool": "open_app", "name": "Edge"}'
+        intent = self.parser.parse(json_str)
+        assert intent.tool == "open_app"
+        assert intent.params["name"] == "Edge"
+
+    def test_parse_flat_and_nested_params_merged(self):
+        """Flat parameters merge with nested params without overwriting existing nested keys."""
+        json_str = '{"tool": "open_app", "params": {"url": "https://example.com"}, "name": "Edge"}'
+        intent = self.parser.parse(json_str)
+        assert intent.tool == "open_app"
+        assert intent.params["name"] == "Edge"
+        assert intent.params["url"] == "https://example.com"
+
+    def test_flat_param_cannot_override_tool(self):
+        """A flat parameter cannot override the tool field."""
+        json_str = '{"tool": "open_app", "name": "Edge"}'
+        intent = self.parser.parse(json_str)
+        assert intent.tool == "open_app"
+        assert "tool" not in intent.params
