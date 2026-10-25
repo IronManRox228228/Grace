@@ -1165,7 +1165,7 @@ class AgentLoop:
 
         if reason:
             lines.append(f"Tool error: {reason}")
-            lines.append("Do not repeat this action unchanged. Try a different element or a different approach.")
+
         else:
             tool_output = ""
             if isinstance(last_result.get("text"), str) and last_result["text"].strip():
@@ -1200,13 +1200,8 @@ class AgentLoop:
         evidence = inner.get("evidence") or ""
         if verified is True:
             lines.append(f"What changed: {evidence}")
-        elif verified is False and not reason:
-            lines.append(f"Screen unchanged: {evidence}")
-            lines.append("The input was sent but changed nothing. Try a different target.")
         elif verified is None and inner.get("sent"):
             lines.append(f"Observation: {evidence}")
-            lines.append("Do not treat that as failure. Look at the screen description "
-                         "below and judge for yourself.")
 
         if screen_still_loading:
             lines.append("Note: screen may still be loading.")
@@ -1224,13 +1219,8 @@ class AgentLoop:
             "cua_list_windows", "cua_get_window", "cua_get_cursor_position",
         }
         if repeat_count >= 1 and not reason and (last_step.action not in non_screen_actions):
-            ordinal = {1: "once", 2: "twice", 3: "three times"}.get(
-                repeat_count, f"{repeat_count} times"
-            )
             lines.append(
-                f"The screen has not changed after this action "
-                f"was tried {ordinal} in a row. "
-                f"You must choose a different action or declare the goal complete."
+                f"You have now done this exact action {repeat_count} times on this same screen."
             )
 
         title = _window_title(snapshot)
@@ -1247,7 +1237,9 @@ class AgentLoop:
         elif last_step.action == "cua_click":
             lines.append("Nothing currently has keyboard focus.")
 
-        lines.append("Judge from the screen description above whether your expectation actually came true.")
+        is_single = bool(getattr(self._fleet_config, "is_single", False))
+        target = "screenshot" if is_single else "screen description"
+        lines.append(f"Compare the {target} with what you expected.")
         return "\n".join(lines)
 
     @staticmethod

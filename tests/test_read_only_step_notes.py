@@ -37,12 +37,14 @@ def test_read_only_tool_never_gets_no_visible_effect(tool):
     step = PlannedStep(action=tool)
     note = _loop()._expectation_note(step, {"status": "ok"}, _snap(), repeat_count=1)
     assert "The screen has not changed" not in note and "NO VISIBLE EFFECT" not in note
+    assert "You have now done this exact action" not in note
 
 
 def test_click_still_gets_no_visible_effect():
     step = PlannedStep(action="cua_click")
     note = _loop()._expectation_note(step, {"status": "ok"}, _snap(), repeat_count=1)
-    assert "The screen has not changed" in note and "NO VISIBLE EFFECT" not in note
+    assert "The screen has not changed" not in note and "NO VISIBLE EFFECT" not in note
+    assert "You have now done this exact action 1 times on this same screen." in note
 
 
 def test_describe_screen_text_is_not_cut_at_600():

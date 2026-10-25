@@ -45,7 +45,8 @@ def test_effect_text_never_contains_verdict_words():
     # 3. Repeated / screen unchanged
     note_repeated = loop._expectation_note(step, res_confirmed, snap, repeat_count=2)
     assert "NO VISIBLE EFFECT" not in note_repeated
-    assert "The screen has not changed" in note_repeated
+    assert "The screen has not changed" not in note_repeated
+    assert "You have now done this exact action 2 times on this same screen." in note_repeated
 
 
 def test_ruled_out_approaches_has_no_private_keys_and_no_duplicates():

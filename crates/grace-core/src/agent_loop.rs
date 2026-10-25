@@ -573,7 +573,7 @@ fn expectation_note(last_step: Option<&PlannedStep>, last_result: Option<&Value>
 
     if let Some(reason) = &reason {
         lines.push(format!("IT FAILED: {reason}"));
-        lines.push("Do not repeat this action unchanged. Try a different element or a different approach.".to_string());
+
     } else {
         let status = last_result.get("status").and_then(Value::as_str).unwrap_or("ok");
         let message = inner.and_then(|i| i.get("message")).and_then(Value::as_str).unwrap_or(status);
@@ -585,13 +585,8 @@ fn expectation_note(last_step: Option<&PlannedStep>, last_result: Option<&Value>
     let sent = inner.and_then(|i| i.get("sent")).and_then(Value::as_bool).unwrap_or(false);
     match verified {
         Some(true) => lines.push(format!("EFFECT CONFIRMED: {evidence}")),
-        Some(false) if reason.is_none() => {
-            lines.push(format!("NO EFFECT: {evidence}"));
-            lines.push("The input was sent but changed nothing. Try a different target.".to_string());
-        }
         None if sent => {
             lines.push(format!("EFFECT UNKNOWN: {evidence}"));
-            lines.push("Do not treat that as failure. Look at the screen description below and judge for yourself.".to_string());
         }
         _ => {}
     }
@@ -612,7 +607,7 @@ fn expectation_note(last_step: Option<&PlannedStep>, last_result: Option<&Value>
         lines.push("Nothing currently has keyboard focus.".to_string());
     }
 
-    lines.push("Judge from the screen description above whether your expectation actually came true.".to_string());
+    lines.push("Compare the screenshot with what you expected.".to_string());
     lines.join("\n")
 }
 

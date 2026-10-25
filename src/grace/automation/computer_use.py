@@ -135,7 +135,7 @@ def _change_verdict(
     if after["window"] != before["window"]:
         changes.append(f"Window changed to '{after['window']}'")
     else:
-        unchanged.append("Page URL/title unchanged")
+        unchanged.append("Window title unchanged")
 
     # Focus
     if after["focus_id"] != before["focus_id"]:

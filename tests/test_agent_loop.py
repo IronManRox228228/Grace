@@ -298,7 +298,7 @@ class TestExpectationFeedback:
         note = loop._expectation_note(step, result, snapshot())
         assert "Tool error" in note
         assert "Address bar" in note
-        assert "Do not repeat this action unchanged" in note
+        assert "Do not repeat this action unchanged" not in note
 
     def test_success_reports_the_new_state(self):
         loop, _, _ = make_loop([])
@@ -361,7 +361,7 @@ class TestActionVerdict:
     def test_no_effect_is_reported_as_no_effect(self):
         note = self.note_for({"ok": True, "sent": True, "verified": False,
                               "evidence": "nothing changed after settling"})
-        assert "Screen unchanged" in note
+        assert "Screen unchanged" not in note
         assert "Tool error" not in note, (
             "the input was dispatched; calling that a failed action tells the "
             "planner to stop using a tool that works"
@@ -374,7 +374,7 @@ class TestActionVerdict:
         note = self.note_for({"ok": True, "sent": True, "verified": None,
                               "evidence": "this window does not report its contents"})
         assert "Observation" in note
-        assert "Do not treat that as failure" in note
+        assert "Do not treat that as failure" not in note
         assert "Screen unchanged" not in note and "Tool error" not in note
 
     def test_a_refused_action_is_still_a_failure(self):
@@ -883,20 +883,22 @@ class TestNoEffectRepeatNote:
         loop, _, _ = make_loop([])
         note = self._note_for_repeat(loop, repeat_count=0)
         assert "The screen has not changed" not in note and "NO VISIBLE EFFECT" not in note
+        assert "You have now done this exact action" not in note
 
     def test_second_time_note_says_no_visible_effect(self):
         # repeat_count=1 means the screen was identical after the first try.
         loop, _, _ = make_loop([])
         note = self._note_for_repeat(loop, repeat_count=1)
-        assert "The screen has not changed" in note and "NO VISIBLE EFFECT" not in note
-        assert "different action" in note
+        assert "The screen has not changed" not in note and "NO VISIBLE EFFECT" not in note
+        assert "You have now done this exact action 1 times on this same screen." in note
+
 
     def test_ordinal_wording_counts_the_attempts(self):
         loop, _, _ = make_loop([])
         note_once = self._note_for_repeat(loop, repeat_count=1)
         note_twice = self._note_for_repeat(loop, repeat_count=2)
-        assert "once" in note_once
-        assert "twice" in note_twice
+        assert "1 times on this same screen" in note_once
+        assert "2 times on this same screen" in note_twice
 
     def test_failure_suppresses_the_repeat_note(self):
         # When the tool itself reported an error the existing IT FAILED message
@@ -911,6 +913,7 @@ class TestNoEffectRepeatNote:
         )
         assert "Tool error" in note
         assert "The screen has not changed" not in note and "NO VISIBLE EFFECT" not in note
+        assert "You have now done this exact action" not in note
 
     def test_repeat_note_reaches_planner_prompt_on_frozen_screen(self):
         """The note must arrive in the second plan call when the screen is frozen."""
@@ -924,8 +927,9 @@ class TestNoEffectRepeatNote:
         # Two planning calls were made; the second must carry the no-effect note.
         assert gemma.generate_text.call_count == 2
         second_prompt = gemma.generate_text.call_args_list[1].kwargs["prompt"]
-        assert "The screen has not changed" in second_prompt and "NO VISIBLE EFFECT" not in second_prompt
-        assert "different action" in second_prompt
+        assert "The screen has not changed" not in second_prompt and "NO VISIBLE EFFECT" not in second_prompt
+        assert "You have now done this exact action 1 times on this same screen." in second_prompt
+
 
     def test_three_identical_repeats_end_with_spoken_message(self):
         """After max_repeated_actions the loop stops and speaks an honest reason."""
@@ -994,6 +998,7 @@ class TestToolResultFeedback:
         assert "report.pdf" in last_step_section
         # Non-screen tool with successful result must not falsely claim NO VISIBLE EFFECT
         assert "The screen has not changed" not in last_step_section and "NO VISIBLE EFFECT" not in last_step_section
+        assert "You have now done this exact action" not in last_step_section
 
     def test_tool_result_is_capped_in_size_and_defanged(self):
         safe_path = os.path.join(os.path.expanduser("~"), "Documents", "huge.pdf").replace("\\", "/")
