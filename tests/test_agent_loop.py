@@ -120,6 +120,20 @@ class TestPlannerFailureCircuitBreaker:
         assert res["status"] == "planner_failed"
         assert len(res["steps"]) == loop._max_consecutive_failures
 
+    def test_unparseable_plans_say_so_not_connection(self):
+        # The model answered every time, but never with a usable plan.
+        loop, _, _ = make_loop(['{"thought": "hm"}'] * 200)
+        res = asyncio.run(loop.run(user_goal="open my browser"))
+
+        assert res["status"] == "planner_failed"
+        assert res["final_response"] == "I couldn't make sense of my own plan for that, so I've stopped."
+
+    def test_no_response_keeps_connection_wording(self):
+        loop, _, _ = make_loop([None] * 200)
+        res = asyncio.run(loop.run(user_goal="open my browser"))
+
+        assert "can't reach my language model" in res["final_response"]
+
     def test_it_says_the_fault_is_graces_not_the_users(self):
         loop, _, _ = make_loop([None] * 200)
         res = asyncio.run(loop.run(user_goal="open my browser"))

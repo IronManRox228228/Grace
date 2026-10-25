@@ -627,7 +627,9 @@ class AgentLoop:
                         f"AgentLoop: giving up after {consecutive_failures} consecutive "
                         f"plans that could not be used."
                     )
-                    return self._plan_failure_result(memory)
+                    return self._plan_failure_result(
+                        memory, unparseable=getattr(self._planner, "last_failure", "") == "unparseable"
+                    )
                 continue
 
             # Holo invents tool names ("cua_describe_screen"). Resolve against
@@ -665,7 +667,7 @@ class AgentLoop:
                             f"AgentLoop: giving up after {consecutive_failures} consecutive "
                             f"plans that could not be used."
                         )
-                        return self._plan_failure_result(memory)
+                        return self._plan_failure_result(memory, unparseable=True)
                     continue
 
             consecutive_failures = 0
@@ -1409,18 +1411,23 @@ class AgentLoop:
             "steps": [s.to_dict() for s in memory.steps_taken],
         }
 
-    def _plan_failure_result(self, memory: AgentMemory) -> dict[str, Any]:
+    def _plan_failure_result(self, memory: AgentMemory, unparseable: bool = False) -> dict[str, Any]:
         """Stop and say so, rather than retrying a planner that is not answering.
 
         Deliberately says the trouble is on Grace's side: the usual cause is the
         LLM being unreachable or refusing the API key, and "I couldn't
         understand you" would send the user off rewording a request that was
-        never the problem.
+        never the problem. When the model did answer but the answers were not
+        usable plans, the connection is fine and the message says so instead.
         """
-        response = memory.final_response or (
-            "I'm having trouble planning that right now - I can't reach my "
-            "language model. Please check the connection and try again."
-        )
+        if unparseable:
+            default = "I couldn't make sense of my own plan for that, so I've stopped."
+        else:
+            default = (
+                "I'm having trouble planning that right now - I can't reach my "
+                "language model. Please check the connection and try again."
+            )
+        response = memory.final_response or default
         return {
             "status": "planner_failed",
             "final_response": response,
