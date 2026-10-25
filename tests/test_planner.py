@@ -139,8 +139,27 @@ class TestNeedsGrounding:
     """The grounder should be invoked only when nothing else can resolve the target."""
 
     def test_element_id_needs_no_grounding(self):
-        step = PlannedStep(action="cua_click", params={"element_id": 4, "target_name": "Search"})
+        step = PlannedStep(
+            action="cua_click",
+            params={"element_id": 4, "target_name": "Search"},
+            rendered_element_ids={4},
+        )
         assert step.needs_grounding is False
+
+    def test_unshown_element_id_needs_grounding(self):
+        step = PlannedStep(
+            action="cua_click",
+            params={"element_id": 36, "target_name": "Play Signal - Home link"},
+            rendered_element_ids=set(),
+        )
+        assert step.needs_grounding is True
+
+    def test_unknown_rendered_element_ids_treats_element_id_as_absent(self):
+        step = PlannedStep(
+            action="cua_click",
+            params={"element_id": 36, "target_name": "Play Signal - Home link"},
+        )
+        assert step.needs_grounding is True
 
     def test_coordinates_need_no_grounding(self):
         step = PlannedStep(action="cua_click", params={"x": 100, "y": 200, "target_name": "Search"})

@@ -115,8 +115,21 @@ class PlannedStep:
         """
         if self.action not in ("cua_click", "cua_secondary_action", "cua_set_value"):
             return False
-        if self.params.get("element_id") is not None:
-            return False
+
+        # In needs_grounding, an element_id counts only if rendered_element_ids is known
+        # and contains it. Otherwise treat it as absent.
+        raw_id = self.params.get("element_id")
+        if raw_id is None:
+            raw_id = self.params.get("element_index")
+        if raw_id is not None:
+            if self.rendered_element_ids is not None:
+                try:
+                    eid = int(raw_id)
+                    if eid in self.rendered_element_ids:
+                        return False
+                except (ValueError, TypeError):
+                    pass
+
         if self.params.get("x") is not None and self.params.get("y") is not None:
             return False
         return bool(self.params.get("target_name") or self.params.get("describe"))
@@ -373,7 +386,7 @@ class Planner:
         if raw_id is not None:
             try:
                 eid = int(raw_id)
-                if hide_tree or (rendered_element_ids and eid not in rendered_element_ids):
+                if hide_tree or (eid not in rendered_element_ids):
                     target_name = step.params.get("target_name") or step.params.get("name")
                     logger.info(
                         f"Dropping unshown element_id {eid} (rendered in prompt: {rendered_element_ids}); "
@@ -387,7 +400,7 @@ class Planner:
         if raw_idx is not None:
             try:
                 eidx = int(raw_idx)
-                if hide_tree or (rendered_element_ids and eidx not in rendered_element_ids):
+                if hide_tree or (eidx not in rendered_element_ids):
                     target_name = step.params.get("target_name") or step.params.get("name")
                     logger.info(
                         f"Dropping unshown element_index {eidx} (rendered in prompt: {rendered_element_ids}); "

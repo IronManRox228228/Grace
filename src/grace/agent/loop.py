@@ -706,13 +706,16 @@ class AgentLoop:
                 pass
 
             grounded_point = None
+            was_grounded = False
             if step.needs_grounding or rung == "reground":
+                was_grounded = True
                 async with stage(f"ground#{step_no}"):
                     await self._ground(step, snapshot, force=(rung == "reground"))
                     if step.params.get("x") is not None and step.params.get("y") is not None:
                         grounded_point = (step.params["x"], step.params["y"])
             elif step.params.get("x") is not None and step.params.get("y") is not None:
                 grounded_point = (step.params["x"], step.params["y"])
+                was_grounded = True
 
             # Pin element IDs to the snapshot the planner saw for CUA actions
             if step.action.startswith("cua_"):
@@ -758,6 +761,46 @@ class AgentLoop:
             # Executed before the completion check so a final step that also
             # performs an action is never skipped.
             exec_result = await self._dispatch(step, memory)
+
+            # When executor returns "not found" for a named target, and this step
+            # wasn't already grounded, ground it once and retry the click in the same step.
+            inner_pre = exec_result.get("result") if isinstance(exec_result.get("result"), dict) else {}
+            status_val = str(inner_pre.get("status") or exec_result.get("status") or "")
+            err_val = str(exec_result.get("error") or inner_pre.get("error") or "")
+            is_not_found = (
+                status_val == "element_not_found"
+                or "not found" in status_val.lower()
+                or "not found" in err_val.lower()
+            )
+            has_named_target = bool(
+                step.params.get("target_name")
+                or step.params.get("name")
+                or step.params.get("label")
+                or step.params.get("describe")
+            )
+            if (
+                is_not_found
+                and has_named_target
+                and not was_grounded
+                and step.action in ("cua_click", "cua_secondary_action", "cua_set_value")
+            ):
+                target_name = (
+                    step.params.get("target_name")
+                    or step.params.get("name")
+                    or step.params.get("label")
+                    or step.params.get("describe")
+                )
+                logger.info(
+                    f"AgentLoop: target '{target_name}' not found by executor; "
+                    f"grounding once and retrying {step.action}"
+                )
+                was_grounded = True
+                async with stage(f"ground_retry#{step_no}"):
+                    await self._ground(step, snapshot, force=True)
+                    if step.params.get("x") is not None and step.params.get("y") is not None:
+                        grounded_point = (step.params["x"], step.params["y"])
+                exec_result = await self._dispatch(step, memory)
+
             step_end_time = time.monotonic()
             if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
                 self._run_capture.record_step(
