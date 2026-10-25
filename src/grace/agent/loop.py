@@ -1093,7 +1093,11 @@ class AgentLoop:
                     .replace("<<<UNTRUSTED_DATA_END>>>", "")
                     .strip()
                 )
-                capped = clean[:600] + ("..." if len(clean) > 600 else "")
+                # describe_screen already caps itself at 1200 characters and is
+                # the blind planner's only view of the page; clipping it to 600
+                # drops the results the next step needs.
+                cap = 1300 if last_step.action == "describe_screen" else 600
+                capped = clean[:cap] + ("..." if len(clean) > cap else "")
                 lines.append(f"The tool reported:\n{wrap_untrusted(capped)}")
             else:
                 lines.append(f"The tool reported: {inner.get('message') or status}")
@@ -1125,6 +1129,9 @@ class AgentLoop:
         # will reason from a stale observation and propose the same action again.
         non_screen_actions = {
             "search_files", "read_pdf", "summarize_pdf", "adjust_volume", "remember",
+            # Looking changes nothing by design; "no visible effect" is noise.
+            "describe_screen", "cua_screenshot", "cua_text", "cua_list_apps",
+            "cua_list_windows", "cua_get_window", "cua_get_cursor_position",
         }
         if repeat_count >= 1 and not reason and (last_step.action not in non_screen_actions):
             ordinal = {1: "once", 2: "twice", 3: "three times"}.get(
