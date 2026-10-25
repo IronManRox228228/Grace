@@ -21,6 +21,7 @@ from grace.agent.grounder import Grounder, describe_target, scale_to_screen
 from grace.agent.memory import AgentMemory
 from grace.agent.perception import PerceptionEngine, observe_for_planner, extract_browser_url
 from grace.agent.planner import Planner, PlannedStep, PlannerBudgetExceeded, parse_planned_step
+from grace.agent.context_covers import evaluate_context
 from grace.agent.safety import SafetyGuard
 from grace.automation.computer_use import normalize_title
 from grace.intent.parser import Intent
@@ -716,6 +717,46 @@ class AgentLoop:
             logger.info(f"AgentLoop step {step_no}: [{step.action}] {step.thought}")
 
             is_safe, confirm_prompt = SafetyGuard.evaluate(step.action, step.params)
+            # Covers that need the screen: sign-in pages, terminals, and
+            # contact details nobody supplied. Harm only; see context_covers.
+            cover_block = None
+            if is_safe and step.action.startswith("cua_"):
+                try:
+                    cover = evaluate_context(
+                        step.action, step.params, snapshot,
+                        goal=memory.user_goal, url=current_url,
+                        facts_text=facts_ctx if isinstance(facts_ctx, str) else "",
+                    )
+                except Exception as e:
+                    logger.debug(f"Context cover check failed, skipping it: {e}")
+                    cover = None
+                if cover is not None and cover.kind == "confirm":
+                    is_safe, confirm_prompt = False, cover.message
+                elif cover is not None:
+                    cover_block = cover
+            if cover_block is not None:
+                fact = cover_block.message
+                logger.warning(f"AgentLoop: harm cover stopped '{step.action}': {fact}")
+                blocked = {
+                    "status": "error",
+                    "error": fact,
+                    "text": f"Action error: {fact}",
+                    "result": {
+                        "ok": False,
+                        "sent": False,
+                        "verified": False,
+                        "status": "needs_user_input" if cover_block.kind == "ask_user" else "refused",
+                        "action": step.action,
+                        "error": fact,
+                    },
+                }
+                if cover_block.kind == "ask_user":
+                    memory.add_step(step.thought, step.action, step.params, blocked, step.user_update)
+                    return {
+                        "status": "needs_user_input",
+                        "final_response": fact,
+                        "steps": [s.to_dict() for s in memory.steps_taken],
+                    }
             if not is_safe:
                 logger.warning(f"AgentLoop: safety confirmation required for '{step.action}'")
                 memory.safety_pending = {
@@ -921,7 +962,9 @@ class AgentLoop:
 
             # Executed before the completion check so a final step that also
             # performs an action is never skipped.
-            if unshown_error_result is not None:
+            if cover_block is not None:
+                exec_result = blocked
+            elif unshown_error_result is not None:
                 exec_result = unshown_error_result
             else:
                 exec_result = await self._dispatch(step, memory)
