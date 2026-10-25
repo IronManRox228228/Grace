@@ -560,8 +560,15 @@ class AgentLoop:
                 if last_step is not None
                 else 0
             )
+            last_tool_error_count = (
+                sum(1 for s in failed_history if _are_actions_equivalent(s, last_step))
+                if last_step is not None and _failure_reason(last_result)
+                else 0
+            )
             expectation_note = self._expectation_note(
-                last_step, last_result, snapshot, repeat_count=last_repeat_count,
+                last_step, last_result, snapshot,
+                repeat_count=last_repeat_count,
+                tool_error_count=last_tool_error_count,
                 screen_still_loading=screen_still_loading,
             )
 
@@ -974,23 +981,10 @@ class AgentLoop:
 
             action_failed = (
                 exec_result.get("status") == "error"
-                or inner.get("verified") is False
                 or inner.get("ok") is False
             )
             if action_failed:
-                fail_count = sum(1 for s in failed_history if _are_actions_equivalent(s, step)) + 1
                 failed_history.append(step)
-                if fail_count >= 2:
-                    action_name = step.action.replace("cua_", "")
-                    question = f"I'm having trouble with {action_name}. Would you like me to try a different approach, or do something else?"
-                    memory.final_response = question
-                    memory.add_step(step.thought, step.action, step.params, exec_result, step.user_update)
-                    return {
-                        "status": "needs_user_input",
-                        "final_response": question,
-                        "question": question,
-                        "steps": [s.to_dict() for s in memory.steps_taken],
-                    }
 
             if self._cancel_requested or AgentLoop._cancel_flag or inner.get("typing_cut_off"):
                 logger.info("AgentLoop: cancelled by voice stop request.")
@@ -1138,6 +1132,7 @@ class AgentLoop:
         snapshot,
         *,
         repeat_count: int = 0,
+        tool_error_count: int = 0,
         screen_still_loading: bool = False,
     ) -> str:
         """Report the previous step's stated expectation against what happened.
@@ -1165,7 +1160,8 @@ class AgentLoop:
 
         if reason:
             lines.append(f"Tool error: {reason}")
-
+            if tool_error_count >= 2:
+                lines.append(f"This exact action has returned an error {tool_error_count} times.")
         else:
             tool_output = ""
             if isinstance(last_result.get("text"), str) and last_result["text"].strip():

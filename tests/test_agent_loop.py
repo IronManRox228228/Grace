@@ -386,6 +386,48 @@ class TestActionVerdict:
             "an action that never left the building has no effect to report on"
         )
 
+    def test_two_tool_errors_do_not_return_needs_user_input(self):
+        """Two tool errors on the same action continue the run; next prompt notes the count."""
+        click = '{"action": "cua_click", "params": {"element_id": 1}, "expect": "open"}'
+        loop, gemma, dispatcher = make_loop([click, click, DONE])
+        dispatcher.execute.return_value = {"status": "error", "error": "element detached"}
+        res = asyncio.run(loop.run(user_goal="click twice"))
+        assert res["status"] != "needs_user_input"
+        assert res["status"] == "ok"
+        assert gemma.generate_text.call_count == 3
+        third_prompt = gemma.generate_text.call_args_list[2].kwargs["prompt"]
+        assert "Tool error: element detached" in third_prompt
+        assert "This exact action has returned an error 2 times." in third_prompt
+
+    def test_verified_false_alone_never_counts_as_a_failure(self):
+        """verified False alone does not trigger tool error count or failure note."""
+        click = '{"action": "cua_click", "params": {"element_id": 1}, "expect": "open"}'
+        loop, gemma, dispatcher = make_loop([click, click, DONE])
+        dispatcher.execute.return_value = {
+            "status": "ok",
+            "result": {"ok": True, "sent": True, "verified": False, "evidence": "settling timeout"},
+        }
+        res = asyncio.run(loop.run(user_goal="click twice"))
+        assert res["status"] == "ok"
+        third_prompt = gemma.generate_text.call_args_list[2].kwargs["prompt"]
+        assert "returned an error" not in third_prompt
+        assert "Screen unchanged" not in third_prompt
+        assert "Try a different target" not in third_prompt
+
+    def test_scroll_result_never_produces_screen_unchanged_or_try_different_target(self):
+        """Scroll result with verified False produces neither 'Screen unchanged' nor 'Try a different target'."""
+        scroll = '{"action": "cua_scroll", "params": {"scrollY": 500}, "expect": "more content"}'
+        loop, gemma, dispatcher = make_loop([scroll, DONE])
+        dispatcher.execute.return_value = {
+            "status": "ok",
+            "result": {"ok": True, "sent": True, "verified": False, "evidence": "element count 122"},
+        }
+        res = asyncio.run(loop.run(user_goal="scroll down"))
+        assert res["status"] == "ok"
+        second_prompt = gemma.generate_text.call_args_list[1].kwargs["prompt"]
+        assert "Screen unchanged" not in second_prompt
+        assert "Try a different target" not in second_prompt
+
 
 class TestEscalationLadder:
     """A repeated action escalates through different strategies before stopping.
