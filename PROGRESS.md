@@ -1219,3 +1219,47 @@ Notice: Tapes run against a stateful sim desktop, a PASS means the sim reached i
 
 
 
+
+## Secrets and secure desktop
+
+Session of 2026-10-25. Continued from 55c085d (vault) to implement secure desktop handoff, Voice Access coexistence, deaf rule on locked screens, setup check CLI, and comprehensive documentation.
+
+### 1. Commits
+
+- `6ed5665` — `feat(perception): password fields show filled state only`
+- `55c085d` — `feat(secrets): DPAPI vault with site-bound typing`
+- `e397002` — `feat(agent): hand off Windows security screens to Voice Access`
+- `6909eef` — `feat(audio): stop listening on locked and secure screens; ignore Voice Access phrases`
+- this commit — `docs: passwords and secure screens`
+
+### 2. Registry & Voice Access Verification
+
+- **Accessibility Registry Key Verified on this Machine:**
+  - Key: `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Accessibility`
+  - Value: `Configuration`
+  - Current machine value: `voiceaccess` (verified via PowerShell `Get-ItemProperty`)
+- **Setup Check & Helper:**
+  - `grace.exe --check-setup`: reports whether Voice Access is set to start before sign-in.
+  - `grace.exe --enable-voice-access-at-signin`: elevated helper (invoked via `ShellExecute` `runas`) that merges `voiceaccess` into `Configuration` keeping order intact, verifies the write via re-read, and exits with honest status.
+  - No other registry write is made anywhere in `src/` (enforced by `test_src_only_ever_writes_voiceaccess_accessibility_registry`).
+
+### 3. Security & Handoff Implementations
+
+- **Password Field Perception:** UIA `IsPassword` and HTML `type=password` fields render strictly as `[password field, filled]` or `[password field, empty]`. Values never reach planner prompts, logs, or tapes.
+- **DPAPI Vault:** `PersistentMemoryStore` securely encrypts secret values using Windows DPAPI. `type_saved_secret(name)` deterministically verifies that the focused element is a password field, eTLD+1 domain matches the active browser tab (refusing lookalikes like `gmail.com.evil.io`), and foreground executable matches app secrets.
+- **Secure Desktop Detection & Handoff:**
+  - `is_input_desktop_secure()` detects non-Default input desktops (`Winlogon`, `SecureDesktop`).
+  - Dispatcher immediately refuses dispatch while on a secure desktop, returning status `secure_desktop`.
+  - Spoken line: *"That's a Windows security screen. Voice Access can handle it."* (tested to never contain command phrases like 'click', 'voice access wake up', or 'hello').
+  - Pill text: *'Say "voice access wake up", then "click Yes" or "click No"'*.
+  - AgentLoop pauses, speaks safe line once, displays pill text, waits up to 60s for Default desktop (fully mocked in tests with zero real sleep/wait), and resumes goal or stops honestly with `secure_desktop`.
+- **Audio Deaf Rule on Locked & Secure Screens:**
+  - `is_deaf()` halts all speech recognition whenever the session is locked or on a secure desktop. Audio frames are discarded before wake-word, VAD, or STT. Nothing is buffered, logged, or recorded to tapes.
+  - Recognition resumes automatically when returned to `Default` and unlocked.
+  - Utterances beginning with *"voice access"* are dropped by the capability router.
+
+### 4. Test Suite Counts
+
+- `tests/test_secure_desktop.py`: 11 passed in 1.05s (zero sleeps, mocked clock and hardware tier, no hangs).
+- `tests/test_secrets_vault.py`: 6 passed in 3.53s.
+- Full workspace Rust suite (`cargo test --workspace`): 249 passed, 3 ignored, 0 failed.

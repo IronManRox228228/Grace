@@ -98,6 +98,27 @@ Say: *"Grace, open Notepad and write my appointment at 3 PM."*
 ### What Doesn't (Honest Limits & Ongoing Work)
 - **High-End Hardware Acceleration:** While Grace runs on CPU-floor machines via the `"cpu-fleet"` micromodel architecture (sub-1B models, int8 ONNX, llama_cpp), ultra-low latency (<20 ms per token) benefits from modern NPU or iGPU hardware acceleration.
 - **Physical Switch Hardware Integration:** Switch and puff-and-sip inputs are currently mapped through Windows keyboard accessibility emulation rather than direct hardware serial/USB drivers.
+- **UAC Prompt Approval (Known Limit):** By Windows operating system design, user-mode accessibility tools like Grace cannot reach or interact with the Windows Secure Desktop. Grace hands off UAC prompts and lock screens to Windows Voice Access.
+
+---
+
+## Accessibility Setup: Passwords & Windows Security Screens
+
+### 1. Hands-Free Windows Security Screens & Voice Access
+Grace coexists seamlessly with Windows Voice Access on a shared microphone:
+- **Automatic Handoff:** When a UAC prompt, lock screen, or sign-in screen appears, Grace dispatches nothing, speaks a safe handoff line (*"That's a Windows security screen. Voice Access can handle it."*), and shows the exact Voice Access command phrases in the floating pill UI (*"Say 'voice access wake up', then 'click Yes' or 'click No'"*).
+- **Grace Goes Deaf on Secure & Locked Screens:** For user privacy, Grace stops listening completely whenever the desktop is locked or secure so that spoken passwords never reach Grace.
+- **Lock Screen Setup:** Verify with `grace.exe --check-setup`. To enable Voice Access before sign-in, tick *Settings → Accessibility → Speech → Voice access → "Start voice access before you sign in"*, or let Grace enable it via `grace.exe --enable-voice-access-at-signin` (approved hands-free via UAC).
+- **Sign-In:** Windows Hello Face is recommended for hands-free sign-in. With Voice Access enabled before sign-in, saying *"hello"* dismisses the lock screen, allowing the user to speak their password.
+- **Best Practice:** Keep Voice Access asleep during normal use (*"voice access sleep"*), and wake it only when security screens appear (*"voice access wake up"*).
+
+### 2. Passwords Without Hands: Saved-Secret Vault
+For users unable to type, Grace types saved passwords into verified fields without ever exposing credential values:
+- **Caregiver Enrolment:** Passwords are enrolled securely by a caregiver via CLI: `grace.exe --save-secret <name> --site <domain-or-exe>`. Password entry is hidden and double-entered.
+- **Zero Model Exposure:** In everything the planner sees, password fields appear only as `[password field, filled]` or `[password field, empty]`. Credentials never enter prompts, logs, or replay tapes.
+- **Deterministic Phishing Guard:** When the user says *"type my gmail password"*, `type_saved_secret("gmail")` verifies at the millisecond of typing that the focused element is a password field and the active browser tab matches the registered eTLD+1 domain (rejecting lookalikes like `gmail.com.evil.io`).
+
+---
 
 ---
 

@@ -81,6 +81,28 @@ Grace operates under four core safety principles:
   - **Strict Prompt Budgeting:** Confirmed facts injected into intent and planner system prompts are capped at 8 facts and 600 characters total, and quarantined in `<<<UNTRUSTED_DATA_START>>>` delimiters.
   - **Hard Deletions & Log Redaction:** Voice commands (*"Forget my name"*, *"Forget that I prefer Firefox"*, *"Forget everything"*) perform hard deletions from both SQLite and FTS tables. Sensitive values are redacted in logs and traces using salted SHA-256 hashes.
 
+### 2.9 Passwords Without Hands: DPAPI Vault & Phishing Guard
+- **Threat:** Users with severe motor disabilities cannot use their hands to enter passwords, requiring Grace to enter credentials on their behalf. However, passing passwords through the LLM, logs, or unconstrained typing tools risks credential leakage, prompt injection exfiltration, or phishing attacks by rogue websites.
+- **Mitigation:**
+  - **Model Blindness:** In everything the planner sees, password fields (UIA `IsPassword`, DOM `type=password`) render strictly as `[password field, filled]` or `[password field, empty]`. Password values and lengths are never exposed to the model, preventing retyping loops or prompt leakage.
+  - **Encrypted Vault Storage:** Credentials are saved in a local SQLite vault encrypted with Windows DPAPI. Values are encrypted at rest and never logged, traced, written to replay tapes, or included in any LLM prompt. Logs record only `secret:<name> typed`.
+  - **Deterministic Phishing Guard:** The `type_saved_secret(name)` tool executes only if strict deterministic guards pass at the exact millisecond of typing:
+    1. The focused element is verified to be a genuine password field.
+    2. For `domain` secrets, the active browser tab's domain (read directly from the address bar) must match the registered eTLD+1. Lookalike domains (e.g., `gmail.com.evil.io` or `gmai1.com`) are rejected immediately.
+    3. For `app` secrets, the foreground process executable must match the registered application name.
+    If any check fails, typing is aborted and Grace speaks a single explanatory sentence without reciting the secret value.
+  - **Caregiver-Only Enrolment:** Voice enrolment of passwords is intentionally out of scope to avoid spoken credential exposure in shared spaces. Passwords are saved by a caregiver using `grace.exe --save-secret <name> --site <domain-or-exe>` with a hidden, double-checked CLI prompt (`getpass`).
+  - **User-Spoken Invocation Only:** Web pages, PDFs, documents, or planner output can never trigger typing secrets. The tool is invoked only from a goal spoken directly by the user.
+
+### 2.10 Windows Security Screens & Voice Access Coexistence
+- **Threat:** Administrative operations trigger Windows User Account Control (UAC) prompts, lock screens, or sign-in screens displayed on the isolated Windows Secure Desktop. By Windows security design, user-mode accessibility tools like Grace cannot reach or interact with the secure desktop. Furthermore, if Grace continued listening on lock or security screens, the user speaking their Windows password would leak into the speech recognition pipeline.
+- **Mitigation:**
+  - **Grace Goes Deaf on Locked & Secure Screens:** The moment the input desktop switches away from `Default` (e.g. UAC prompt or `Winlogon`) or the session is locked, Grace completely stops speech recognition. Audio frames are discarded before reaching wake-word detection, VAD, or STT. Nothing is transcribed, buffered, or logged. Recognition resumes only when the system returns to `Default` and is unlocked.
+  - **Hand-off to Windows Voice Access:** Windows Voice Access is designed and trusted by Windows to operate on the secure desktop. When a secure screen is detected, Grace pauses, speaks a safe handoff line once, and waits up to 60 seconds for the user to complete the prompt before resuming.
+  - **Audio Hygiene (No Cross-Talk):** Grace never speaks Voice Access command phrases aloud through the speakers, preventing speaker audio from triggering Voice Access. The spoken handoff is strictly *"That's a Windows security screen. Voice Access can handle it."*, while the exact commands (*"voice access wake up"*, *"click Yes"*, *"click No"*) are displayed as text in the floating pill UI only. Grace also ignores phrases beginning with *"voice access"*, never routing them to the agent.
+  - **Known Limit:** Grace itself cannot approve UAC prompts. Hands-free UAC approval is handled via Windows Voice Access ("click Yes").
+  - **Hands-Free Sign-In Setup:** To operate before sign-in and on the lock screen, Voice Access must be configured to start before sign-in (`grace.exe --check-setup` or Windows Settings: Accessibility → Speech → Voice access → "Start voice access before you sign in"). Windows Hello Face is recommended as the primary hands-free sign-in route. During normal usage, Voice Access should remain asleep (*"voice access sleep"*) and be woken only on security screens (*"voice access wake up"*).
+
 ---
 
 ## 3. Open Risks & Future Hardening Roadmap
