@@ -41,7 +41,11 @@ def mock_hardware_and_instant_sleep():
     with patch("grace.tier.detect_hardware_tier", return_value=diag), \
          patch("grace.tier.check_npu_available", return_value=False), \
          patch("grace.tier.check_igpu_available", return_value=False):
-        yield
+        try:
+            yield
+        finally:
+            set_mock_desktop_name(None)
+            set_mock_session_locked(None)
 
 
 def test_src_never_bypasses_secure_desktop_or_writes_uac_registry():

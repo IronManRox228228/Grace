@@ -30,15 +30,28 @@ class PersistentMemoryStore:
     def __init__(self, db_path: Optional[str] = None):
         import threading
         self._lock = threading.Lock()
+        is_testing = bool("PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules)
+        real_home_grace = os.path.abspath(os.path.expanduser("~/.grace"))
+
         if not db_path:
-            if "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules:
+            if is_testing:
                 db_path = ":memory:"
             else:
                 db_path = os.environ.get("GRACE_MEMORY_DB")
                 if not db_path:
-                    base_dir = os.path.expanduser("~/.grace")
+                    base_dir = real_home_grace
                     os.makedirs(base_dir, exist_ok=True)
                     db_path = os.path.join(base_dir, "memory.db")
+        else:
+            if is_testing and db_path != ":memory:":
+                target_abs = os.path.abspath(db_path)
+                try:
+                    if os.path.commonpath([real_home_grace, target_abs]) == real_home_grace:
+                        raise RuntimeError(
+                            f"Under pytest, PersistentMemoryStore refused to open real home path: {db_path}"
+                        )
+                except ValueError:
+                    pass
         self._db_path = db_path
         self._salt_path = os.path.splitext(db_path)[0] + ".salt" if db_path != ":memory:" else None
         self.salt = self._init_salt()
