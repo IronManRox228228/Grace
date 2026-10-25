@@ -34,7 +34,7 @@ CUA_TOOLS: list[ToolDefinition] = [
         name="cua_click",
         description="Click a control, identified by its element id or by name. Never by position.",
         params=[
-            ToolParam("window", "Window object target (e.g. {'title': 'Edge', 'id': 1234})", True, None, "dict"),
+            ToolParam("window", "Window object target (e.g. {'title': 'Edge'}; id only if copied from cua_list_windows)", True, None, "dict"),
             ToolParam("element_id", "The `id` of an element from the element list, or the number on a badge in the marked screenshot. The two are the same numbering.", False, None, "int"),
             ToolParam("target_name", "What to click, in plain words, when it has no id or badge (e.g. 'the search box'). Resolved by a visual model.", False, None, "str"),
             ToolParam("click_count", "Number of clicks (1 for single-click, 2 for double-click)", False, "1", "int"),
