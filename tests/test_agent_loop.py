@@ -404,18 +404,34 @@ class TestEscalationLadder:
         ]
 
     def test_a_first_attempt_is_not_grounded(self):
+        from grace.perception.elements import ElementNode
+        from grace.perception.element_graph import ElementGraph
+        from grace.fleet import build_gpu_single_preset
+
+        el = ElementNode(id=3, role="button", name="Open", rect=(0, 0, 10, 10), center=(5, 5))
+        graph = ElementGraph(elements=[el])
+
         loop, _, _ = make_loop([self.CLICK, DONE])
+        loop._fleet_config = build_gpu_single_preset()
         loop._ground = AsyncMock()
-        freeze_screen(loop)
+        freeze_screen(loop, graph=graph)
         asyncio.run(loop.run(user_goal="open the message"))
         assert loop._ground.await_count == 0
 
     def test_a_repeat_is_regrounded(self):
         # Rung 2: the element the plan named resolved and clicking it did
         # nothing, so stop trusting the tree and ask the pixels.
+        from grace.perception.elements import ElementNode
+        from grace.perception.element_graph import ElementGraph
+        from grace.fleet import build_gpu_single_preset
+
+        el = ElementNode(id=3, role="button", name="Open", rect=(0, 0, 10, 10), center=(5, 5))
+        graph = ElementGraph(elements=[el])
+
         loop, _, _ = make_loop([self.CLICK] * 6)
+        loop._fleet_config = build_gpu_single_preset()
         loop._ground = AsyncMock()
-        freeze_screen(loop)
+        freeze_screen(loop, graph=graph)
         asyncio.run(loop.run(user_goal="open the message"))
         assert loop._ground.await_count >= 1
         assert loop._ground.await_args.kwargs.get("force") is True
