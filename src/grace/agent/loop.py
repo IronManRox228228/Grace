@@ -421,7 +421,7 @@ class AgentLoop:
                     step = await self._planner.plan(
                         goal=memory.user_goal,
                         elements_prompt=view.markdown,
-                        history="",
+                        history=memory.format_history_markdown(),
                         scratchpad=memory.format_established_ruled_out_markdown(),
                         expectation_note=expectation_note,
                         window_title=_window_title(snapshot),
@@ -697,7 +697,7 @@ class AgentLoop:
             return await self._planner.plan(
                 goal=memory.user_goal,
                 elements_prompt=view.markdown,
-                history="",
+                history=memory.format_history_markdown(),
                 scratchpad=memory.format_established_ruled_out_markdown(),
                 expectation_note=expectation_note,
                 window_title=_window_title(snapshot),
