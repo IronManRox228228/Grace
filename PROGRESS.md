@@ -1690,3 +1690,55 @@ Session addressing the two root causes and cleanups identified from the run capt
   - `21 passed`, `10 passed`, `2 passed`, `2 passed`, `175 passed`, `2 passed`, `27 passed` (3 ignored) — **all workspace crates passed, 0 failed**.
 - **Files to download:** None.
 - **Tapes generated/diffed:** None.
+
+
+---
+
+## Real-desktop retest 5
+
+Session addressing the two root causes and capture redaction cleanup identified from the run capture (`runs/2026-10-25_20-21-40/`) following real-desktop retest with Holo3.1-4B (`real-desktop-5.md`).
+
+### Items and Commits
+
+1. **Item 1: Grounder is skipped when an unshown element_id is present**
+   - **Commits:** `4b9df6f` `fix(agent): ground unshown element ids and retry not-found clicks once`, `2d2b7b0` `test(agent): provide tree element in EscalationLadder tests for rendered id check`
+   - **Root Cause:** Holo emitted `cua_click(element_id=36, target_name='Play Signal - Home link')` without coordinates when no element IDs were rendered in the prompt. `PlannedStep.needs_grounding` returned False whenever `element_id` was set, so visual grounding never ran. The executor dropped the unshown ID and name lookup failed: `Target element 'Play Signal - Home link' not found via UIA, OculiX, OpenCV, or OCR`.
+   - **Fix:**
+     - In `PlannedStep.needs_grounding`, an `element_id` (or `element_index`) counts only if `rendered_element_ids` is known (`is not None`) and contains it. Otherwise it is treated as absent.
+     - In `Planner.plan`, unshown element IDs/indices are dropped whenever `eid not in rendered_element_ids` (even when `rendered_element_ids` is empty).
+     - In `AgentLoop`, when the executor returns "not found" for a named target (`status == "element_not_found"` or "not found" in error), and this step was not already grounded, the loop grounds it once via `_ground(step, snapshot, force=True)` and retries the click in the same step. A flag guarantees exactly one grounding retry and never more.
+   - **Tests:** `tests/test_unshown_element_id_grounding.py` (8 tests) and updated `tests/test_planner.py` covering exact step with no IDs rendered, shown IDs skipping grounding, unknown rendered sets, and executor not-found leading to one grounding retry and never a second.
+
+2. **Item 2: `describe_screen` describes only the window frame**
+   - **Commit:** `c005323` `feat(tools): describe_screen prioritizes page content and wraps in untrusted markers`
+   - **Root Cause:** `_describe_screen` grabbed the first 5 elements in `graph.elements` (`[:5]`), which on Windows browsers are the window frame buttons (`Minimize`, `Restore`, `Close`, `Workspace Button`, `Guide`), leaving the planner blind to page content.
+   - **Fix:**
+     - Prioritized page-frame elements first (`frame == FRAME_PAGE`), then other non-chrome app elements, followed by visible OCR text lines sorted in reading order (top-to-bottom, left-to-right).
+     - Formatted headings (`Heading: '{name}'`), list items (`Item: '{name}'`), interactive controls, and highlighted any focused element.
+     - Placed window chrome (`frame == FRAME_CHROME` or minimize/maximize/restore/close/guide) last, or dropped if budget reached.
+     - Capped at 25 items and 1200 characters.
+     - Placed all screen text inside `wrap_untrusted` markers.
+   - **Tests:** `tests/test_describe_screen_content.py` (3 tests) verifying page items "Signal" and "Play" appear before "Minimize", role/focus formatting, OCR reading order sorting, and chrome dropping when cap is reached.
+
+3. **Item 3: Status redaction over-match**
+   - **Commit:** `468bcb9` `fix(harness): prevent passphrase redaction from over-matching execution statuses`
+   - **Root Cause:** In `step.json`, the execution status `'element_not_found'` was redacted to `"<redacted>"` because `_PASSPHRASE_PATTERN` matched the three-part snake_case pattern (`element_not_found`, >= 14 chars).
+   - **Fix:**
+     - In `src/grace/harness/redact.py` (`_sub_passphrase`), exempted known execution statuses (`element_not_found`, `wrong_focus`, `safety_confirmation_required`, `max_iterations_reached`, etc.) and system status suffixes (`_not_found`, `_required`, `_reached`, `_exceeded`).
+     - In `redact_data`, preserved `status` and `action` keys along with `tool` and `type`.
+     - Preserved complete secret redaction for passphrases, API keys, bearer tokens, and vault secrets.
+   - **Tests:** `tests/test_status_redaction.py` (5 tests) verifying that `element_not_found` and other system statuses survive redaction in strings and in `step.json`, while passphrases, API keys, and vault secrets remain securely redacted.
+
+4. **Documentation & Port Status:**
+   - **Commit:** `9e3fb63` `docs(port): update needs_grounding description for rendered element ids`
+   - Updated `PORT_STATUS.md` reflecting the rendered element ID qualification for `needs_grounding`.
+
+### Suite Verification Counts
+
+- **Python (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`):**
+  - Before: `1367 passed, 1 skipped, 1 warning in 309.53s`
+  - After: `1386 passed, 1 skipped, 1 warning in 303.80s` — **0 failed** (+19 tests passed).
+- **Rust (`cargo test --workspace`):**
+  - `21 passed`, `10 passed`, `2 passed`, `2 passed`, `175 passed`, `2 passed`, `27 passed` (3 ignored) — **all workspace crates passed, 0 failed**.
+- **Files to download:** None.
+- **Tapes generated/diffed:** None.
