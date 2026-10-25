@@ -1742,3 +1742,22 @@ Session addressing the two root causes and capture redaction cleanup identified 
   - `21 passed`, `10 passed`, `2 passed`, `2 passed`, `175 passed`, `2 passed`, `27 passed` (3 ignored) — **all workspace crates passed, 0 failed**.
 - **Files to download:** None.
 - **Tapes generated/diffed:** None.
+
+## Real-desktop retest 6
+
+Run `runs/2026-10-25_21-02-50` ended because Holo emitted `cua_describe_screen`. This pass walked the rest of the task (results page, Play click, completion) as Holo experiences it. In the default `cpu-fleet` preset the planner is blind: no element list, no image. It sees only history, the last step's result text and tool output, so `describe_screen` is its only view of the page.
+
+1. **Unknown tool names parked a confirmation** (`agent/safety.py` rule 9, `agent/loop.py`).
+   - Evidence: step 5 `cua_describe_screen`, status `safety_confirmation_required`.
+   - Fix: `resolve_tool_name` in `intent/tools.py` (cua_ prefix add or strip, `type`/`press`/`hotkey` synonyms, one match only; INFO log) runs before `SafetyGuard`, so the real tool is judged. An unknown name never asks the user: the planner gets `Unknown tool 'X'. Did you mean: a, b, c? Use one of the valid tool names.` (fuzzy suggestions via rapidfuzz if installed, else difflib; never executed) or `Valid tools: ...`. An unknown name with `is_completed` counts as `converse`. Three unknown names in a row end the run.
+   - Tests: `tests/test_unknown_tool_alias.py`.
+2. **`cua_text` and `cua_list_apps` needed confirmation** (`SAFE_READ_ONLY_TOOLS`). Both are read-only planner tools. Test: `tests/test_read_only_tools_no_confirmation.py`.
+3. **Grounded pixel ignored when `target_name` matched a graph element** (`automation/computer_use.py` `_click`). `target_name="Play"` clicked the first element containing "play" (for example "Play next"), or was refused by the mismatch guard, and the grounder's point was discarded. A point with no shown element id now wins and the name is not looked up. Test: `tests/test_click_pixel_priority.py`.
+4. **Planner-written x/y clicked raw** (`agent/loop.py`). The prompt says there is no x/y, and Holo answers in [0,1000]. When the step also has `target_name` or `describe`, x/y is dropped and the grounder places the click. Test: `tests/test_planner_xy_reground.py`.
+5. **Misleading "NO VISIBLE EFFECT" after read-only tools, and describe_screen text cut to 600 chars** (`_expectation_note`). Step 4 to 5 in the capture shows the note after `cua_screenshot`. `describe_screen` builds up to 1200 chars and half was dropped. Read-only tools are exempt and the cap is 1300 for `describe_screen`. Test: `tests/test_read_only_step_notes.py`.
+6. **Integration test**: `tests/test_youtube_music_holo_flow.py` drives the whole task on `YouTubeMusicSim` with `cua_describe_screen`, a bogus `element_id`, call-syntax `cua_type_text(...)`, `press_key` with `Return`, `click` without the prefix, and [0,1000] x/y. It completes with the sim in its goal state.
+
+Not fixed: `_replan_stronger` does not pass `hide_tree`; `tests/test_window_activation.py` two tests fail on this machine at the base commit too (they depend on live window enumeration).
+
+Suite: see final line below.
+- Python: `1427 passed, 2 failed (test_window_activation, pre-existing at a4f7d2a on this machine), 1 skipped`. Rust: all crates passed, 0 failed.
