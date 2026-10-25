@@ -215,6 +215,24 @@ class TestPlannerCalls:
     def test_unparseable_response_returns_none(self):
         assert asyncio.run(Planner(FakeLLM(["nope"])).plan(goal="g", elements_prompt="[]")) is None
 
+    def test_unparseable_plan_logs_debug_and_warning_with_reason(self, caplog):
+        import logging
+        raw_output = '{"thought": "broken JSON that was truncated...", "action": ' + "x" * 400
+        planner = Planner(FakeLLM([raw_output]))
+        with caplog.at_level(logging.DEBUG):
+            step = asyncio.run(planner.plan(goal="g", elements_prompt="[]"))
+
+        assert step is None
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG and raw_output in r.message]
+        assert len(debug_records) >= 1, "Must log full raw output at DEBUG"
+
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING and "Planner output was not parseable" in r.message]
+        assert len(warning_records) >= 1, "Must log warning for unparseable output"
+        msg = warning_records[0].message
+        assert raw_output[:300] in msg
+        assert raw_output[:301] not in msg
+        assert "reason" in msg.lower() or "(" in msg
+
     def test_rate_limit_propagates(self):
         planner = Planner(FakeLLM([RateLimitError("429")]))
         with pytest.raises(RateLimitError):

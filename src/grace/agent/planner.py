@@ -323,13 +323,16 @@ class Planner:
                 prompt=prompt,
                 raw=raw or "",
             )
+        if raw:
+            logger.debug(f"Planner raw output: {raw}")
+
         if not raw:
             logger.warning("Planner returned an empty response")
             return None
 
-        step = parse_planned_step(raw)
+        step, error_reason = parse_planned_step_with_reason(raw)
         if step is None:
-            logger.warning(f"Planner output was not parseable: {raw[:200]}")
+            logger.warning(f"Planner output was not parseable ({error_reason}): {raw[:300]}")
         return step
 
 
@@ -338,21 +341,29 @@ _CALL_SYNTAX_RE = re.compile(r"^\s*([a-z_][a-z0-9_]*)\s*\((.*)\)\s*$", re.DOTALL
 
 def parse_planned_step(text: str) -> Optional[PlannedStep]:
     """Parse the planner's JSON, tolerating fences and surrounding prose."""
-    if not text or not isinstance(text, str):
-        return None
+    step, _ = parse_planned_step_with_reason(text)
+    return step
 
-    data = _load_json_object(clean_json_fence(text))
+
+def parse_planned_step_with_reason(text: str) -> tuple[Optional[PlannedStep], str]:
+    """Parse the planner's JSON, tolerating fences and surrounding prose, returning (step, reason)."""
+    if not text or not isinstance(text, str):
+        return None, "empty or non-string response"
+
+    data, err = _load_json_object_with_error(clean_json_fence(text))
     if data is None:
         start, end = text.find("{"), text.rfind("}")
         if start != -1 and end > start:
-            data = _load_json_object(text[start : end + 1])
+            data, sub_err = _load_json_object_with_error(text[start : end + 1])
+            if data is None:
+                err = sub_err or err
     if data is None:
-        return None
+        return None, err or "no valid JSON object found"
 
     action = data.get("action")
     if not isinstance(action, str) or not action.strip():
         # A response with no action is not a step, even if it parsed.
-        return None
+        return None, "missing or empty 'action' field"
 
     params = data.get("params")
     if not isinstance(params, dict):
@@ -366,17 +377,17 @@ def parse_planned_step(text: str) -> Optional[PlannedStep]:
         if args_str:
             try:
                 tree = ast.parse(f"f({args_str})", mode="eval")
-            except SyntaxError:
-                return None
+            except SyntaxError as e:
+                return None, f"syntax error in call args: {e}"
             if not isinstance(tree.body, ast.Call) or tree.body.args:
-                return None
+                return None, "call syntax only supports keyword arguments"
             for kw in tree.body.keywords:
                 if kw.arg is None or kw.arg in ("tool", "action"):
                     continue
                 try:
                     val = ast.literal_eval(kw.value)
-                except (ValueError, SyntaxError):
-                    return None
+                except (ValueError, SyntaxError) as e:
+                    return None, f"invalid argument value for '{kw.arg}': {e}"
                 call_params[kw.arg] = val
         # Explicit params keys win over call-syntax keys
         merged = dict(call_params)
@@ -395,20 +406,32 @@ def parse_planned_step(text: str) -> Optional[PlannedStep]:
         if isinstance(response, str):
             final_response = response
 
-    return PlannedStep(
-        thought=str(data.get("thought") or ""),
-        action=action,
-        params=params,
-        expect=str(data.get("expect") or ""),
-        is_completed=bool(data.get("is_completed")),
-        final_response=final_response,
-        user_update=str(data.get("user_update") or f"Running {action}…"),
+    return (
+        PlannedStep(
+            thought=str(data.get("thought") or ""),
+            action=action,
+            params=params,
+            expect=str(data.get("expect") or ""),
+            is_completed=bool(data.get("is_completed")),
+            final_response=final_response,
+            user_update=str(data.get("user_update") or f"Running {action}…"),
+        ),
+        "",
     )
 
 
 def _load_json_object(candidate: str) -> Optional[dict]:
+    data, _ = _load_json_object_with_error(candidate)
+    return data
+
+
+def _load_json_object_with_error(candidate: str) -> tuple[Optional[dict], str]:
     try:
         data = json.loads(candidate)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    return data if isinstance(data, dict) else None
+    except json.JSONDecodeError as e:
+        return None, f"JSONDecodeError: {e.msg} (line {e.lineno} col {e.colno})"
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+    if not isinstance(data, dict):
+        return None, f"expected JSON object/dict, got {type(data).__name__}"
+    return data, ""
