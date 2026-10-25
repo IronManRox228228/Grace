@@ -139,6 +139,17 @@ class ElementScorer:
         # Sort descending by score
         scores.sort(key=lambda x: x[1], reverse=True)
 
+        if not scores:
+            return ScoredSelection(
+                selected_id=None,
+                top_score=0.0,
+                runner_up_score=0.0,
+                margin=0.0,
+                is_confident=False,
+                candidate_scores=[],
+                reason="No candidate elements scored",
+            )
+
         top_cand, top_score = scores[0]
         runner_up_score = scores[1][1] if len(scores) > 1 else 0.0
         score_margin = round(top_score - runner_up_score, 3)

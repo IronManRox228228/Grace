@@ -714,13 +714,14 @@ class AgentLoop:
             elif step.params.get("x") is not None and step.params.get("y") is not None:
                 grounded_point = (step.params["x"], step.params["y"])
 
-            # Pin element IDs to the snapshot the planner saw
-            if snapshot and getattr(snapshot, "graph", None) is not None:
-                step.params["_graph"] = snapshot.graph
-            if hasattr(step, "rendered_element_ids") and step.rendered_element_ids is not None:
-                step.params["_rendered_element_ids"] = set(step.rendered_element_ids)
-            if hide_tree:
-                step.params["_target_guidance"] = True
+            # Pin element IDs to the snapshot the planner saw for CUA actions
+            if step.action.startswith("cua_"):
+                if snapshot and getattr(snapshot, "graph", None) is not None:
+                    step.params["_graph"] = snapshot.graph
+                if hasattr(step, "rendered_element_ids") and step.rendered_element_ids is not None:
+                    step.params["_rendered_element_ids"] = set(step.rendered_element_ids)
+                if hide_tree or getattr(step, "target_guidance", False):
+                    step.params["_target_guidance"] = True
 
             # Checked again here, not just at the top of the loop: planning
             # (and grounding, above) can take long enough that a "stop" heard
@@ -1355,9 +1356,9 @@ def _are_actions_equivalent(step_a: Optional[PlannedStep], step_b: Optional[Plan
             pass
 
     # Compare other params ignoring superficial fields
-    ignored_keys = {"window", "target_name", "name", "thought", "user_update", "_ladder_rung", "_graph"}
-    core_a = {k: v for k, v in params_a.items() if k not in ignored_keys}
-    core_b = {k: v for k, v in params_b.items() if k not in ignored_keys}
+    ignored_keys = {"window", "target_name", "name", "thought", "user_update"}
+    core_a = {k: v for k, v in params_a.items() if not k.startswith("_") and k not in ignored_keys}
+    core_b = {k: v for k, v in params_b.items() if not k.startswith("_") and k not in ignored_keys}
     return core_a == core_b
 
 

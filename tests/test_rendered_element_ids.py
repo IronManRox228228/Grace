@@ -64,7 +64,7 @@ class TestPlannerRenderedElementIds:
         assert "element_id" not in step.params
         assert step.params["target_name"] == "Song 'Signal' by Home in the search results list"
         assert step.rendered_element_ids == set()
-        assert step.params.get("_target_guidance") is True
+        assert step.target_guidance is True
 
     @pytest.mark.asyncio
     async def test_single_mode_retains_shown_element_id(self):

@@ -366,9 +366,8 @@ class Planner:
             return None
 
         step.rendered_element_ids = set(rendered_element_ids)
-        step.params["_rendered_element_ids"] = set(rendered_element_ids)
         if hide_tree:
-            step.params["_target_guidance"] = True
+            step.target_guidance = True
 
         raw_id = step.params.get("element_id")
         if raw_id is not None:
