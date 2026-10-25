@@ -131,6 +131,33 @@ def _settled_state() -> Optional[dict[str, Any]]:
     return _screen_state()
 
 
+def _monitor_rects() -> list[tuple[int, int, int, int]]:
+    """(left, top, right, bottom) of every attached monitor; [] if unknown."""
+    try:
+        import win32api
+
+        return [tuple(info[2]) for info in win32api.EnumDisplayMonitors()]
+    except Exception:
+        return []
+
+
+def _offscreen_fact(x: int, y: int, name: Optional[str], element_id: Optional[int] = None) -> Optional[str]:
+    """A fact when (x, y) lies outside every monitor, else None.
+
+    A minimised window keeps its controls at coordinates like (-31750, -31901).
+    Clicking there pins the cursor to a screen corner and trips PyAutoGUI's
+    fail-safe, so the click is reported instead of sent. Unknown monitors
+    never block.
+    """
+    rects = _monitor_rects()
+    if not rects:
+        return None
+    if any(l <= x < r and t <= y < b for l, t, r, b in rects):
+        return None
+    who = f"Element [{element_id}] '{name}'" if element_id is not None else f"Element '{name}'" if name else "That point"
+    return f"{who} is off-screen at ({x}, {y}); its window may be minimised."
+
+
 def _read_scroll_percent(x: Optional[int], y: Optional[int]) -> Optional[tuple[float, float]]:
     """(vertical, horizontal) scroll percent of the scrollable under (x, y).
 
@@ -617,7 +644,8 @@ class ComputerUse:
                 )
             res = self._click_at(graph_target.center[0], graph_target.center[1],
                                   click_count, f"graph:{graph_target.role}", graph_target.name,
-                                  probe=True, before=before, params=params, initial_fg=initial_fg)
+                                  probe=True, before=before, params=params, initial_fg=initial_fg,
+                                  element_id=graph_target.id)
             if mismatch_note and isinstance(res, dict):
                 res["message"] = (str(res.get("message")) if res.get("message") else "") + mismatch_note
                 res["text"] = (str(res.get("text")) if res.get("text") else res["message"])
@@ -811,13 +839,28 @@ class ComputerUse:
                   name: Optional[str] = None, probe: bool = False,
                   before: Optional[dict[str, Any]] = None,
                   params: Optional[dict[str, Any]] = None,
-                  initial_fg: Optional[str] = None) -> dict[str, Any]:
+                  initial_fg: Optional[str] = None,
+                  element_id: Optional[int] = None) -> dict[str, Any]:
         """Send the actual click, then invalidate the graph the UI just changed.
 
         ``probe`` is off for internal callers - `_set_value` clicks only to put
         focus somewhere and then checks the value it wrote, so a change probe
         there would pay for a settle and answer the wrong question.
         """
+        offscreen = _offscreen_fact(x, y, name, element_id)
+        if offscreen:
+            logger.warning(f"_click_at not sent: {offscreen}")
+            return {
+                "ok": False,
+                "sent": False,
+                "verified": False,
+                "action": "click",
+                "status": "element_offscreen",
+                "error": offscreen,
+                "message": offscreen,
+                "evidence": "nothing was clicked",
+            }
+
         # R11/R12/R22: re-check window focus immediately prior to physical mouse dispatch
         refused = _wrong_window(params or {}, "click", initial_title=initial_fg)
         if refused is not None:

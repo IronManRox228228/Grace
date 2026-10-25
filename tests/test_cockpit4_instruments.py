@@ -53,3 +53,40 @@ class TestScrollReportsPosition:
     def test_unavailable_pattern_is_omitted(self, monkeypatch):
         res = self._run(monkeypatch, [None, None], {"scrollY": 500})
         assert "Scroll position" not in res["message"]
+
+
+class TestOffscreenElementIsReportedNotClicked:
+    def test_minimised_window_search_box(self, monkeypatch):
+        # runs/2026-10-26_03-28-19: WhatsApp minimised, search box at (-31750, -31901).
+        clicked = []
+        monkeypatch.setattr(cu_mod, "_monitor_rects", lambda: [(0, 0, 1920, 1080)])
+        monkeypatch.setattr(
+            "grace.automation.win32_driver.Win32Driver.click_at",
+            staticmethod(lambda *a, **k: clicked.append(a) or True),
+        )
+        res = ComputerUse()._click_at(-31750, -31901, 1, "graph:edit", "Search or start new chat", element_id=7)
+        assert res["ok"] is False and res["sent"] is False
+        assert res["error"] == (
+            "Element [7] 'Search or start new chat' is off-screen at (-31750, -31901); "
+            "its window may be minimised."
+        )
+        assert clicked == []
+
+    def test_on_screen_and_second_monitor_points_still_click(self, monkeypatch):
+        clicked = []
+        monkeypatch.setattr(cu_mod, "_monitor_rects", lambda: [(0, 0, 1920, 1080), (-1920, 0, 0, 1080)])
+        monkeypatch.setattr(cu_mod, "_settled_state", lambda: None)
+        monkeypatch.setattr(cu_mod, "_invalidate_graph", lambda: None)
+        monkeypatch.setattr(cu_mod, "_wrong_window", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "grace.automation.win32_driver.Win32Driver.click_at",
+            staticmethod(lambda *a, **k: clicked.append(a) or True),
+        )
+        cu = ComputerUse()
+        assert cu._click_at(500, 500, 1, "m", "a")["ok"] is True
+        assert cu._click_at(-500, 500, 1, "m", "a")["ok"] is True
+        assert len(clicked) == 2
+
+    def test_unknown_monitors_never_block(self, monkeypatch):
+        monkeypatch.setattr(cu_mod, "_monitor_rects", lambda: [])
+        assert cu_mod._offscreen_fact(-99999, -99999, "x") is None
