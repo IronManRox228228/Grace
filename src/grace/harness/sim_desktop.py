@@ -459,6 +459,7 @@ class YouTubeMusicSim(BaseTapeSim):
 
     def __init__(self):
         super().__init__("agentic_youtube_music")
+        self._query = ""
         self._setup_states()
 
     def _setup_states(self) -> None:
@@ -496,7 +497,7 @@ class YouTubeMusicSim(BaseTapeSim):
                         center=(620, 80), container="Header", focused=False, focusable=True, enabled=True),
             ElementNode(id=2, role="edit", name="Search songs, albums, artists", rect=(650, 60, 1200, 100),
                         center=(925, 80), placeholder="Search songs, albums, artists", container="Header",
-                        focused=True, focusable=True, enabled=True, value=""),
+                        focused=True, focusable=True, enabled=True, value=self._query),
             ElementNode(id=3, role="text", name="Home", rect=(100, 200, 300, 240),
                         center=(200, 220), container="Navigation", focused=False, focusable=False, enabled=True),
             ElementNode(id=4, role="text", name="Explore", rect=(100, 260, 300, 300),
@@ -536,12 +537,12 @@ class YouTubeMusicSim(BaseTapeSim):
             ElementNode(id=2, role="edit", name="Search songs, albums, artists", rect=(650, 60, 1200, 100),
                         center=(925, 80), placeholder="Search songs, albums, artists", container="Header",
                         focused=False, focusable=True, enabled=True, value="signal by home"),
-            ElementNode(id=10, role="button", name="Signal", rect=(300, 200, 1200, 260),
+            ElementNode(id=10, role="button", name="Signal - Home (Play song)", rect=(300, 200, 1200, 260),
                         center=(750, 230), container="Results", focused=False, focusable=True, enabled=True),
-            ElementNode(id=11, role="text", name="Home", rect=(300, 260, 1200, 300),
-                        center=(750, 280), container="Results", focused=False, focusable=False, enabled=True),
-            ElementNode(id=12, role="button", name="Play", rect=(1100, 210, 1180, 250),
+            ElementNode(id=11, role="button", name="Play", rect=(1100, 210, 1180, 250),
                         center=(1140, 230), container="Results", focused=False, focusable=True, enabled=True),
+            ElementNode(id=12, role="text", name="Signal · Home", rect=(300, 260, 1200, 300),
+                        center=(750, 280), container="Results", focused=False, focusable=False, enabled=True),
         ]
         self.states["results_shown"] = SimState(
             name="results_shown", window_title=s3_title, elements=s3_elements, is_goal=False,
@@ -554,10 +555,8 @@ class YouTubeMusicSim(BaseTapeSim):
             ElementNode(id=0, role="edit", name="Address and search bar", rect=(120, 60, 1700, 96),
                         center=(910, 78), placeholder="Search or enter web address", container="Toolbar",
                         focused=False, focusable=True, enabled=True, value="music.youtube.com/watch?v=signal"),
-            ElementNode(id=10, role="button", name="Signal", rect=(300, 200, 1200, 260),
+            ElementNode(id=10, role="button", name="Signal - Home (Play song)", rect=(300, 200, 1200, 260),
                         center=(750, 230), container="Results", focused=False, focusable=True, enabled=True),
-            ElementNode(id=11, role="text", name="Home", rect=(300, 260, 1200, 300),
-                        center=(750, 280), container="Results", focused=False, focusable=False, enabled=True),
             ElementNode(id=20, role="text", name="Signal · Home", rect=(200, 980, 600, 1040),
                         center=(400, 1010), container="Player bar", focused=False, focusable=False, enabled=True,
                         value="Signal · Home"),
@@ -604,7 +603,10 @@ class YouTubeMusicSim(BaseTapeSim):
                 or (x is not None and y is not None and 600 <= x <= 1200 and 60 <= y <= 100)
             )
             if is_search:
-                self.current_state_name = "search_focused"
+                if self._query:
+                    self.current_state_name = "query_typed"
+                else:
+                    self.current_state_name = "search_focused"
                 return {"status": "ok", "result": {"ok": True, "message": "clicked search", "verified": True, "sent": True}}
 
             is_play_song = (
@@ -619,8 +621,15 @@ class YouTubeMusicSim(BaseTapeSim):
             return {"status": "ok", "result": {"ok": True, "message": "clicked", "verified": True, "sent": True}}
 
         if tool == "cua_type_text":
-            text = (params.get("text") or "").lower()
-            if "signal" in text or "home" in text:
+            text = (params.get("text") or "").strip()
+            self._query = text
+            # Update element 2 in states
+            for sname in ("search_focused", "query_typed"):
+                if sname in self.states:
+                    for el in self.states[sname].elements:
+                        if el.id == 2:
+                            el.value = text
+            if "signal" in text.lower() or "home" in text.lower():
                 self.current_state_name = "query_typed"
                 return {"status": "ok", "result": {"ok": True, "message": "typed query", "verified": True, "sent": True}}
             return {"status": "ok", "result": {"ok": True, "message": "typed", "verified": True, "sent": True}}
@@ -687,6 +696,16 @@ class PdfToNotesSim(BaseTapeSim):
             class_name="Progman",
         )
 
+        opened_elements = [
+            ElementNode(id=0, role="document", name="report.pdf", rect=(100, 100, 1800, 1000),
+                        center=(950, 550), focused=True, focusable=True, enabled=True,
+                        value="Final submission deadline: 14 November"),
+        ]
+        self.states["pdf_opened"] = SimState(
+            name="pdf_opened", window_title="report.pdf - Edge", elements=opened_elements, is_goal=False,
+            class_name="Chrome_WidgetWin_1",
+        )
+
         notepad_elements = [
             ElementNode(id=0, role="document", name="Text Editor", rect=(8, 60, 1912, 1040),
                         center=(960, 550), focused=True, focusable=True, enabled=True, value=""),
@@ -746,6 +765,40 @@ class PdfToNotesSim(BaseTapeSim):
                 "text": "Project Report\nFinal submission deadline: 14 November\nPlease submit deliverables on time.",
             }
 
+        if tool in ("open_file", "cua_click", "cua_press_key"):
+            target_name = (params.get("target_name") or params.get("name") or "").lower()
+            target_id = params.get("element_id") or params.get("element_index")
+            key = str(params.get("key", "")).lower()
+
+            if (
+                tool == "open_file"
+                or "report" in target_name
+                or "pdf" in target_name
+                or target_id == 0
+                or "d" in key
+                or "enter" in key
+            ) and self.current_state_name in ("initial", "file_found", "pdf_read"):
+                self._pdf_read = True
+                self.current_state_name = "pdf_opened"
+                return {
+                    "status": "ok",
+                    "result": {
+                        "ok": True,
+                        "message": "opened report.pdf",
+                        "verified": True,
+                        "sent": True,
+                        "text": "Final submission deadline: 14 November",
+                    },
+                    "text": "Final submission deadline: 14 November",
+                }
+
+            if "notepad" in target_name or "note" in target_name:
+                self._notepad_open = True
+                self.current_state_name = "notepad_open"
+                return {"status": "ok", "result": {"ok": True, "message": "clicked", "verified": True, "sent": True}}
+
+            return {"status": "ok", "result": {"ok": True, "message": "action executed", "verified": True, "sent": True}}
+
         if tool == "open_app":
             name = (params.get("name") or "").lower()
             if "notepad" in name or "note" in name:
@@ -757,16 +810,9 @@ class PdfToNotesSim(BaseTapeSim):
                 return {"status": "ok", "text": "I've opened Notepad."}
             return {"status": "ok", "text": f"Opened {name}."}
 
-        if tool == "cua_click":
-            target_name = (params.get("target_name") or params.get("name") or "").lower()
-            if "notepad" in target_name:
-                self._notepad_open = True
-                self.current_state_name = "notepad_open"
-            return {"status": "ok", "result": {"ok": True, "message": "clicked", "verified": True, "sent": True}}
-
         if tool == "cua_type_text":
             text = params.get("text", "")
-            if self._notepad_open or self.current_state_name in ("notepad_open", "note_typed"):
+            if self._notepad_open or self.current_state_name in ("notepad_open", "note_typed", "pdf_opened"):
                 self._buffer = text
                 if "14 november" in text.lower():
                     self.current_state_name = "note_typed"

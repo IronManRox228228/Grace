@@ -329,12 +329,12 @@ def run_tapes_gate(url: str, tapes: list[str], args) -> dict[str, str]:
             print(f"  final_response: {final_resp!r}")
 
             raw_outputs = extract_raw_planner_outputs(res)
-            last_2 = raw_outputs[-2:]
-            print("  last 2 raw planner outputs:")
-            if not last_2:
+            last_3 = raw_outputs[-3:]
+            print("  last 3 raw planner outputs:")
+            if not last_3:
                 print("    (none)")
             else:
-                for idx, out in enumerate(last_2, 1):
+                for idx, out in enumerate(last_3, 1):
                     lines = out.strip().splitlines()
                     if len(lines) == 1:
                         print(f"    [{idx}] {lines[0]}")

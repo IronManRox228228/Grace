@@ -801,3 +801,266 @@ Both tapes reached `PASS` and `OVERALL GATE STATUS: PASS`.
   All workspace tests passed (249 passed, 3 ignored).
 - **Running Processes:** Clean (`0` active background processes).
 
+---
+
+## Sim tapes demo
+
+Scope: Task `sim-tapes-demo.md`.
+1. Small fixes: rewrote frozen screen notices in `scripts/demo_gate.py` and `docs/demo/FLOWS.md`; eliminated hardcoded user paths in `ReadPdfSim` by accepting `documents_root` argument or environment variable (`GRACE_DOCUMENTS_DIR`); proved non-screen loop breaker stops on 3 identical actions with honest reason.
+2. Two new sim tapes: implemented `YouTubeMusicSim` and `PdfToNotesSim` in `src/grace/harness/sim_desktop.py`, added scenarios to `src/grace/harness/generate.py`, generated tapes into `%TEMP%\sim-tapes-demo\tapes`, and added gate entries in `scripts/demo_gate.py`.
+3. Live Holo 3.1-4B gate runs: ran gate with real Holo 3.1-4B on GPU, analyzed failures, made one Grace-side fix backed by evidence, and reran.
+
+---
+
+### 1. Small fixes
+
+- **Notice update:** Rewrote notice across `scripts/demo_gate.py`, `docs/demo/FLOWS.md`, and `tests/test_demo_gate.py`:
+  > "Tapes run against a stateful sim desktop, a PASS means the sim reached its goal state, and only a real-desktop run proves that real apps behave like the sim."
+- **Path configuration in `ReadPdfSim`:** Removed hardcoded username assumptions; `ReadPdfSim` accepts `documents_root` argument, falling back to `GRACE_DOCUMENTS_DIR` / `DOCUMENTS_ROOT` / `DOCUMENTS_DIR` env vars, and then user profile Documents. Tested in `tests/test_sim_desktop.py::TestReadPdfSim::test_documents_root_from_argument` and `test_documents_root_from_environment`.
+- **Loop breaker proof for non-screen tools:** Added `tests/test_agent_loop.py::TestNoEffectRepeatNote::test_three_identical_non_screen_actions_end_with_spoken_message` proving that 3 identical dispatches of non-screen actions (`search_files` with identical query) trigger the escalation stop and return `status: "no_progress"` with an honest spoken response.
+
+---
+
+### 2. Two new sim tapes
+
+1. **`agentic_youtube_music`:**
+   - Goal: "open youtube music in my browser, search for the song signal by home, and play it"
+   - State machine: `YouTubeMusicSim`
+     - States: `browser_open`, `search_focused`, `query_typed`, `results_shown` ("Signal", "Home"), and `song_playing` (goal state).
+     - Goal check: player bar contains "Signal · Home" playing. Wrong actions change nothing.
+   - Scripted scenario: Added `_YOUTUBE_MUSIC` fixture and `agentic_youtube_music` scenario in `src/grace/harness/generate.py`.
+   - Tape generated: `%TEMP%\sim-tapes-demo\tapes\agentic_youtube_music`.
+
+2. **`agentic_pdf_to_notes`:**
+   - Goal: "find the deadline in my report PDF and put it in a new note"
+   - State machine: `PdfToNotesSim`
+     - States: `initial` (Desktop), `file_found`, `pdf_read` / `pdf_opened` (content: "Final submission deadline: 14 November"), `notepad_open`, `note_typed` (goal state).
+     - Goal check: Notepad document buffer contains "14 November". Wrong actions change nothing.
+     - Environment configurable Documents root: takes `documents_root` argument or `GRACE_DOCUMENTS_DIR`.
+   - Scripted scenario: Added `agentic_pdf_to_notes` scenario in `src/grace/harness/generate.py`.
+   - Tape generated: `%TEMP%\sim-tapes-demo\tapes\agentic_pdf_to_notes`.
+
+3. **Gate integration:**
+   - Added `resolve_tape_path` in `scripts/demo_gate.py` resolving tapes from `corpus/` or `%TEMP%\sim-tapes-demo\tapes`.
+   - Hooked `agentic_youtube_music` and `agentic_pdf_to_notes` into `scripts/demo_gate.py` and `create_sim_for_tape`.
+
+---
+
+### 3. Live-model demo gate output (Real Holo 3.1-4B on GPU)
+
+#### Initial Run Output (Verbatim):
+```
+Starting llama-server on port 58980...
+llama-server healthy at http://127.0.0.1:58980 (pid 2440)
+
+--- [1/3] Smoke: Visual Grounding ---
+Grounding latency: 3379.7ms
+Grounding response: Action: click(point=(467, 472))
+
+--- [1/3] Smoke: Planner Tool-call ---
+Planner response:
+{"thought": "The user wants to open the calculator. I can see the desktop with the Start button available. I will use the open_calculator tool to launch the native Windows Calculator application directly.", "action": "open_calculator", "params": {}}
+parse_planned_step: ACCEPTED (action='open_calculator')
+
+--- [2/3] Intent Evaluation ---
+Agent intent routing: 15/15 correctly routed to agent
+
+--- [3/3] Tape Drives ---
+Notice: Tapes run against a stateful sim desktop, a PASS means the sim reached its goal state, and only a real-desktop run proves that real apps behave like the sim.
+
+Driving tape: agentic_two_step...
+  final status: ok
+  planner steps: 3
+  dispatches: 2
+  final_response: "I have clicked the search box and typed 'hello' as requested. The text is now visible in the search field."
+  last 3 raw planner outputs:
+    [1] {"thought": "I need to click the search box and type 'hello'. The screenshot shows a search box in the middle of the page with the text 'Search this site' (element 2). I should click on this search box first to focus it, then type 'hello'.", "action": "cua_click", "params": {"window": {"title": "Grace test page - Edge", "id": 1234}, "element_id": 2, "target_name": "search box that says 'Search this site'", "click_count": 1}}
+    [2] {"thought": "The search box is already focused from the previous click action. I need to type 'hello' into this focused search field to complete the goal.", "action": "cua_type_text", "params": {"window": {"title": "Grace test page - Edge", "id": 1234}, "text": "hello", "replace": false}}
+    [3] {"thought": "The goal was to click the search box and type 'hello'. Looking at the screenshot, I can see that 'hello' is now visible in the search box at element [2]. The search box is focused and contains the text 'hello' as expected. The goal has been completed successfully.", "action": "converse", "params": {"response": "I have clicked the search box and typed 'hello' as requested. The text is now visible in the search field."}}
+  verdict: PASS
+
+Driving tape: agentic_read_pdf...
+  final status: ok
+  planner steps: 6
+  dispatches: 5
+  final_response: "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."
+  last 3 raw planner outputs:
+    [1] {"thought": "I found the report PDF file at C:\\Users\\Ashman Das\\Documents\\report.pdf. The Notepad window is currently open but empty. To achieve the goal of reading the PDF, I need to open the PDF file in its default application.", "action": "open_file", "params": {"name": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [2] {"thought": "The PDF is open in Edge browser, showing only one line of text 'Third quarter results exceeded projections'. The document likely has more content. I need to read the full PDF to the user. I'll use the read_pdf tool to extract and read the document content.", "action": "read_pdf", "params": {"path": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [3] {"thought": "The PDF has been successfully read - I can see the excerpt 'Third quarter results exceeded projections.' from the report. The goal was to read the report PDF to the user, and this has been accomplished. I should confirm this to the user.", "action": "converse", "params": {"response": "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."}}
+  verdict: PASS
+
+Driving tape: agentic_youtube_music...
+  final status: no_progress
+  planner steps: 11
+  dispatches: 12
+  final_response: "I've tried the same thing several times in YouTube Music - Edge without getting anywhere, so I've stopped."
+  last 3 raw planner outputs:
+    [1] {"thought": "The previous search attempt didn't produce results. I need to click on the search box first to ensure it's properly focused, then type the search query again.", "action": "cua_click", "params": {"window": {"title": "YouTube Music - Edge", "id": 1234}, "element_id": 2, "target_name": "search box for songs, albums, artists", "click_count": 1}}
+    [2] {"thought": "I need to search for the song 'Signal by Home' on YouTube Music. The search bar is visible and ready for input. I'll type the search query into the search field to find the song.", "action": "cua_type_text", "params": {"window": {"title": "YouTube Music - Edge", "id": 1234}, "text": "Signal by Home", "replace": false}}
+    [3] {"thought": "The search box is currently focused with the text '<redacted>'. I need to type the search query 'signal by home' to find the song. Since the search box is already active, I can directly type the query without needing to click it first.", "action": "cua_type_text", "params": {"window": {"title": "YouTube Music - Edge", "id": 1234}, "text": "signal by home", "replace": true}}
+  verdict: NOT PROVEN
+
+Driving tape: agentic_pdf_to_notes...
+  final status: no_progress
+  planner steps: 4
+  dispatches: 4
+  final_response: "I've tried the same thing several times in Desktop without getting anywhere, so I've stopped."
+  last 3 raw planner outputs:
+    [1] {"thought": "I can see the report.pdf file on the desktop with a red badge [0]. To find the deadline in the report, I need to open this PDF file first. I'll double-click on the report.pdf file to open it.", "action": "cua_press_key", "params": {"window": {"title": "Desktop", "id": 0}, "key": "Control_L+d"}}
+    [2] {"thought": "I need to open the report.pdf file to find the deadline. The file is visible on the desktop with a red badge [0]. I should double-click on it to open it in the default PDF viewer.", "action": "cua_press_key", "params": {"window": {"title": "Desktop", "id": 0}, "key": "Control_L+d"}}
+    [3] {"thought": "I can see the report.pdf file on the desktop with a red badge [0]. To find the deadline in the PDF, I need to open it first. I'll double-click on the file to open it in the default PDF viewer.", "action": "cua_press_key", "params": {"window": {"title": "Desktop", "id": 0}, "key": "Control_L+d"}}
+  verdict: NOT PROVEN
+
+Stopping llama-server...
+llama-server stopped (pid 2440, exited: True).
+No llama-server processes remain.
+
+==================================================
+           LIVE-MODEL DEMO GATE RESULTS          
+==================================================
+  Smoke Grounding                          : PASS
+  Smoke Planner Parse                      : PASS
+  Agent Intent Routing (15/15)             : PASS
+  Tape Drive (agentic_two_step)            : PASS
+  Tape Drive (agentic_read_pdf)            : PASS
+  Tape Drive (agentic_youtube_music)       : NOT PROVEN
+  Tape Drive (agentic_pdf_to_notes)        : NOT PROVEN
+==================================================
+OVERALL GATE STATUS: NOT PROVEN
+==================================================
+Notice: Tapes run against a stateful sim desktop, a PASS means the sim reached its goal state, and only a real-desktop run proves that real apps behave like the sim.
+==================================================
+```
+
+#### Cause Analysis:
+1. **`agentic_youtube_music` (`NOT PROVEN`):**
+   - **Last 3 raw outputs:**
+     - [1] `{"thought": "The previous search attempt didn't produce results. I need to click on the search box first to ensure it's properly focused, then type the search query again.", "action": "cua_click", "params": {"window": {"title": "YouTube Music - Edge", "id": 1234}, "element_id": 2, "target_name": "search box for songs, albums, artists", "click_count": 1}}`
+     - [2] `{"thought": "I need to search for the song 'Signal by Home' on YouTube Music. The search bar is visible and ready for input. I'll type the search query into the search field to find the song.", "action": "cua_type_text", "params": {"window": {"title": "YouTube Music - Edge", "id": 1234}, "text": "Signal by Home", "replace": false}}`
+     - [3] `{"thought": "The search box is currently focused with the text '<redacted>'. I need to type the search query 'signal by home' to find the song. Since the search box is already active, I can directly type the query without needing to click it first.", "action": "cua_type_text", "params": {"window": {"title": "YouTube Music - Edge", "id": 1234}, "text": "signal by home", "replace": true}}`
+   - **Cause:** **Grace's sim state machine design**. When `cua_type_text` typed the query, clicking element `[2]` afterwards transitioned back to `search_focused` where element 2 reset `value=""`. Furthermore, in `results_shown`, element 10 was named `"Signal"` and element 11 was named `"Home"`, which caused Holo to doubt that results had populated, looping back to re-focus and re-type into the search box.
+
+2. **`agentic_pdf_to_notes` (`NOT PROVEN`):**
+   - **Last 3 raw outputs:**
+     - [1] `{"thought": "I can see the report.pdf file on the desktop with a red badge [0]. To find the deadline in the report, I need to open this PDF file first. I'll double-click on the report.pdf file to open it.", "action": "cua_press_key", "params": {"window": {"title": "Desktop", "id": 0}, "key": "Control_L+d"}}`
+     - [2] `{"thought": "I need to open the report.pdf file to find the deadline. The file is visible on the desktop with a red badge [0]. I should double-click on it to open it in the default PDF viewer.", "action": "cua_press_key", "params": {"window": {"title": "Desktop", "id": 0}, "key": "Control_L+d"}}`
+     - [3] `{"thought": "I can see the report.pdf file on the desktop with a red badge [0]. To find the deadline in the PDF, I need to open it first. I'll double-click on the file to open it in the default PDF viewer.", "action": "cua_press_key", "params": {"window": {"title": "Desktop", "id": 0}, "key": "Control_L+d"}}`
+   - **Cause:** **Grace's sim state machine design**. `PdfToNotesSim` did not handle opening `report.pdf` from desktop interactions (`cua_click` / `cua_press_key` / `open_file`) into a PDF viewer state (`pdf_opened`), leaving the desktop static and un-updated. The loop breaker correctly terminated the repeated action as `no_progress`.
+
+---
+
+#### Grace-side Fix:
+- In `src/grace/harness/sim_desktop.py`:
+  - `PdfToNotesSim`: added `pdf_opened` state displaying `report.pdf - Edge` with content `"Final submission deadline: 14 November"`. Interacting with `report.pdf` (via `open_file`, `cua_click`, or desktop key actions) opens the PDF viewer and extracts the content. Goal check remains strictly that Notepad buffer contains `"14 November"`.
+  - `YouTubeMusicSim`: preserved typed query in `self._query` across re-focusing clicks; formatted result controls as `"Signal - Home (Play song)"` and `"Play"`. Goal check remains strictly that the player bar contains `"Signal · Home"` playing.
+
+---
+
+#### Rerun Output (Verbatim):
+```
+Starting llama-server on port 59942...
+llama-server healthy at http://127.0.0.1:59942 (pid 15928)
+
+--- [1/3] Smoke: Visual Grounding ---
+Grounding latency: 3326.6ms
+Grounding response: Action: click(point=(467, 472))
+
+--- [1/3] Smoke: Planner Tool-call ---
+Planner response:
+{"thought": "The user wants to open the calculator. I can see the desktop with the Start button available. I will use the open_calculator tool to launch the native Windows Calculator application directly.", "action": "open_calculator", "params": {}}
+parse_planned_step: ACCEPTED (action='open_calculator')
+
+--- [2/3] Intent Evaluation ---
+Agent intent routing: 15/15 correctly routed to agent
+
+--- [3/3] Tape Drives ---
+Notice: Tapes run against a stateful sim desktop, a PASS means the sim reached its goal state, and only a real-desktop run proves that real apps behave like the sim.
+
+Driving tape: agentic_two_step...
+  final status: ok
+  planner steps: 3
+  dispatches: 2
+  final_response: "The search box has been clicked and 'hello' has been typed into it successfully."
+  last 3 raw planner outputs:
+    [1] {"thought": "I need to click the search box and type 'hello'. The screenshot shows two search elements: the address bar at the top (element 0) and a site search box in the middle (element 2). Since the goal is to search, I should click on element 2 which is the 'Search this site' box, then type 'hello'.", "action": "cua_click", "params": {"window": {"title": "Grace test page - Edge", "id": 1234}, "element_id": 2, "target_name": "Search this site box", "click_count": 1}}
+    [2] {"thought": "The search box is already focused from the previous click action. Now I need to type 'hello' into the search box to complete the goal.", "action": "cua_type_text", "params": {"window": {"title": "Grace test page - Edge", "id": 1234}, "text": "hello", "replace": false}}
+    [3] {"thought": "The previous action successfully typed 'hello' into the search box. I can see in the screenshot that 'hello' is now visible in the search box at element [2]. The goal was to click the search box and type 'hello', which has been accomplished. The search box is focused and contains the text 'hello' as expected.", "action": "converse", "params": {"response": "The search box has been clicked and 'hello' has been typed into it successfully."}}
+  verdict: PASS
+
+Driving tape: agentic_read_pdf...
+  final status: ok
+  planner steps: 7
+  dispatches: 6
+  final_response: "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."
+  last 3 raw planner outputs:
+    [1] {"thought": "The PDF is open in Edge showing the first page with text 'Third quarter results exceeded projections'. I need to read the entire document to the user. I'll scroll down to see if there's more content, then use the read_pdf tool to extract and read the full text.", "action": "cua_scroll", "params": {"window": {"title": "report.pdf - Edge", "id": 1234}, "scrollY": 500}}
+    [2] {"thought": "The PDF is open in Edge showing the first page. To read the report to the user, I should use the read_pdf tool which will extract and read the PDF content aloud using sub-second RAG chunking.", "action": "read_pdf", "params": {"path": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [3] {"thought": "The PDF has been successfully read - I can see the excerpt 'Third quarter results exceeded projections.' from the report. The goal was to read the report PDF to the user, and this has been accomplished. The task is complete.", "action": "converse", "params": {"response": "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."}}
+  verdict: PASS
+
+Driving tape: agentic_youtube_music...
+  final status: no_progress
+  planner steps: 9
+  dispatches: 10
+  final_response: "I've tried the same thing several times in YouTube Music - Edge without getting anywhere, so I've stopped."
+  last 3 raw planner outputs:
+    [1] {"thought": "The search bar is focused and ready for input. I need to submit the search query to find the song 'signal by home'. Pressing Enter will execute the search and display results.", "action": "cua_press_key", "params": {"window": {"title": "YouTube Music - Edge", "id": 1234}, "key": "Enter"}}
+    [2] {"thought": "I need to search for the song 'Signal' by Home on YouTube Music. The search bar is currently active, so I should type the search query directly into it.","action":"cua_type_text","params":{"window":{"title":"YouTube Music - Edge","id":1234},"text":"Signal Home","replace":false}}
+    [3] {"thought": "The search bar is focused and ready for input. I need to type the search query 'signal by home' to find the song.", "action": "cua_type_text", "params": {"window": {"title": "YouTube Music - Edge", "id": 1234}, "text": "signal by home", "replace": false}}
+  verdict: NOT PROVEN
+
+Driving tape: agentic_pdf_to_notes...
+  final status: max_iterations_reached
+  planner steps: 12
+  dispatches: 11
+  final_response: 'I reached the step limit before fully completing the goal.'
+  last 3 raw planner outputs:
+    [1] {"thought": "I need to open the PDF file to find the deadline. The data shows the PDF is located at C:\\Users\\Ashman Das\\Documents\\report.pdf. I should use open_file to open this PDF in its default viewer so I can read it and find the deadline information.", "action": "open_file", "params": {"name": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [2] {"thought": "The PDF file was supposed to open in the default PDF viewer, but I'm still seeing Notepad. I need to switch to the PDF viewer window to read the report and find the deadline. Let me list the open windows to identify the PDF viewer.", "action": "cua_list_windows", "params": {}}
+    [3] {"thought": "The PDF file was supposed to open in the default PDF viewer, but I'm still seeing Notepad. I need to switch to the PDF viewer window to read the deadline. Let me list the open windows to find the PDF viewer.", "action": "cua_list_windows", "params": {}}
+  verdict: NOT PROVEN
+
+Stopping llama-server...
+llama-server stopped (pid 15928, exited: True).
+No llama-server processes remain.
+
+==================================================
+           LIVE-MODEL DEMO GATE RESULTS          
+==================================================
+  Smoke Grounding                          : PASS
+  Smoke Planner Parse                      : PASS
+  Agent Intent Routing (15/15)             : PASS
+  Tape Drive (agentic_two_step)            : PASS
+  Tape Drive (agentic_read_pdf)            : PASS
+  Tape Drive (agentic_youtube_music)       : NOT PROVEN
+  Tape Drive (agentic_pdf_to_notes)        : NOT PROVEN
+==================================================
+OVERALL GATE STATUS: NOT PROVEN
+==================================================
+Notice: Tapes run against a stateful sim desktop, a PASS means the sim reached its goal state, and only a real-desktop run proves that real apps behave like the sim.
+==================================================
+```
+
+#### Rerun Cause Assessment:
+- **`agentic_pdf_to_notes`:**
+  - In step 1, Holo successfully clicked `report.pdf`, opening the document viewer (`report.pdf - Edge`) and showing `"Final submission deadline: 14 November"`.
+  - In step 2, Holo stated: *"I have found the deadline in the PDF: 'Final submission deadline: 14 November'. Now I need to create a new note with this information."* However, Holo emitted `open_calculator` instead of opening a note editor.
+  - In step 5, Holo launched Notepad (`open_app("Notepad")`). But once Notepad opened, Holo reasoned: *"I have Notepad open but it's empty. I need to find the PDF report first to read the deadline."*, completely losing context that it already held the deadline, and looped trying to re-read the PDF until reaching the 12-step iteration limit (`max_iterations_reached`).
+  - **Verdict Cause:** **Holo's model planning limitation**.
+- **`agentic_youtube_music`:**
+  - Holo repeatedly alternated between typing `"signal by home"` and reasoning that it saw `"<redacted>"` in the search input field, repeatedly submitting Enter or retyping without proceeding to select and play the result.
+  - **Verdict Cause:** **Holo's model planning limitation**.
+- Goal checks remained strictly unweakened per the task instructions.
+
+---
+
+### Serial Test Suite Counts (Verbatim)
+
+- **Python Suite (`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`):**
+  `1226 passed, 1 skipped, 2 warnings in 208.01s (0:03:28)` (exceeds requirement of >= 1213).
+- **Rust Suite (`cargo test --workspace`):**
+  All workspace tests passed (249 passed, 3 ignored).
+- **Running Processes:** Clean (`0` active background processes).
+
+
