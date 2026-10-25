@@ -24,6 +24,7 @@ from grace.agent.planner import Planner, PlannedStep, PlannerBudgetExceeded, par
 from grace.agent.safety import SafetyGuard
 from grace.automation.computer_use import normalize_title
 from grace.intent.parser import Intent
+from grace.intent.tools import planner_tool_names, resolve_tool_name
 from grace.llm.gemma_client import GemmaClient, RateLimitError
 from grace.tools.dispatcher import Dispatcher
 from grace.util.timing import stage
@@ -612,6 +613,35 @@ class AgentLoop:
                     return self._plan_failure_result(memory)
                 continue
 
+            # Holo invents tool names ("cua_describe_screen"). Resolve against
+            # the real registry first, so the safety guard below judges the
+            # real tool and an unknown name is never mistaken for an
+            # "unallowed action" that needs the user's yes.
+            if not self._canonicalise_action(step):
+                if step.is_completed:
+                    logger.info(
+                        f"AgentLoop: unknown tool '{step.action}' on a completion claim; "
+                        f"treating it as converse."
+                    )
+                    step.action = "converse"
+                else:
+                    consecutive_failures += 1
+                    error = (
+                        f"Unknown tool {step.action}. Valid tools: "
+                        f"{self._valid_tools_text()}"
+                    )
+                    logger.warning(f"AgentLoop: {error}")
+                    last_step = step
+                    last_result = {"status": "error", "error": error, "text": error}
+                    memory.add_step(step.thought, step.action, step.params, last_result, "Rethinking...")
+                    if consecutive_failures >= self._max_consecutive_failures:
+                        logger.error(
+                            f"AgentLoop: giving up after {consecutive_failures} consecutive "
+                            f"plans that could not be used."
+                        )
+                        return self._plan_failure_result(memory)
+                    continue
+
             consecutive_failures = 0
 
             # Retrying the identical action against the identical view. Doing
@@ -650,7 +680,7 @@ class AgentLoop:
                     # step can still be tried as originally planned.
                     logger.warning(f"Escalated re-plan rate limited, continuing without it: {e}")
                     stronger = None
-                if stronger is not None:
+                if stronger is not None and self._canonicalise_action(stronger):
                     step = stronger
                     attempt_count = sum(1 for s in attempt_history if _are_actions_equivalent(s, step)) + 1
                     attempt_history.append(step)
@@ -885,6 +915,23 @@ class AgentLoop:
         return self._result(memory)
 
     # -- pieces ------------------------------------------------------------
+
+    @staticmethod
+    def _canonicalise_action(step: PlannedStep) -> bool:
+        """Rewrite an aliased action name in place; False if no real tool fits."""
+        resolved, how = resolve_tool_name(step.action)
+        if resolved is None:
+            return False
+        if how == "alias":
+            logger.info(f"AgentLoop: resolved tool alias '{step.action}' -> '{resolved}'")
+            step.action = resolved
+        return True
+
+    @staticmethod
+    def _valid_tools_text(limit: int = 40) -> str:
+        names = planner_tool_names()
+        text = ", ".join(names[:limit])
+        return text + (", ..." if len(names) > limit else "")
 
     async def _observe(self):
         snap_res = self._perception.capture_snapshot_async()

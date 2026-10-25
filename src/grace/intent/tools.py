@@ -293,6 +293,47 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
 ALL_TOOLS: list[ToolDefinition] = CUA_TOOLS + SYSTEM_TOOLS
 
 
+# Tools the dispatcher and safety guard know that the planner is never shown.
+_UNLISTED_KNOWN_TOOLS = {"remember", "voice_training_status", "rollback_voice_model"}
+
+# Short spellings a model uses that no cua_ prefix change can reach.
+_TOOL_SYNONYMS = {
+    "type": "cua_type_text",
+    "press": "cua_press_key",
+    "hotkey": "cua_press_key",
+}
+
+
+def planner_tool_names() -> list[str]:
+    """The tool names the planner is told about, in prompt order."""
+    return [t.name for t in ALL_TOOLS if t.name != "remember"]
+
+
+def resolve_tool_name(name: str) -> tuple[Optional[str], str]:
+    """Map a model-written action name onto a real tool.
+
+    Returns ``(tool, how)``: ``how`` is ``"exact"`` for a real name,
+    ``"alias"`` for a deterministic fix (add or strip a ``cua_`` prefix, or a
+    short synonym, accepted only when exactly one real tool matches), and
+    ``(None, "unknown")`` otherwise.
+    """
+    raw = (name or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not raw:
+        return None, "unknown"
+    listed = set(planner_tool_names())
+    if raw in listed or raw in _UNLISTED_KNOWN_TOOLS:
+        return raw, "exact"
+    if raw in _TOOL_SYNONYMS:
+        return _TOOL_SYNONYMS[raw], "alias"
+    variants = {"cua_" + raw}
+    if raw.startswith("cua_"):
+        variants.add(raw[4:])
+    matches = variants & listed
+    if len(matches) == 1:
+        return matches.pop(), "alias"
+    return None, "unknown"
+
+
 def _signature(tool: ToolDefinition) -> str:
     """`name(param: type, optional: type=default)` for one tool."""
     parts = []
