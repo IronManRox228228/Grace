@@ -773,9 +773,11 @@ class AgentLoop:
                 )
                 if has_fallback:
                     logger.info(f"AgentLoop: dropping unshown element_id {raw_elem_id}; falling back to target_name/coords")
+                    step.params["_raw_element_id"] = raw_elem_id
                     step.params.pop("element_id", None)
                     step.params.pop("element_index", None)
                 elif rendered_ids and step.action in ("cua_click", "cua_secondary_action", "cua_set_value", "cua_drag"):
+                    step.params["_raw_element_id"] = raw_elem_id
                     step.params.pop("element_id", None)
                     step.params.pop("element_index", None)
                     shown_sample = sorted(list(rendered_ids))[:10]
@@ -1545,8 +1547,16 @@ def _are_actions_equivalent(step_a: Optional[PlannedStep], step_b: Optional[Plan
     params_a = step_a.params or {}
     params_b = step_b.params or {}
 
-    elem_a = params_a.get("element_id") if params_a.get("element_id") is not None else params_a.get("element_index")
-    elem_b = params_b.get("element_id") if params_b.get("element_id") is not None else params_b.get("element_index")
+    elem_a = (
+        params_a.get("_raw_element_id")
+        if params_a.get("_raw_element_id") is not None
+        else (params_a.get("element_id") if params_a.get("element_id") is not None else params_a.get("element_index"))
+    )
+    elem_b = (
+        params_b.get("_raw_element_id")
+        if params_b.get("_raw_element_id") is not None
+        else (params_b.get("element_id") if params_b.get("element_id") is not None else params_b.get("element_index"))
+    )
 
     # If both reference an element ID / index
     if elem_a is not None and elem_b is not None:
