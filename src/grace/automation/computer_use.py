@@ -906,15 +906,22 @@ class ComputerUse:
                 "evidence": "action aborted by fail-safe",
             }
 
+        submit = bool(params.get("submit", False))
+        if submit:
+            pyautogui.press("enter")
+
         _invalidate_graph()
         verified, evidence = self._probe_typed(text, bool(params.get("replace")))
+        msg = f"Typed {len(text)} characters{focus_note}"
+        if submit:
+            msg += " and pressed Enter"
         return {
             "ok": True,
             "sent": True,
             "verified": verified,
             "evidence": evidence,
             "action": "type_text",
-            "message": f"Typed {len(text)} characters{focus_note}",
+            "message": msg,
         }
 
     @staticmethod

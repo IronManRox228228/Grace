@@ -640,7 +640,7 @@ class YouTubeMusicSim(BaseTapeSim):
                     for el in self.states[sname].elements:
                         if el.id == 2:
                             el.value = text
-            if "\n" in text or "\r" in text:
+            if "\n" in text or "\r" in text or params.get("submit"):
                 self.current_state_name = "results_shown"
                 return {"status": "ok", "result": {"ok": True, "message": "typed and submitted query", "verified": True, "sent": True}}
             if "signal" in text.lower() or "home" in text.lower():

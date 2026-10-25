@@ -50,6 +50,7 @@ CUA_TOOLS: list[ToolDefinition] = [
             ToolParam("window", "Target window object", True, None, "dict"),
             ToolParam("text", "The exact text string to type", True, None, "str"),
             ToolParam("replace", "Clear the field before typing. Use this for a second search in a box that already holds the first one.", False, "false", "bool"),
+            ToolParam("submit", "Press Enter after typing. This is how most search boxes and forms are submitted.", False, "false", "bool"),
         ],
         requires_cua=True,
     ),

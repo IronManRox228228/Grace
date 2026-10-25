@@ -64,6 +64,7 @@ pub static CUA_TOOLS: &[ToolDefinition] = &[
             ToolParam::req("window", "Target window object", "dict"),
             ToolParam::req("text", "The exact text string to type", "str"),
             ToolParam::opt("replace", "Clear the field before typing. Use this for a second search in a box that already holds the first one.", "false", "bool"),
+            ToolParam::opt("submit", "Press Enter after typing. This is how most search boxes and forms are submitted.", "false", "bool"),
         ]
     ),
     cua_tool!(
