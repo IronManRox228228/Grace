@@ -944,8 +944,10 @@ class Dispatcher:
 
     async def _describe_screen(self, params: dict) -> dict:
         """Describe what is currently visible on the screen."""
+        from grace.agent.planner import wrap_untrusted
+        from grace.perception.elements import FRAME_PAGE, FRAME_CHROME
+
         title = ""
-        elements_summary = []
         try:
             import win32gui
             hwnd = win32gui.GetForegroundWindow()
@@ -953,26 +955,103 @@ class Dispatcher:
         except Exception:
             title = "Current screen"
 
+        elements_summary = []
+        body_lines = []
+
         try:
             from grace.agent.perception import PerceptionEngine
             graph = PerceptionEngine.get_graph_builder().get()
             if graph and graph.elements:
-                named = [
-                    e.name for e in graph.elements
-                    if e.name and e.role in ("button", "edit", "link", "menuitem", "tabitem")
-                ][:5]
-                if named:
-                    elements_summary = named
+                if getattr(graph, "window", None) and getattr(graph.window, "title", None):
+                    if not title or title in ("Desktop", "Current screen"):
+                        title = graph.window.title
+
+                CHROME_BUTTON_NAMES = {"minimize", "maximize", "restore", "close", "workspace button", "guide", "system menu"}
+
+                def is_chrome(e):
+                    f = getattr(e, "frame", "")
+                    n = (getattr(e, "name", "") or "").lower().strip()
+                    return f == FRAME_CHROME or (f != FRAME_PAGE and n in CHROME_BUTTON_NAMES)
+
+                def is_ocr(e):
+                    return getattr(e, "source", "") == "ocr" or (getattr(e, "role", "") == "text" and getattr(e, "source", "") == "ocr")
+
+                all_elems = [e for e in graph.elements if getattr(e, "name", None) and str(e.name).strip()]
+
+                focused_elems = [e for e in all_elems if getattr(e, "focused", False) and not is_chrome(e)]
+                page_elems = [e for e in all_elems if getattr(e, "frame", "") == FRAME_PAGE and not is_ocr(e) and not is_chrome(e)]
+                app_elems = [e for e in all_elems if getattr(e, "frame", "") not in (FRAME_PAGE, FRAME_CHROME) and not is_ocr(e) and not is_chrome(e)]
+                ocr_elems = [e for e in all_elems if is_ocr(e) and not getattr(e, "offscreen", False) and not is_chrome(e)]
+
+                # Sort OCR lines in reading order (top-to-bottom, left-to-right)
+                def ocr_key(e):
+                    r = getattr(e, "rect", None)
+                    if r and isinstance(r, (list, tuple)) and len(r) >= 2:
+                        return (r[1], r[0])
+                    c = getattr(e, "center", None)
+                    if c and isinstance(c, (list, tuple)) and len(c) >= 2:
+                        return (c[1], c[0])
+                    return (0, 0)
+                ocr_elems.sort(key=ocr_key)
+
+                chrome_elems = [e for e in all_elems if is_chrome(e)]
+
+                # Prioritize: focused -> page -> app -> ocr -> chrome
+                ordered_elems = []
+                seen_ids = set()
+
+                for e in focused_elems + page_elems + app_elems + ocr_elems + chrome_elems:
+                    eid = getattr(e, "id", None)
+                    if eid is not None and eid in seen_ids:
+                        continue
+                    if eid is not None:
+                        seen_ids.add(eid)
+                    ordered_elems.append(e)
+
+                for e in ordered_elems:
+                    if len(body_lines) >= 25:
+                        break
+                    name = str(e.name).strip()
+                    role = (getattr(e, "role", "") or "").lower().strip()
+                    is_focused = getattr(e, "focused", False)
+
+                    if is_focused:
+                        line = f"Focused {role or 'element'}: '{name}'"
+                    elif role in ("heading", "header"):
+                        line = f"Heading: '{name}'"
+                    elif role in ("listitem", "item"):
+                        line = f"Item: '{name}'"
+                    elif role in ("button", "link", "hyperlink", "edit", "searchbox", "combobox", "tabitem", "menuitem"):
+                        line = f"{role.capitalize()}: '{name}'"
+                    elif is_ocr(e):
+                        line = f"Text: '{name}'"
+                    else:
+                        line = f"'{name}' ({role})" if role else f"'{name}'"
+
+                    body_lines.append(line)
+                    elements_summary.append(name)
         except Exception as e:
             logger.debug(f"Perception graph unavailable for describe_screen: {e}")
 
-        if elements_summary:
-            controls_str = ", ".join(f"'{name}'" for name in elements_summary)
-            text = f"You are looking at {title}. Key controls: {controls_str}."
+        header = f"Active window: {title}" if title else "Active window: Unknown"
+        if body_lines:
+            # Cap at 1200 chars
+            capped_lines = []
+            cur_len = len(header) + 1
+            for l in body_lines:
+                entry = f"- {l}"
+                if cur_len + len(entry) + 1 > 1200:
+                    break
+                capped_lines.append(entry)
+                cur_len += len(entry) + 1
+            body = header + "\n" + "\n".join(capped_lines)
+            elements_summary = elements_summary[:len(capped_lines)]
         elif title:
-            text = f"The active window is {title}."
+            body = f"{header}\nNo content elements detected."
         else:
-            text = "I cannot detect an active application on screen."
+            body = "I cannot detect an active application on screen."
+
+        text = wrap_untrusted(body)
 
         return {
             "status": "ok",
