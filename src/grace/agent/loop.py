@@ -754,12 +754,12 @@ class AgentLoop:
             if raw_elem_id is not None:
                 try:
                     eid = int(raw_elem_id)
-                    if rendered_ids:
+                    if rendered_ids is not None:
                         is_shown_id = eid in rendered_ids
                     elif snapshot and getattr(snapshot, "graph", None) is not None:
                         is_shown_id = snapshot.graph.by_id(eid) is not None
                     else:
-                        is_shown_id = True
+                        is_shown_id = False
                 except (ValueError, TypeError):
                     is_shown_id = False
 
@@ -767,15 +767,18 @@ class AgentLoop:
             # Otherwise return an honest error that lists a few shown ids.
             unshown_error_result = None
             if raw_elem_id is not None and not is_shown_id:
-                logger.info(f"AgentLoop: dropping unshown element_id {raw_elem_id}")
-                step.params.pop("element_id", None)
-                step.params.pop("element_index", None)
                 has_fallback = (
                     (step.params.get("x") is not None and step.params.get("y") is not None)
                     or bool(step.params.get("target_name") or step.params.get("name") or step.params.get("label"))
                 )
-                if not has_fallback and step.action in ("cua_click", "cua_secondary_action", "cua_set_value", "cua_drag"):
-                    shown_sample = sorted(list(rendered_ids))[:10] if rendered_ids else []
+                if has_fallback:
+                    logger.info(f"AgentLoop: dropping unshown element_id {raw_elem_id}; falling back to target_name/coords")
+                    step.params.pop("element_id", None)
+                    step.params.pop("element_index", None)
+                elif rendered_ids and step.action in ("cua_click", "cua_secondary_action", "cua_set_value", "cua_drag"):
+                    step.params.pop("element_id", None)
+                    step.params.pop("element_index", None)
+                    shown_sample = sorted(list(rendered_ids))[:10]
                     shown_str = f" Available shown element ids: {shown_sample}" if shown_sample else ""
                     err_msg = f"Element [{raw_elem_id}] is not on screen.{shown_str}"
                     unshown_error_result = {
