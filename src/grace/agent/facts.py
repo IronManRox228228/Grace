@@ -64,6 +64,12 @@ def looks_like_passphrase(s: str) -> bool:
             if delim in s:
                 parts = s.split(delim)
                 if len(parts) >= 3 and all(len(p) >= 3 and p.isalpha() for p in parts) and len(s) >= 14:
+                    if delim == '.' and parts[-1].lower() in (
+                        "com", "org", "net", "edu", "gov", "io", "ai", "app", "dev", "co",
+                        "uk", "de", "jp", "fr", "ca", "au", "in", "ru", "ch", "it", "nl",
+                        "se", "no", "es", "mil", "xyz", "site", "online", "tech",
+                    ):
+                        return False
                     return True
     return False
 

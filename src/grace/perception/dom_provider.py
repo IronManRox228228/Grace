@@ -196,6 +196,13 @@ class DomProvider:
                 continue
 
             role = AX_ROLE_MAP.get((raw.get("role") or "").lower(), (raw.get("role") or "generic").lower())
+            raw_val = (raw.get("value") or "")[:120]
+            raw_type = (raw.get("type") or "").lower()
+            from grace.perception.elements import redact_element_value_if_secret
+            is_pwd = raw_type == "password" or role == "password"
+            clean_val = "<redacted>" if is_pwd else redact_element_value_if_secret(
+                raw_val, role=role, name=name, placeholder=placeholder, automation_id=automation_id
+            )
             elements.append(
                 ElementNode(
                     id=index,
@@ -203,7 +210,7 @@ class DomProvider:
                     name=name[:160],
                     rect=(left, top, left + width, top + height),
                     center=(left + width // 2, top + height // 2),
-                    value=(raw.get("value") or "")[:120],
+                    value=clean_val,
                     placeholder=placeholder[:120],
                     # Everything CDP sees is page content by definition.
                     frame=FRAME_PAGE,

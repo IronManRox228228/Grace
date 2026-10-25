@@ -27,6 +27,46 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from grace.agent.facts import looks_like_secret, looks_like_secret_value
+
+PASSWORD_HINTS = (
+    "password", "passwd", "pwd", "secret", "pin", "token", "api_key", "apikey",
+    "cvv", "cvc", "ssn", "credit_card", "passphrase",
+)
+
+
+def is_password_element(
+    role: Optional[str] = "",
+    name: Optional[str] = "",
+    placeholder: Optional[str] = "",
+    automation_id: Optional[str] = "",
+) -> bool:
+    """Return True if an element's role or attributes identify it as a password/PIN field."""
+    role_str = (role or "").lower()
+    if role_str == "password":
+        return True
+    combined = f"{name or ''} {placeholder or ''} {automation_id or ''}".lower()
+    return any(hint in combined for hint in ("password", "passwd", "pwd", "pin"))
+
+
+def redact_element_value_if_secret(
+    value: str,
+    role: Optional[str] = "",
+    name: Optional[str] = "",
+    placeholder: Optional[str] = "",
+    automation_id: Optional[str] = "",
+) -> str:
+    """Return '<redacted>' if this element is a password field or value is secret-shaped."""
+    if not value or value == "<redacted>":
+        return value
+    if is_password_element(role, name, placeholder, automation_id):
+        return "<redacted>"
+    if looks_like_secret(name or role or "", value) or looks_like_secret_value(value):
+        return "<redacted>"
+    return value
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
 FRAME_CHROME = "chrome"
 FRAME_PAGE = "page"
 FRAME_APP = "app"
@@ -111,6 +151,16 @@ class ElementNode:
             p for p in (self.name, self.placeholder, self.value, self.automation_id) if p
         ).lower()
 
+    @property
+    def safe_value(self) -> str:
+        return redact_element_value_if_secret(
+            self.value,
+            role=self.role,
+            name=self.name,
+            placeholder=self.placeholder,
+            automation_id=self.automation_id,
+        )
+
     def to_dict(self, compact: bool = False) -> dict[str, Any]:
         """Serialise. ``compact`` drops defaults to keep prompts small."""
         data: dict[str, Any] = {
@@ -121,10 +171,11 @@ class ElementNode:
             "center": list(self.center),
             "frame": self.frame,
         }
+        val = self.safe_value
         if not compact:
             data.update(
                 {
-                    "value": self.value,
+                    "value": val,
                     "placeholder": self.placeholder,
                     "container": self.container,
                     "focused": self.focused,
@@ -138,8 +189,8 @@ class ElementNode:
             return data
 
         # Compact: only carry what actually differs from the default.
-        if self.value:
-            data["value"] = self.value
+        if val:
+            data["value"] = val
         if self.placeholder:
             data["placeholder"] = self.placeholder
         if self.container:

@@ -95,6 +95,8 @@ def redact_string(text: str, username: str = "", home: str = "") -> str:
             return word
         if word.startswith("cua_") or "UNTRUSTED_DATA" in word:
             return word
+        if re.search(r"\.(?:com|org|net|edu|gov|io|ai|app|dev|co|uk|de|jp|fr|ca|au|in|ru|ch|it|nl|se|no|es|mil|xyz|site|online|tech)\b", word, re.IGNORECASE):
+            return word
         return "<redacted>"
     out = _PASSPHRASE_PATTERN.sub(_sub_passphrase, out)
 
@@ -119,6 +121,7 @@ def redact_data(data: Any, username: str = "", home: str = "") -> Any:
         role = data.get("role")
         name = data.get("name")
         is_pwd_element = _is_password_field(role, name)
+        is_element_node = "id" in data and "role" in data and "rect" in data
 
         for k, v in data.items():
             # Tool names and contract event types are never user secrets
@@ -132,6 +135,15 @@ def redact_data(data: Any, username: str = "", home: str = "") -> Any:
             # Redact password field values in element snapshots
             if is_pwd_element and k_lower in ("value", "text"):
                 new_dict[k] = "<redacted>"
+                continue
+
+            # Keep ordinary text field values visible in element snapshots unless secret-shaped
+            if is_element_node and k_lower in ("value", "text") and not is_pwd_element:
+                from grace.agent.facts import looks_like_secret, looks_like_secret_value
+                if looks_like_secret(name or role or "", str(v)) or looks_like_secret_value(str(v)):
+                    new_dict[k] = "<redacted>"
+                else:
+                    new_dict[k] = v
                 continue
 
             # Redact password fields in tool dispatch params

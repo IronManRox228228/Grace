@@ -112,6 +112,7 @@ class _Uia:
             "aria_role": client.UIA_AriaRolePropertyId,
             "aria_props": client.UIA_AriaPropertiesPropertyId,
             "value": client.UIA_ValueValuePropertyId,
+            "is_password": getattr(client, "UIA_IsPasswordPropertyId", 30019),
         }
 
         # One request, reused for every walk: each element then costs a single
@@ -302,13 +303,20 @@ class UiaProvider:
         if len(name) > MAX_NAME_LEN:
             name = name[:MAX_NAME_LEN]
 
+        raw_val = str(_cached(element, uia.props["value"], "") or "")[:120]
+        is_pwd = bool(_cached(element, uia.props.get("is_password", 0), False))
+        from grace.perception.elements import redact_element_value_if_secret
+        clean_val = "<redacted>" if is_pwd else redact_element_value_if_secret(
+            raw_val, role=role, name=name, placeholder=placeholder, automation_id=automation_id
+        )
+
         node = ElementNode(
             id=counter[0],
             role=role,
             name=name,
             rect=(left, top, right, bottom),
             center=(left + width // 2, top + height // 2),
-            value=str(_cached(element, uia.props["value"], "") or "")[:120],
+            value=clean_val,
             placeholder=placeholder[:120],
             frame=frame,
             container=container,
