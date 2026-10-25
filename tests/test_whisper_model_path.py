@@ -86,6 +86,29 @@ class TestDownloadRoot:
         assert "download_root" in attempts[0]
         assert "download_root" not in attempts[1]
 
+    def test_memory_error_does_not_fall_back_to_hf_cache(self, fake_backend, caplog):
+        import logging
+        attempts = []
+
+        class OutOfMemoryError(RuntimeError):
+            pass
+
+        class FailingMemory(FakeWhisperModel):
+            def __init__(self, model_path, **kwargs):
+                attempts.append(kwargs)
+                raise OutOfMemoryError("mkl_malloc: failed to allocate memory")
+
+        sys.modules["faster_whisper"].WhisperModel = FailingMemory
+
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(OutOfMemoryError):
+                WhisperStreaming("small")._initialize()
+
+        assert len(attempts) == 1, "Must not retry against HF cache on a memory error"
+        all_logs = [r.message for r in caplog.records]
+        assert not any("Whisper not found under" in m for m in all_logs)
+        assert any("memory" in m.lower() or "failed to load" in m.lower() for m in all_logs)
+
     def test_initialize_is_idempotent(self, fake_backend):
         stream = WhisperStreaming("small")
         stream._initialize()

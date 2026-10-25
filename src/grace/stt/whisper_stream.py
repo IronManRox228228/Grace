@@ -27,6 +27,39 @@ def _default_download_root() -> Optional[str]:
     return root if os.path.isdir(root) else None
 
 
+def _is_memory_error(e: Exception) -> bool:
+    if isinstance(e, MemoryError):
+        return True
+    msg = str(e).lower()
+    return any(
+        term in msg
+        for term in (
+            "mkl_malloc",
+            "failed to allocate memory",
+            "out of memory",
+            "cannot allocate memory",
+            "bad alloc",
+            "bad_alloc",
+            "cuda out of memory",
+        )
+    )
+
+
+def _is_not_found_error(e: Exception) -> bool:
+    if isinstance(e, FileNotFoundError):
+        return True
+    msg = str(e).lower()
+    return any(
+        term in msg
+        for term in (
+            "not found",
+            "no such file",
+            "does not exist",
+            "cannot find",
+        )
+    )
+
+
 class WhisperStreaming:
     """Whisper speech-to-text engine.
 
@@ -56,7 +89,6 @@ class WhisperStreaming:
         self._initialized = False
         self._initial_prompt: Optional[str] = None
         # Whisper always resamples to 16 kHz internally; used only to size the
-
         # one second of silence fed to warmup().
         self._sample_rate_hint = 16000
 
@@ -94,10 +126,23 @@ class WhisperStreaming:
         except Exception as e:
             if "download_root" not in kwargs:
                 raise
-            logger.warning(
-                f"Whisper not found under {self._download_root} ({e}); "
-                "retrying with the default HuggingFace cache"
-            )
+            if _is_memory_error(e):
+                logger.error(
+                    f"Whisper failed to load under {self._download_root} due to memory exhaustion ({e}); "
+                    "not falling back to default HuggingFace cache"
+                )
+                raise
+
+            if _is_not_found_error(e):
+                logger.warning(
+                    f"Whisper not found under {self._download_root} ({e}); "
+                    "retrying with the default HuggingFace cache"
+                )
+            else:
+                logger.warning(
+                    f"Whisper failed to load under {self._download_root} ({e}); "
+                    "retrying with the default HuggingFace cache"
+                )
             kwargs.pop("download_root")
             self._model = WhisperModel(self._model_path, **kwargs)
 
@@ -151,7 +196,6 @@ class WhisperStreaming:
         """Set initial prompt text for vocabulary biasing."""
         self._initial_prompt = prompt
 
-
     def _transcribe_pcm(self, raw_bytes: bytes) -> str:
         """Convert int16 PCM bytes to float32 audio and run Whisper inference."""
         buf = raw_bytes
@@ -181,7 +225,6 @@ class WhisperStreaming:
             **kwargs,
         )
         text = "".join(segment.text for segment in segments).strip()
-
 
         # Tape the *unmodified* input bytes, not the trimmed buffer: whisper-rs
         # has to be fed exactly what faster-whisper was fed, odd trailing byte
