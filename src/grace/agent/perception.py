@@ -378,7 +378,7 @@ class Observation:
         return self.mode == OBSERVABILITY_BLIND
 
 
-def observe_for_planner(snapshot: "ScreenSnapshot") -> Observation:
+def observe_for_planner(snapshot: "ScreenSnapshot", is_single: bool = False) -> Observation:
     """Choose an observation that matches what this window will support.
 
     A textual element list and a screenshot are not interchangeable, and mixing
@@ -401,6 +401,15 @@ def observe_for_planner(snapshot: "ScreenSnapshot") -> Observation:
     proceeds badly beats one that cannot proceed.
     """
     from grace.automation import som_overlay
+
+    import base64
+
+    if is_single and snapshot.png_bytes:
+        return Observation(
+            markdown=snapshot.to_markdown(),
+            image_b64=base64.b64encode(snapshot.png_bytes).decode("ascii"),
+            mode=OBSERVABILITY_RICH,
+        )
 
     if not snapshot.is_blind:
         return Observation(markdown=snapshot.to_markdown(), mode=OBSERVABILITY_RICH)

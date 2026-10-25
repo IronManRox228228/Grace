@@ -17,7 +17,7 @@ import time
 from types import SimpleNamespace
 from typing import Any, Optional
 
-from grace.agent.grounder import Grounder, describe_target
+from grace.agent.grounder import Grounder, describe_target, scale_to_screen
 from grace.agent.memory import AgentMemory
 from grace.agent.perception import PerceptionEngine, observe_for_planner
 from grace.agent.planner import Planner, PlannedStep, PlannerBudgetExceeded, parse_planned_step
@@ -160,10 +160,18 @@ class AgentLoop:
         memory_store: Optional[Any] = None,
         run_capture: Optional[Any] = None,
         settler: Optional[Any] = None,
+        fleet_config: Optional[Any] = None,
     ):
         self._config = config
         self._memory_store = memory_store
         self._run_capture = run_capture
+        from grace.fleet import get_fleet_config
+        from grace.agent.element_scorer import ElementScorer
+        from grace.agent.decision_ladder import DecisionLadder
+        self._fleet_config = fleet_config or get_fleet_config(getattr(config, "preset", None), config)
+        self._element_scorer = ElementScorer(self._fleet_config.get_slot("element_selection"))
+        self._decision_ladder = DecisionLadder(fleet_config=self._fleet_config, element_scorer=self._element_scorer)
+
         from grace.agent.screen_settler import ScreenSettler
         settle_max_ms = _config_int("observe_settle_max_ms", 3000, config=config)
         self._settler = settler or ScreenSettler(max_ms=settle_max_ms)
@@ -177,6 +185,7 @@ class AgentLoop:
             gemma,
             max_calls=_config_int("planner_max_calls_per_goal", 0, config=config),
             run_capture=run_capture,
+            fleet_config=self._fleet_config,
         )
         if getattr(self._planner, "run_capture", None) is None and run_capture is not None:
             self._planner.run_capture = run_capture
@@ -228,13 +237,7 @@ class AgentLoop:
         AgentLoop._cancel_flag = False
         AgentLoop._typing_cut_off = False
 
-        # Fleet Configuration & Decision Models (PLAN §3, §5, Task 13)
-        from grace.fleet import get_fleet_config
-        from grace.agent.element_scorer import ElementScorer
-        from grace.agent.decision_ladder import DecisionLadder
-        self._fleet_config = get_fleet_config(getattr(config, "preset", None), config)
-        self._element_scorer = ElementScorer(self._fleet_config.get_slot("element_selection"))
-        self._decision_ladder = DecisionLadder(fleet_config=self._fleet_config, element_scorer=self._element_scorer)
+# Fleet Configuration initialized above
 
         try:
             from grace.automation.computer_use import ComputerUse
@@ -539,7 +542,7 @@ class AgentLoop:
             # Built once and reused: the mode decides both what the planner is
             # shown and what counts as "the view changed", and deriving those
             # from two separate renderings is how they drift apart.
-            view = observe_for_planner(snapshot)
+            view = observe_for_planner(snapshot, is_single=self._fleet_config.is_single)
             if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
                 self._run_capture.record_screenshot(step_no=step_no, snapshot=snapshot, view=view)
 
@@ -744,26 +747,105 @@ class AgentLoop:
             except Exception:
                 pass
 
-            # The planner prompt says there is no x/y, so one that arrives is in
-            # an unknown space (Holo tends to answer in [0, 1000]) and would be
-            # clicked raw. When the step also says what it is aiming at, drop
-            # it and let the grounder, which converts properly, place it.
-            if (
-                step.action in ("cua_click", "cua_secondary_action", "cua_set_value")
-                and step.params.get("x") is not None
-                and step.params.get("y") is not None
-                and (step.params.get("target_name") or step.params.get("describe"))
-            ):
-                logger.info(
-                    f"AgentLoop: ignoring planner-written x/y "
-                    f"({step.params.get('x')}, {step.params.get('y')}); grounding by name"
+            is_single = getattr(self._fleet_config, "is_single", False)
+            raw_elem_id = step.params.get("element_id") if step.params.get("element_id") is not None else step.params.get("element_index")
+            rendered_ids = getattr(step, "rendered_element_ids", None)
+            is_shown_id = False
+            if raw_elem_id is not None:
+                try:
+                    eid = int(raw_elem_id)
+                    if rendered_ids is not None:
+                        is_shown_id = eid in rendered_ids
+                    elif snapshot and getattr(snapshot, "graph", None) is not None:
+                        is_shown_id = snapshot.graph.by_id(eid) is not None
+                    else:
+                        is_shown_id = True
+                except (ValueError, TypeError):
+                    is_shown_id = False
+
+            # Unshown id: drop it (it's literally not on the list). If x/y or target_name is present, use that.
+            # Otherwise return an honest error that lists a few shown ids.
+            unshown_error_result = None
+            if raw_elem_id is not None and not is_shown_id:
+                logger.info(f"AgentLoop: dropping unshown element_id {raw_elem_id}")
+                step.params.pop("element_id", None)
+                step.params.pop("element_index", None)
+                has_fallback = (
+                    (step.params.get("x") is not None and step.params.get("y") is not None)
+                    or bool(step.params.get("target_name") or step.params.get("name") or step.params.get("label"))
                 )
-                step.params.pop("x", None)
-                step.params.pop("y", None)
+                if not has_fallback and step.action in ("cua_click", "cua_secondary_action", "cua_set_value", "cua_drag"):
+                    shown_sample = sorted(list(rendered_ids))[:10] if rendered_ids else []
+                    shown_str = f" Available shown element ids: {shown_sample}" if shown_sample else ""
+                    err_msg = f"Element [{raw_elem_id}] is not on screen.{shown_str}"
+                    unshown_error_result = {
+                        "status": "error",
+                        "error": err_msg,
+                        "text": f"Action error: {err_msg}",
+                        "result": {
+                            "ok": False,
+                            "sent": False,
+                            "verified": False,
+                            "status": "element_not_found",
+                            "action": step.action,
+                            "error": err_msg,
+                            "evidence": "element not in shown list",
+                        },
+                    }
+
+            # In single mode:
+            # - If shown element_id given: it wins over x/y, never invokes grounder.
+            # - If x/y given (without shown id): scale to screen coordinates; do NOT strip because target_name is present.
+            if is_shown_id:
+                if step.params.get("x") is not None and step.params.get("y") is not None:
+                    step.params["_id_won_over_xy"] = True
+                    step.params.pop("x", None)
+                    step.params.pop("y", None)
+            elif is_single:
+                if step.params.get("x") is not None and step.params.get("y") is not None:
+                    try:
+                        raw_x = float(step.params["x"])
+                        raw_y = float(step.params["y"])
+                        img_size = (
+                            getattr(snapshot, "image_width", 0) or getattr(snapshot, "width", 1920),
+                            getattr(snapshot, "image_height", 0) or getattr(snapshot, "height", 1080),
+                        )
+                        scr_size = (
+                            getattr(snapshot, "width", 1920),
+                            getattr(snapshot, "height", 1080),
+                        )
+                        coord_fmt = getattr(self._grounder, "_coordinate_format", "0-1000")
+                        if not isinstance(coord_fmt, str):
+                            coord_fmt = "0-1000"
+                        scaled = scale_to_screen(raw_x, raw_y, img_size, scr_size, coord_fmt)
+                        if scaled is not None:
+                            step.params["x"], step.params["y"] = scaled
+                            logger.info(f"AgentLoop: single mode normalized coords ({raw_x}, {raw_y}) -> screen {scaled}")
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Failed to scale coordinates: {e}")
+            else:
+                # Fleet mode: strip planner-written x/y when target_name is present
+                if (
+                    step.action in ("cua_click", "cua_secondary_action", "cua_set_value")
+                    and step.params.get("x") is not None
+                    and step.params.get("y") is not None
+                    and (step.params.get("target_name") or step.params.get("describe"))
+                ):
+                    logger.info(
+                        f"AgentLoop: ignoring planner-written x/y "
+                        f"({step.params.get('x')}, {step.params.get('y')}); grounding by name"
+                    )
+                    step.params.pop("x", None)
+                    step.params.pop("y", None)
 
             grounded_point = None
             was_grounded = False
-            if step.needs_grounding or rung == "reground":
+            should_ground = (
+                not is_shown_id
+                and (step.params.get("x") is None or step.params.get("y") is None)
+                and (step.needs_grounding or rung == "reground")
+            )
+            if should_ground:
                 was_grounded = True
                 async with stage(f"ground#{step_no}"):
                     await self._ground(step, snapshot, force=(rung == "reground"))
@@ -816,7 +898,10 @@ class AgentLoop:
 
             # Executed before the completion check so a final step that also
             # performs an action is never skipped.
-            exec_result = await self._dispatch(step, memory)
+            if unshown_error_result is not None:
+                exec_result = unshown_error_result
+            else:
+                exec_result = await self._dispatch(step, memory)
 
             # When executor returns "not found" for a named target, and this step
             # wasn't already grounded, ground it once and retry the click in the same step.

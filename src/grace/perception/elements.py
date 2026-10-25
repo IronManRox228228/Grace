@@ -274,15 +274,21 @@ def elements_to_json(
 def elements_to_prompt(
     elements: list[ElementNode],
     limit: Optional[int] = 40,
+    prioritize_page: bool = True,
 ) -> str:
     """Render the element graph as a labelled JSON block for the prompt."""
     if not elements:
         return "### Interactive Elements: (none detected)"
 
-    subset = elements[:limit] if limit else elements
+    ordered = elements
+    if prioritize_page and any(getattr(e, "frame", "") == FRAME_PAGE for e in elements):
+        ordered = sorted(elements, key=lambda e: 0 if getattr(e, "frame", "") == FRAME_PAGE else 1)
+
+    subset = ordered[:limit] if limit else ordered
     frames = {e.frame for e in subset}
     header = ["### Interactive Elements (click/type by `id`)"]
-    if FRAME_CHROME in frames and FRAME_PAGE in frames:
+    all_frames = {getattr(e, "frame", "") for e in elements}
+    if (FRAME_CHROME in frames and FRAME_PAGE in frames) or (FRAME_CHROME in all_frames and FRAME_PAGE in all_frames):
         header.append(
             "Note: `frame` is \"chrome\" for browser UI (address bar, tabs) and "
             "\"page\" for content inside the web page. A site's own search box is "

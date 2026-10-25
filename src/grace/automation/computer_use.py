@@ -416,7 +416,8 @@ class ComputerUse:
         window_raw = params.get("window")
         window = _normalize_window(window_raw)
         target_name = params.get("target_name") or params.get("name") or params.get("label")
-        element_index = _to_int(params.get("element_index"))
+        raw_id = params.get("element_id") if params.get("element_id") is not None else params.get("element_index")
+        element_index = _to_int(raw_id)
         if params.get("target_guidance") or params.get("_target_guidance"):
             element_index = None
         elif "_rendered_element_ids" in params:
@@ -991,6 +992,8 @@ class ComputerUse:
             "width": img.width,
             "height": img.height,
             "mimeType": "image/png",
+            "message": "screenshot attached to your next step",
+            "text": "screenshot attached to your next step",
         }
 
     def _scroll(self, params: dict[str, Any]) -> dict[str, Any]:

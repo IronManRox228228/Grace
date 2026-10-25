@@ -1,0 +1,281 @@
+"""Tests for Cockpit 1: Single Mode (gpu-single) driving by screenshot and pointing."""
+
+import asyncio
+import base64
+from unittest.mock import AsyncMock, MagicMock, patch
+import pytest
+
+from grace.agent.loop import AgentLoop
+from grace.agent.perception import ScreenSnapshot, WindowInfo, observe_for_planner
+from grace.agent.planner import PlannedStep, Planner
+from grace.agent.grounder import GroundedPoint
+from grace.fleet import build_gpu_single_preset, build_cpu_fleet_preset
+from grace.perception.element_graph import ElementGraph, WindowRef
+from grace.perception.elements import ElementNode, FRAME_CHROME, FRAME_PAGE, elements_to_prompt
+
+
+def make_test_node(element_id: int, name: str, frame: str = FRAME_PAGE, rect=(100, 100, 200, 150)):
+    return ElementNode(
+        id=element_id,
+        role="button",
+        name=name,
+        rect=rect,
+        center=((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2),
+        frame=frame,
+    )
+
+
+def make_snapshot(elements, image_size=(1280, 720), screen_size=(1920, 1080)):
+    graph = ElementGraph(
+        elements=elements,
+        window=WindowRef(hwnd=1001, title="Test Window", class_name="Chrome_WidgetWin_1"),
+    )
+    return ScreenSnapshot(
+        active_window=WindowInfo(hwnd=1001, title="Test Window", class_name="Chrome_WidgetWin_1", rect=(0, 0, screen_size[0], screen_size[1])),
+        ocr_lines=[],
+        width=screen_size[0],
+        height=screen_size[1],
+        png_bytes=b"fake-png-bytes-for-single-mode",
+        graph=graph,
+        image_width=image_size[0],
+        image_height=image_size[1],
+    )
+
+
+def test_page_frame_elements_appear_first():
+    """Page-frame elements come first in elements_to_prompt."""
+    chrome1 = make_test_node(1, "Minimize", frame=FRAME_CHROME)
+    chrome2 = make_test_node(2, "Close", frame=FRAME_CHROME)
+    page1 = make_test_node(39, "SignalHome", frame=FRAME_PAGE)
+    page2 = make_test_node(40, "OtherSong", frame=FRAME_PAGE)
+
+    prompt = elements_to_prompt([chrome1, chrome2, page1, page2], limit=40)
+    # The JSON array should list page elements first
+    assert prompt.index('"id": 39') < prompt.index('"id": 1')
+    assert prompt.index('"id": 40') < prompt.index('"id": 2')
+
+
+def test_planner_call_includes_image_b64_on_every_step_in_single_mode():
+    """Single mode observation attaches image_b64 to every step."""
+    snap = make_snapshot([make_test_node(1, "Button")])
+    view_single = observe_for_planner(snap, is_single=True)
+    assert view_single.image_b64 is not None
+    assert base64.b64decode(view_single.image_b64) == b"fake-png-bytes-for-single-mode"
+
+    # Fleet mode should not have image_b64 on rich steps
+    view_fleet = observe_for_planner(snap, is_single=False)
+    assert view_fleet.image_b64 is None
+
+
+@pytest.mark.asyncio
+async def test_shown_element_id_plus_target_name_never_invokes_grounder():
+    """Step 7: shown element_id=39 plus a target_name never invokes the grounder, and clicks 39."""
+    gemma = AsyncMock()
+    dispatcher = AsyncMock()
+    perception = MagicMock()
+    grounder = AsyncMock()
+
+    elements = [make_test_node(39, "SignalHome", frame=FRAME_PAGE, rect=(380, 318, 839, 366))]
+    snap = make_snapshot(elements)
+    perception.capture_snapshot.return_value = snap
+
+    # Holo returns cua_click with element_id=39 and target_name, then completes
+    gemma.generate_text.side_effect = [
+        '{"thought": "Click song", "action": "cua_click", "params": {"element_id": 39, "target_name": "Signal song result entry", "click_count": 1}, "is_completed": false, "user_update": "Clicking song"}',
+        '{"thought": "Done", "action": "converse", "params": {"response": "Playing"}, "is_completed": true, "final_response": "Playing"}',
+    ]
+
+    dispatcher.execute.return_value = {
+        "status": "ok",
+        "result": {"ok": True, "sent": True, "verified": True, "message": "Clicked at (609, 342)"},
+    }
+
+    loop = AgentLoop(
+        gemma=gemma,
+        dispatcher=dispatcher,
+        perception=perception,
+        grounder=grounder,
+        fleet_config=build_gpu_single_preset(),
+    )
+
+    result = await loop.run("play signal")
+    assert result["status"] == "ok"
+
+    # Grounder must NEVER be called
+    assert grounder.locate.call_count == 0
+
+    # Dispatcher was called with element_id=39
+    calls = [c[0][0] for c in dispatcher.execute.call_args_list if c[0][0].tool == "cua_click"]
+    assert len(calls) == 1
+    assert calls[0].params.get("element_id") == 39
+
+
+@pytest.mark.asyncio
+async def test_pointing_x_y_converted_and_not_stripped_with_target_name():
+    """Holo-style x=258, y=320 in [0-1000] on 1920x1080 clicks screen (495, 346), with target_name present and not stripped."""
+    gemma = AsyncMock()
+    dispatcher = AsyncMock()
+    perception = MagicMock()
+    grounder = AsyncMock()
+
+    snap = make_snapshot([], image_size=(1920, 1080), screen_size=(1920, 1080))
+    perception.capture_snapshot.return_value = snap
+
+    gemma.generate_text.side_effect = [
+        '{"thought": "Click coordinates", "action": "cua_click", "params": {"x": 258, "y": 320, "target_name": "Signal song result entry"}, "is_completed": false, "user_update": "Clicking"}',
+        '{"thought": "Done", "action": "converse", "params": {"response": "Playing"}, "is_completed": true, "final_response": "Playing"}',
+    ]
+
+    dispatcher.execute.return_value = {
+        "status": "ok",
+        "result": {"ok": True, "sent": True, "verified": True, "message": "Clicked"},
+    }
+
+    loop = AgentLoop(
+        gemma=gemma,
+        dispatcher=dispatcher,
+        perception=perception,
+        grounder=grounder,
+        fleet_config=build_gpu_single_preset(),
+    )
+
+    result = await loop.run("click target")
+    assert result["status"] == "ok"
+
+    # Grounder was not called because coordinates were supplied
+    assert grounder.locate.call_count == 0
+
+    # Dispatcher received the scaled coordinates: x=495, y=346 and target_name was NOT stripped
+    calls = [c[0][0] for c in dispatcher.execute.call_args_list if c[0][0].tool == "cua_click"]
+    assert len(calls) == 1
+    assert calls[0].params.get("x") == 495
+    assert calls[0].params.get("y") == 346
+    assert calls[0].params.get("target_name") == "Signal song result entry"
+
+
+@pytest.mark.asyncio
+async def test_unshown_element_id_without_fallback_gives_honest_error():
+    """Unshown element_id=141 with no x/y and no target_name gives an honest error listing shown ids."""
+    gemma = AsyncMock()
+    dispatcher = AsyncMock()
+    perception = MagicMock()
+    grounder = AsyncMock()
+
+    elements = [make_test_node(1, "Search", frame=FRAME_PAGE), make_test_node(2, "Home", frame=FRAME_PAGE)]
+    snap = make_snapshot(elements)
+    perception.capture_snapshot.return_value = snap
+
+    # Step 1: Model asks for unshown id 141 with no fallback
+    # Step 2: Model recovers with converse
+    gemma.generate_text.side_effect = [
+        '{"thought": "Click 141", "action": "cua_click", "params": {"element_id": 141}, "is_completed": false, "user_update": "Clicking 141"}',
+        '{"thought": "Give up", "action": "converse", "params": {"response": "Cannot find it"}, "is_completed": true, "final_response": "Cannot find it"}',
+    ]
+    dispatcher.execute.return_value = {
+        "status": "ok",
+        "result": {"ok": True, "sent": True, "verified": True, "message": "Done"},
+    }
+
+    loop = AgentLoop(
+        gemma=gemma,
+        dispatcher=dispatcher,
+        perception=perception,
+        grounder=grounder,
+        fleet_config=build_gpu_single_preset(),
+    )
+
+    result = await loop.run("test unshown id")
+    assert result["status"] == "ok"
+
+    # Step 1 should have failed honestly with error listing shown ids
+    steps = result["steps"]
+    assert len(steps) >= 1
+    assert "Element [141] is not on screen" in steps[0]["result"]["error"]
+    assert "[1, 2]" in steps[0]["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_both_xy_and_shown_id_given_id_wins():
+    """Both x/y and a shown id given: the id wins, and notes that."""
+    gemma = AsyncMock()
+    dispatcher = AsyncMock()
+    perception = MagicMock()
+    grounder = AsyncMock()
+
+    elements = [make_test_node(5, "PlayButton", frame=FRAME_PAGE, rect=(100, 200, 150, 250))]
+    snap = make_snapshot(elements)
+    perception.capture_snapshot.return_value = snap
+
+    gemma.generate_text.side_effect = [
+        '{"thought": "Click both", "action": "cua_click", "params": {"element_id": 5, "x": 500, "y": 500}, "is_completed": false, "user_update": "Clicking"}',
+        '{"thought": "Done", "action": "converse", "params": {"response": "Done"}, "is_completed": true, "final_response": "Done"}',
+    ]
+
+    dispatcher.execute.return_value = {
+        "status": "ok",
+        "result": {"ok": True, "sent": True, "verified": True, "message": "Clicked"},
+    }
+
+    loop = AgentLoop(
+        gemma=gemma,
+        dispatcher=dispatcher,
+        perception=perception,
+        grounder=grounder,
+        fleet_config=build_gpu_single_preset(),
+    )
+
+    result = await loop.run("test both")
+    assert result["status"] == "ok"
+
+    calls = [c[0][0] for c in dispatcher.execute.call_args_list if c[0][0].tool == "cua_click"]
+    assert len(calls) == 1
+    assert calls[0].params.get("element_id") == 5
+    assert calls[0].params.get("_id_won_over_xy") is True
+
+
+@pytest.mark.asyncio
+async def test_cua_screenshot_leads_to_next_step_prompt_saying_attached():
+    """cua_screenshot leads to the next step's prompt saying the screenshot is attached."""
+    gemma = AsyncMock()
+    dispatcher = AsyncMock()
+    perception = MagicMock()
+    grounder = AsyncMock()
+
+    elements = [make_test_node(1, "Search", frame=FRAME_PAGE)]
+    snap = make_snapshot(elements)
+    perception.capture_snapshot.return_value = snap
+
+    # Step 1: Holo takes screenshot
+    # Step 2: Holo sees prompt and concludes
+    gemma.generate_text.side_effect = [
+        '{"thought": "Take screenshot", "action": "cua_screenshot", "params": {}, "is_completed": false, "user_update": "Taking screenshot"}',
+        '{"thought": "Done", "action": "converse", "params": {"response": "Saw screenshot"}, "is_completed": true, "final_response": "Saw screenshot"}',
+    ]
+
+    dispatcher.execute.return_value = {
+        "status": "ok",
+        "result": {
+            "ok": True,
+            "action": "screenshot",
+            "png_b64": "fake_b64",
+            "message": "screenshot attached to your next step",
+            "text": "screenshot attached to your next step",
+        },
+    }
+
+    loop = AgentLoop(
+        gemma=gemma,
+        dispatcher=dispatcher,
+        perception=perception,
+        grounder=grounder,
+        fleet_config=build_gpu_single_preset(),
+    )
+    loop._verify_goal_completion = MagicMock(return_value=(True, None))
+
+    result = await loop.run("inspect screen")
+    assert result["status"] == "ok"
+
+    # Verify gemma second call prompt contains "screenshot attached to your next step"
+    assert gemma.generate_text.call_count == 2
+    second_prompt = gemma.generate_text.call_args_list[1][1]["prompt"]
+    assert "screenshot attached to your next step" in second_prompt

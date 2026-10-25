@@ -167,22 +167,25 @@ class TestCoordinatesAreNotOffered:
     """
 
     POSITIONAL = {"x", "y", "from_x", "from_y", "to_x", "to_y"}
+    ALLOWED_POINTING_TOOLS = {"cua_click", "cua_secondary_action"}
 
-    def test_no_tool_declares_a_coordinate_parameter(self):
+    def test_no_unexpected_tool_declares_a_coordinate_parameter(self):
         offenders = {
             tool.name: sorted({p.name for p in tool.params} & self.POSITIONAL)
             for tool in ALL_TOOLS
-            if {p.name for p in tool.params} & self.POSITIONAL
+            if tool.name not in self.ALLOWED_POINTING_TOOLS and ({p.name for p in tool.params} & self.POSITIONAL)
         }
         assert offenders == {}, (
-            f"these tools still offer the model a position to invent: {offenders}"
+            f"these tools still offer the model an unexpected position to invent: {offenders}"
         )
 
-    def test_click_offers_an_id_and_a_name_instead(self):
+    def test_click_offers_an_id_and_a_name_and_normalized_coords(self):
         click = next(t for t in ALL_TOOLS if t.name == "cua_click")
         params = {p.name for p in click.params}
         assert "element_id" in params
         assert "target_name" in params
+        assert "x" in params
+        assert "y" in params
 
     def test_drag_takes_two_elements(self):
         drag = next(t for t in ALL_TOOLS if t.name == "cua_drag")

@@ -146,13 +146,31 @@ class PlannedStep:
         }
 
 
-def get_planner_system_prompt() -> str:
+def get_planner_system_prompt(is_single: bool = True) -> str:
     """System prompt for the planner. JSON only - no Thought/Action syntax here.
 
     The old single prompt told the model "Do NOT output JSON" while the user
     message demanded "ONLY valid JSON inside fences". Each prompt in the split
     is now internally consistent: planner speaks JSON, grounder handles coordinates.
     """
+    if is_single:
+        screen_guidance = """The screen is shown to you as the current screenshot of the active window, and an interactive element list is provided as a secondary reference.
+
+You may interact in any of these ways:
+- **By position (pointing):** `cua_click` (and `cua_secondary_action`) accepts `x` and `y` in normalised `[0-1000]` coordinates of the screenshot you are shown. `(0, 0)` is the top-left corner, and `(1000, 1000)` is the bottom-right corner.
+- **By element id:** Provide `element_id` from the interactive elements list. If both `element_id` and `x`/`y` are given, the element id takes precedence.
+- **By description:** Provide `target_name` alone in plain words (e.g. 'the search box'). A visual grounder will locate it as a fallback."""
+    else:
+        screen_guidance = """The screen is described to you in one of two ways, and you will always get exactly one of them.
+
+**An element list.** A JSON array of the controls the app reports, each with an `id`. Target them with `element_id`. This is exact - the id you name is the control that gets clicked.
+
+**A marked screenshot.** Some apps report nothing useful to Windows, so instead you get an image with a red numbered badge on every target, and a legend naming them. The badge numbers are element ids: answer with `element_id` exactly as you would from a list. Read the image to decide *which* number; read the legend to check what it is.
+
+If what you need has no id and no badge:
+- Use `target_name` to describe it in plain words ("the search box", "the Chemistry group in the chat list"). That hands it to a visual model that locates it properly.
+- Or use the keyboard. Shortcuts and typing go to the focused window whatever the screen description shows, and are often the most reliable route in an app you cannot read."""
+
     return f"""You are the planner for Grace, a voice assistant that operates Windows 11 for a user who cannot use a keyboard or mouse.
 
 You are given the user's goal, what is currently on screen, what you have already done, and whether the last step did what you expected. You decide the single next step.
@@ -160,15 +178,7 @@ You are given the user's goal, what is currently on screen, what you have alread
 Tools:
 {format_tools_for_prompt()}
 
-The screen is described to you in one of two ways, and you will always get exactly one of them.
-
-**An element list.** A JSON array of the controls the app reports, each with an `id`. Target them with `element_id`. This is exact - the id you name is the control that gets clicked.
-
-**A marked screenshot.** Some apps report nothing useful to Windows, so instead you get an image with a red numbered badge on every target, and a legend naming them. The badge numbers are element ids: answer with `element_id` exactly as you would from a list. Read the image to decide *which* number; read the legend to check what it is.
-
-You cannot click a position. There is no `x`/`y` - a coordinate you reason out from a picture lands somewhere arbitrary, and this is the single most common way a goal has failed. If what you need has no id and no badge:
-- Use `target_name` to describe it in plain words ("the search box", "the Chemistry group in the chat list"). That hands it to a visual model that locates it properly.
-- Or use the keyboard. Shortcuts and typing go to the focused window whatever the screen description shows, and are often the most reliable route in an app you cannot read.
+{screen_guidance}
 
 About `frame`:
 - `"chrome"` is the browser's own UI: address bar, tabs, bookmarks, back button.
@@ -214,13 +224,26 @@ def extract_rendered_element_ids(text: Any) -> set[int]:
 class Planner:
     """Wraps the cloud model with a per-goal call budget and JSON parsing."""
 
-    def __init__(self, llm, max_calls: int = DEFAULT_MAX_CALLS, run_capture: Optional[Any] = None):
+    def __init__(
+        self,
+        llm,
+        max_calls: int = DEFAULT_MAX_CALLS,
+        run_capture: Optional[Any] = None,
+        fleet_config: Optional[Any] = None,
+        is_single: Optional[bool] = None,
+    ):
         self._llm = llm
         # 0 or negative disables the cap entirely.
         self._max_calls = max_calls if max_calls and max_calls > 0 else math.inf
         self._calls = 0
         self._last_rendered_ids: set[int] = set()
-        self._system_prompt = get_planner_system_prompt()
+        if is_single is not None:
+            self._is_single = is_single
+        elif fleet_config is not None:
+            self._is_single = getattr(fleet_config, "is_single", True)
+        else:
+            self._is_single = True
+        self._system_prompt = get_planner_system_prompt(is_single=self._is_single)
         self.run_capture = run_capture
 
     @property
@@ -387,12 +410,17 @@ class Planner:
             try:
                 eid = int(raw_id)
                 if hide_tree or (eid not in rendered_element_ids):
-                    target_name = step.params.get("target_name") or step.params.get("name")
-                    logger.info(
-                        f"Dropping unshown element_id {eid} (rendered in prompt: {rendered_element_ids}); "
-                        f"resolving by target_name='{target_name}' or coordinates"
+                    has_fb = (
+                        (step.params.get("x") is not None and step.params.get("y") is not None)
+                        or bool(step.params.get("target_name") or step.params.get("name"))
                     )
-                    step.params.pop("element_id", None)
+                    if has_fb:
+                        target_name = step.params.get("target_name") or step.params.get("name")
+                        logger.info(
+                            f"Dropping unshown element_id {eid} (rendered in prompt: {rendered_element_ids}); "
+                            f"resolving by target_name='{target_name}' or coordinates"
+                        )
+                        step.params.pop("element_id", None)
             except (ValueError, TypeError):
                 step.params.pop("element_id", None)
 

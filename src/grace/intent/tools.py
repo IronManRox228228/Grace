@@ -32,11 +32,13 @@ class ToolDefinition:
 CUA_TOOLS: list[ToolDefinition] = [
     ToolDefinition(
         name="cua_click",
-        description="Click a control, identified by its element id or by name. Never by position.",
+        description="Click a control, identified by its element id, coordinates x,y in [0-1000] space, or by name.",
         params=[
             ToolParam("window", "Window object target (e.g. {'title': 'Edge'}; id only if copied from cua_list_windows)", True, None, "dict"),
             ToolParam("element_id", "The `id` of an element from the element list, or the number on a badge in the marked screenshot. The two are the same numbering.", False, None, "int"),
-            ToolParam("target_name", "What to click, in plain words, when it has no id or badge (e.g. 'the search box'). Resolved by a visual model.", False, None, "str"),
+            ToolParam("x", "X coordinate in normalised [0-1000] space of the screenshot", False, None, "int"),
+            ToolParam("y", "Y coordinate in normalised [0-1000] space of the screenshot", False, None, "int"),
+            ToolParam("target_name", "What to click, in plain words, when it has no id or coordinates (e.g. 'the search box'). Resolved by a visual model.", False, None, "str"),
             ToolParam("click_count", "Number of clicks (1 for single-click, 2 for double-click)", False, "1", "int"),
         ],
         requires_cua=True,
@@ -145,10 +147,12 @@ CUA_TOOLS: list[ToolDefinition] = [
     ),
     ToolDefinition(
         name="cua_secondary_action",
-        description="Trigger a context menu or secondary action on a target element.",
+        description="Trigger a context menu or secondary action on a target element or coordinates in [0-1000] space.",
         params=[
             ToolParam("window", "Target window object", True, None, "dict"),
-            ToolParam("element_id", "The `id` of the element from the interactive elements list", True, None, "int"),
+            ToolParam("element_id", "The `id` of the element from the interactive elements list", False, None, "int"),
+            ToolParam("x", "X coordinate in normalised [0-1000] space of the screenshot", False, None, "int"),
+            ToolParam("y", "Y coordinate in normalised [0-1000] space of the screenshot", False, None, "int"),
             ToolParam("action", "Action name (e.g. 'Raise', 'Scroll Up', 'Context Menu')", True, None, "str"),
         ],
         requires_cua=True,
