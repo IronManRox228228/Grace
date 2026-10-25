@@ -15,6 +15,7 @@ class TestWindowActivation:
         """GetForegroundWindow returning 0 is treated as transient switch and resolves within 500ms."""
         cu = ComputerUse()
         target_hwnd = 12345
+        cu._list_windows = MagicMock(return_value={"ok": True, "windows": [{"id": 12345, "title": "Target App"}]})
 
         # Mock win32gui and user32
         with patch("win32gui.IsWindow", return_value=True), \
@@ -45,6 +46,7 @@ class TestWindowActivation:
         """Techniques are tried in order 2 -> 3 -> 5 -> 4, stopping at the first verified success."""
         cu = ComputerUse()
         target_hwnd = 54321
+        cu._list_windows = MagicMock(return_value={"ok": True, "windows": [{"id": 54321, "title": "Target App"}]})
 
         call_log = []
 
