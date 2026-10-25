@@ -1425,3 +1425,22 @@ Added `runs/` to `.gitignore` - the user reviews these, and Claude reads them.
 event schema was not observable without a live run, so treat the WebSocket
 capture as best effort and review the first real run's output.
 
+
+### Item 7 — hardware tier: NVIDIA dGPU detection — DONE
+
+Commit `b728f48` `feat(hardware): detect discrete NVIDIA dGPU as its own tier (real-desktop #7)` — pushed to origin/main.
+
+**Root cause:** `tier.py` had no discrete NVIDIA GPU branch, so an RTX 4060 reported "cpu" while llama-server ran on CUDA dGPU.
+
+**Fix:**
+- `src/grace/tier.py`: added `HardwareTier.BEST_DGPU = "dgpu"` and a `has_dgpu` field on `TierDiagnostics`; added `check_dgpu_available()` (NVML via pynvml if installed, else `nvidia-smi -L`). `detect_hardware_tier` now reports "dgpu" (honest label, CUDA compute available) when a dGPU is present; the low-RAM rule still forces the CPU floor first, and dGPU is checked after NPU but before iGPU.
+- `src/grace/fleet.py`: dGPU tier triggers the gpu-single preset (Holo3.1-4B on CUDA serves all slots), same as NPU; CPU floor and iGPU keep the micromodel fleet.
+- `thread_budget.py` and `decision_ladder.py` needed no code change: dGPU is not `FLOOR_CPU`, so TTS lookahead stays enabled and rung-3 midsize still runs (no early handoff to the user); `main.py`'s `--mmap` logic treats dGPU as non-CPU.
+
+**Tests:** `tests/test_tier_detection.py` (dGPU selection, precedence over iGPU, low-RAM forces floor, has_dgpu flag, dGPU triggers gpu-single fleet); `tests/test_fleet_switchover.py` (forces cpu-fleet so the escalation result is hermetic); `tests/test_benchmark_harness.py` ("dgpu" added to allowed tiers); `tests/test_secure_desktop.py` (has_dgpu field in fixture).
+
+**Suite:** `6 failed, 1288 passed, 1 skipped` (up from 1283; no regressions; the 6 failures are pre-existing on HEAD).
+
+
+---
+
