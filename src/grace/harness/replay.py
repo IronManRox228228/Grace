@@ -233,7 +233,7 @@ class TapePerception:
         self._records = [r["snapshot"] for r in tape.snapshots]
         self._index = 0
 
-    def capture_snapshot(self):
+    def capture_snapshot(self, is_single: bool = False):
         if self._index >= len(self._records):
             raise TapeExhausted(
                 f"the backend requested snapshot #{self._index + 1} but the tape "
@@ -243,8 +243,8 @@ class TapePerception:
         self._index += 1
         return _rebuild_snapshot(record)
 
-    async def capture_snapshot_async(self):
-        return self.capture_snapshot()
+    async def capture_snapshot_async(self, is_single: bool = False):
+        return self.capture_snapshot(is_single=is_single)
 
 
 def _rebuild_snapshot(record: dict):

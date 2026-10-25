@@ -266,7 +266,7 @@ class ScriptedPerception:
         self._rebuild = _rebuild_snapshot
         self.observations = 0
 
-    def capture_snapshot(self):
+    def capture_snapshot(self, is_single: bool = False):
         from ..agent.perception import _snapshot_tape
         from .recorder import get_recorder
 
@@ -279,8 +279,8 @@ class ScriptedPerception:
             recorder.record_snapshot(_snapshot_tape(snapshot))
         return snapshot
 
-    async def capture_snapshot_async(self):
-        return self.capture_snapshot()
+    async def capture_snapshot_async(self, is_single: bool = False):
+        return self.capture_snapshot(is_single=is_single)
 
 
 class ScriptedPump:

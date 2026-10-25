@@ -1051,7 +1051,7 @@ class AgentLoop:
         return text + (", ..." if len(names) > limit else "")
 
     async def _observe(self):
-        is_single = bool(getattr(self._fleet_config, "is_single", False))
+        is_single = bool(getattr(getattr(self, "_fleet_config", None), "is_single", False))
         try:
             snap_res = self._perception.capture_snapshot_async(is_single=is_single)
         except TypeError:
@@ -1170,7 +1170,7 @@ class AgentLoop:
             return ""
 
         if is_single is None:
-            is_single = bool(getattr(self._fleet_config, "is_single", False))
+            is_single = bool(getattr(getattr(self, "_fleet_config", None), "is_single", False))
         target = "screenshot" if is_single else "screen description"
         expect = (last_step.expect or "").strip()
         if expect:
