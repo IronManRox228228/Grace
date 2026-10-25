@@ -107,3 +107,58 @@ class TestWindowGuard:
         assert res["ok"] is False
         assert res["status"] == "wrong_window"
         assert len(fake_gui.calls) == 0  # No key was dispatched
+
+
+class TestWindowTitleNormalization:
+    """Zero-width characters in window titles (real-desktop.md #9).
+
+    Edge Beta embeds a U+200B in its title ("Microsoft​ Edge"), so raw string
+    comparison made Grace refuse the right window. Titles are normalised
+    everywhere they're compared or shown to the planner.
+    """
+
+    ZERO_WIDTH_TITLE = "New tab - Personal - Microsoft\u200b Edge Beta"
+    PLAIN_TITLE = "New tab - Personal - Microsoft Edge Beta"
+
+    def test_normalize_title_strips_zero_width_and_collapses_whitespace(self):
+        from grace.automation.computer_use import normalize_title
+
+        assert normalize_title(self.ZERO_WIDTH_TITLE) == self.PLAIN_TITLE
+        # Each zero-width / format char is stripped (not replaced by a space).
+        assert normalize_title("a\u200bb") == "ab"      # U+200B
+        assert normalize_title("a\u200cb") == "ab"      # U+200C
+        assert normalize_title("a\u200db") == "ab"      # U+200D
+        assert normalize_title("a\u2060b") == "ab"      # U+2060
+        assert normalize_title("\ufeffab") == "ab"      # U+FEFF
+        # NFKC + whitespace collapse.
+        assert normalize_title("  Microsoft   Edge  ") == "Microsoft Edge"
+        assert normalize_title("") == ""
+
+    def test_foreground_title_is_normalised(self, monkeypatch):
+        import win32gui
+
+        monkeypatch.setattr(win32gui, "GetForegroundWindow", lambda: 1234)
+        monkeypatch.setattr(win32gui, "GetWindowText", lambda hwnd: self.ZERO_WIDTH_TITLE)
+        from grace.automation.computer_use import _foreground_title
+
+        assert _foreground_title() == self.PLAIN_TITLE
+
+    def test_wrong_window_matches_despite_zero_width_char_in_foreground(self, monkeypatch):
+        """The planner names the window without the U+200B: must not refuse."""
+        monkeypatch.setattr(
+            "grace.automation.computer_use._foreground_title",
+            lambda: self.ZERO_WIDTH_TITLE,
+        )
+
+        refused = _wrong_window({"window": {"title": self.PLAIN_TITLE}}, "click")
+        assert refused is None
+
+    def test_wrong_window_still_refuses_genuinely_different_title(self, monkeypatch):
+        monkeypatch.setattr("grace.automation.computer_use._foreground_title", lambda: "Calculator")
+
+        refused = _wrong_window({"window": {"title": self.PLAIN_TITLE}}, "click")
+        assert refused is not None
+        assert refused["ok"] is False
+        assert refused["status"] == "wrong_window"
+        assert self.PLAIN_TITLE in refused["error"]
+        assert "Calculator" in refused["error"]

@@ -5,12 +5,33 @@ import logging
 import os
 import subprocess
 import time
+import unicodedata
 from typing import Any, Optional
 
 from grace.automation.dpi_helper import DPIHelper
 DPIHelper.ensure_dpi_aware()
 
 logger = logging.getLogger("grace.computer_use")
+
+#: Zero-width and format characters Edge Beta embeds in window titles
+#: (U+200B–U+200D, U+2060, U+FEFF). Raw string comparison of titles that
+#: contain them fails even when the planner named the right window.
+_ZERO_WIDTH_CHARS = frozenset("\u200b\u200c\u200d\u2060\ufeff")
+
+
+def normalize_title(title: str) -> str:
+    """Normalise a window title for comparison and display.
+
+    Strips zero-width/format characters (U+200B–U+200D, U+2060, U+FEFF),
+    applies NFKC normalisation, and collapses whitespace. Edge Beta embeds a
+    U+200B in its title ("Microsoft​ Edge"), so comparing raw strings made
+    Grace refuse the very window the planner asked for.
+    """
+    if not title:
+        return ""
+    title = "".join(ch for ch in title if ch not in _ZERO_WIDTH_CHARS)
+    title = unicodedata.normalize("NFKC", title)
+    return " ".join(title.split())
 
 
 def _invalidate_graph() -> None:
@@ -179,7 +200,7 @@ def _foreground_title() -> str:
     try:
         import win32gui
 
-        return win32gui.GetWindowText(win32gui.GetForegroundWindow()) or ""
+        return normalize_title(win32gui.GetWindowText(win32gui.GetForegroundWindow()) or "")
     except Exception:
         return ""
 
@@ -200,8 +221,8 @@ def _wrong_window(
     typing or clicking. Aborts the action if focus changed.
     """
     wanted = _normalize_window(params.get("window")).get("title") or ""
-    wanted = str(wanted).strip()
-    actual = _foreground_title()
+    wanted = normalize_title(str(wanted)).strip()
+    actual = normalize_title(_foreground_title())
 
     if wanted:
         if not actual:
@@ -221,7 +242,7 @@ def _wrong_window(
         }
 
     if initial_title and actual:
-        a, b = initial_title.lower(), actual.lower()
+        a, b = normalize_title(initial_title).lower(), actual.lower()
         if not (a in b or b in a):
             return {
                 "ok": False,
@@ -229,7 +250,7 @@ def _wrong_window(
                 "verified": False,
                 "status": "wrong_window",
                 "action": action,
-                "error": (f"Target window changed from '{initial_title}' to '{actual}' before {action}. "
+                "error": (f"Target window changed from '{normalize_title(initial_title)}' to '{actual}' before {action}. "
                           f"Action aborted to prevent misdirected input."),
                 "evidence": f"foreground window changed to '{actual}'",
             }
@@ -1032,16 +1053,18 @@ class ComputerUse:
 
         window = _normalize_window(params.get("window"))
         hwnd = params.get("hwnd") or params.get("id") or window.get("id") or window.get("hwnd")
-        window_title = params.get("window_title") or params.get("title") or window.get("title") or window.get("app") or params.get("app", "")
+        window_title = normalize_title(
+            params.get("window_title") or params.get("title") or window.get("title") or window.get("app") or params.get("app", "")
+        )
         if isinstance(params.get("window"), str) and not window_title:
-            window_title = params.get("window")
+            window_title = normalize_title(params.get("window"))
 
         if hwnd:
             try:
                 if win32gui.IsWindow(hwnd):
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                     win32gui.SetForegroundWindow(hwnd)
-                    return self._activated(win32gui.GetWindowText(hwnd) or str(hwnd))
+                    return self._activated(normalize_title(win32gui.GetWindowText(hwnd) or str(hwnd)))
             except Exception as e:
                 logger.debug(f"Activate via hwnd failed: {e}")
 
@@ -1049,8 +1072,8 @@ class ComputerUse:
             def enum_window(h, results):
                 try:
                     if win32gui.IsWindowVisible(h):
-                        t = win32gui.GetWindowText(h)
-                        if window_title.lower() in t.lower():
+                        t = normalize_title(win32gui.GetWindowText(h) or "")
+                        if window_title and (window_title in t or t in window_title):
                             results.append(h)
                 except Exception:
                     pass
@@ -1096,7 +1119,7 @@ class ComputerUse:
         """
         time.sleep(SETTLE_SECONDS)
         actual = _foreground_title()
-        wanted_l, actual_l = wanted.lower(), actual.lower()
+        wanted_l, actual_l = normalize_title(wanted).lower(), actual.lower()
         verified = bool(actual) and (wanted_l in actual_l or actual_l in wanted_l)
         return {
             "ok": True,

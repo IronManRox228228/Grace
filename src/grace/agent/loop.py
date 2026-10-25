@@ -21,6 +21,7 @@ from grace.agent.memory import AgentMemory
 from grace.agent.perception import PerceptionEngine, observe_for_planner
 from grace.agent.planner import Planner, PlannedStep, PlannerBudgetExceeded, parse_planned_step
 from grace.agent.safety import SafetyGuard
+from grace.automation.computer_use import normalize_title
 from grace.intent.parser import Intent
 from grace.llm.gemma_client import GemmaClient, RateLimitError
 from grace.tools.dispatcher import Dispatcher
@@ -669,7 +670,7 @@ class AgentLoop:
             )
             if target_window and isinstance(target_window, str):
                 cur_title = _window_title(snapshot)
-                if cur_title and target_window.lower() not in cur_title.lower() and step.action != "open_app":
+                if cur_title and normalize_title(target_window).lower() not in cur_title.lower() and step.action != "open_app":
                     logger.info(f"AgentLoop: harness switching app focus to '{target_window}'")
                     await self._dispatcher.execute(Intent(tool="cua_activate", params={"window_title": target_window}))
 

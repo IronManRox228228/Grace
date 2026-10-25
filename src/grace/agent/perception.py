@@ -13,6 +13,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Optional, List
 
+from grace.automation.computer_use import normalize_title
 from grace.harness import get_recorder
 
 logger = logging.getLogger("grace.agent.perception")
@@ -586,7 +587,7 @@ class PerceptionEngine:
             hwnd = win32gui.GetForegroundWindow()
             if not hwnd:
                 return None
-            title = win32gui.GetWindowText(hwnd)
+            title = normalize_title(win32gui.GetWindowText(hwnd))
             class_name = win32gui.GetClassName(hwnd)
             rect = win32gui.GetWindowRect(hwnd)
             return WindowInfo(

@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from grace.automation.computer_use import normalize_title
 from grace.perception.elements import (
     FRAME_PAGE,
     ElementNode,
@@ -158,7 +159,7 @@ class ElementGraphBuilder:
                 return WindowRef()
             return WindowRef(
                 hwnd=hwnd,
-                title=win32gui.GetWindowText(hwnd),
+                title=normalize_title(win32gui.GetWindowText(hwnd)),
                 class_name=win32gui.GetClassName(hwnd),
                 rect=tuple(win32gui.GetWindowRect(hwnd)),
             )
