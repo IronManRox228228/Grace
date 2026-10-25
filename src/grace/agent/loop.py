@@ -754,7 +754,7 @@ class AgentLoop:
             if raw_elem_id is not None:
                 try:
                     eid = int(raw_elem_id)
-                    if rendered_ids is not None:
+                    if rendered_ids:
                         is_shown_id = eid in rendered_ids
                     elif snapshot and getattr(snapshot, "graph", None) is not None:
                         is_shown_id = snapshot.graph.by_id(eid) is not None
@@ -806,6 +806,8 @@ class AgentLoop:
                     try:
                         raw_x = float(step.params["x"])
                         raw_y = float(step.params["y"])
+                        step.params["_raw_x"] = raw_x
+                        step.params["_raw_y"] = raw_y
                         img_size = (
                             getattr(snapshot, "image_width", 0) or getattr(snapshot, "width", 1920),
                             getattr(snapshot, "image_height", 0) or getattr(snapshot, "height", 1080),
@@ -859,7 +861,7 @@ class AgentLoop:
             if step.action.startswith("cua_"):
                 if snapshot and getattr(snapshot, "graph", None) is not None:
                     step.params["_graph"] = snapshot.graph
-                if hasattr(step, "rendered_element_ids") and step.rendered_element_ids is not None:
+                if hasattr(step, "rendered_element_ids") and step.rendered_element_ids:
                     step.params["_rendered_element_ids"] = set(step.rendered_element_ids)
                 if hide_tree or getattr(step, "target_guidance", False):
                     step.params["_target_guidance"] = True
@@ -1552,11 +1554,15 @@ def _are_actions_equivalent(step_a: Optional[PlannedStep], step_b: Optional[Plan
         return False
 
     # If both have x, y coordinates, match if within 12px
-    if "x" in params_a and "y" in params_a and "x" in params_b and "y" in params_b:
+    x_a = params_a.get("_raw_x", params_a.get("x"))
+    y_a = params_a.get("_raw_y", params_a.get("y"))
+    x_b = params_b.get("_raw_x", params_b.get("x"))
+    y_b = params_b.get("_raw_y", params_b.get("y"))
+    if x_a is not None and y_a is not None and x_b is not None and y_b is not None:
         try:
-            x_a, y_a = float(params_a["x"]), float(params_a["y"])
-            x_b, y_b = float(params_b["x"]), float(params_b["y"])
-            if abs(x_a - x_b) <= 12 and abs(y_a - y_b) <= 12:
+            val_xa, val_ya = float(x_a), float(y_a)
+            val_xb, val_yb = float(x_b), float(y_b)
+            if abs(val_xa - val_xb) <= 12 and abs(val_ya - val_yb) <= 12:
                 return True
         except (ValueError, TypeError):
             pass

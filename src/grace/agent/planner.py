@@ -409,7 +409,7 @@ class Planner:
         if raw_id is not None:
             try:
                 eid = int(raw_id)
-                if hide_tree or (eid not in rendered_element_ids):
+                if hide_tree or (rendered_element_ids and eid not in rendered_element_ids):
                     has_fb = (
                         (step.params.get("x") is not None and step.params.get("y") is not None)
                         or bool(step.params.get("target_name") or step.params.get("name"))
@@ -428,7 +428,7 @@ class Planner:
         if raw_idx is not None:
             try:
                 eidx = int(raw_idx)
-                if hide_tree or (eidx not in rendered_element_ids):
+                if hide_tree or (rendered_element_ids and eidx not in rendered_element_ids):
                     target_name = step.params.get("target_name") or step.params.get("name")
                     logger.info(
                         f"Dropping unshown element_index {eidx} (rendered in prompt: {rendered_element_ids}); "

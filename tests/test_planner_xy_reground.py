@@ -1,8 +1,10 @@
-"""Holo-written x/y are never trusted when the step also names its target.
+"""Planner pointing coordinates handling in single mode vs fleet mode.
 
-The planner prompt says there is no x/y. If one arrives anyway it is in an
-unknown coordinate space (Holo's habit is [0, 1000]), and clicking it raw lands
-nowhere near the control. The grounder converts properly, so it is asked instead.
+Under Cockpit 1:
+- In single mode, x/y in [0-1000] are preserved and scaled to screen coordinates,
+  never stripped even if target_name is present. Grounder is not called.
+- In fleet mode, planner-written x/y are stripped when target_name is present,
+  and the grounder resolves the position.
 """
 
 import itertools
@@ -18,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from grace.agent.grounder import GroundedPoint
 from grace.agent.loop import AgentLoop
 from grace.agent.perception import ScreenSnapshot, WindowInfo
+from grace.fleet import build_cpu_fleet_preset, build_gpu_single_preset
 
 
 def _snap(i):
@@ -28,7 +31,7 @@ def _snap(i):
     )
 
 
-def _loop(responses, point):
+def _loop(responses, point, fleet_config=None):
     gemma = AsyncMock()
     gemma.generate_text.side_effect = responses
     dispatcher = AsyncMock()
@@ -39,7 +42,13 @@ def _loop(responses, point):
     perception.capture_snapshot_async.return_value = _snap(0)
     grounder = MagicMock()
     grounder.locate = AsyncMock(return_value=point)
-    loop = AgentLoop(gemma=gemma, dispatcher=dispatcher, perception=perception, grounder=grounder)
+    loop = AgentLoop(
+        gemma=gemma,
+        dispatcher=dispatcher,
+        perception=perception,
+        grounder=grounder,
+        fleet_config=fleet_config,
+    )
     return loop, dispatcher, grounder
 
 
@@ -47,9 +56,21 @@ DONE = json.dumps({"action": "converse", "params": {}, "is_completed": True, "fi
 
 
 @pytest.mark.asyncio
-async def test_planner_xy_with_target_name_is_regrounded():
+async def test_single_mode_xy_with_target_name_is_scaled_not_stripped():
+    """In single mode, pointing coordinates in [0-1000] scale to screen without stripping or regrounding."""
     click = json.dumps({"action": "cua_click", "params": {"target_name": "Play", "x": 500, "y": 300}})
-    loop, dispatcher, grounder = _loop([click, DONE], GroundedPoint(x=1140, y=630))
+    loop, dispatcher, grounder = _loop([click, DONE], GroundedPoint(x=1140, y=630), fleet_config=build_gpu_single_preset())
+    await loop.run("play it")
+    assert grounder.locate.await_count == 0
+    sent = dispatcher.execute.await_args_list[0].args[0]
+    assert (sent.params["x"], sent.params["y"]) == (960, 324)
+
+
+@pytest.mark.asyncio
+async def test_fleet_mode_xy_with_target_name_is_regrounded():
+    """In fleet mode, planner-written coordinates with target_name are stripped and grounder resolves it."""
+    click = json.dumps({"action": "cua_click", "params": {"target_name": "Play", "x": 500, "y": 300}})
+    loop, dispatcher, grounder = _loop([click, DONE], GroundedPoint(x=1140, y=630), fleet_config=build_cpu_fleet_preset())
     await loop.run("play it")
     assert grounder.locate.await_count == 1
     sent = dispatcher.execute.await_args_list[0].args[0]
@@ -57,10 +78,11 @@ async def test_planner_xy_with_target_name_is_regrounded():
 
 
 @pytest.mark.asyncio
-async def test_xy_without_any_name_is_left_alone():
+async def test_single_mode_xy_without_any_name_is_scaled():
+    """In single mode, coordinates in [0-1000] without target_name are scaled to screen coordinates."""
     click = json.dumps({"action": "cua_click", "params": {"x": 500, "y": 300}})
-    loop, dispatcher, grounder = _loop([click, DONE], GroundedPoint(x=1, y=1))
+    loop, dispatcher, grounder = _loop([click, DONE], GroundedPoint(x=1, y=1), fleet_config=build_gpu_single_preset())
     await loop.run("play it")
     assert grounder.locate.await_count == 0
     sent = dispatcher.execute.await_args_list[0].args[0]
-    assert (sent.params["x"], sent.params["y"]) == (500, 300)
+    assert (sent.params["x"], sent.params["y"]) == (960, 324)

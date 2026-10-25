@@ -92,7 +92,7 @@ async def test_demo_task_completes_with_sloppy_holo_outputs(caplog):
         "cua_click", "cua_type_text", "cua_press_key", "cua_screenshot",
         "describe_screen", "cua_click", "describe_screen",
     ]
-    # Pixel clicks came from the grounder, not from the planner's [0, 1000] guess.
+    # Pixel clicks in single mode scale planner's [0, 1000] coordinates directly to screen.
     play = calls[5]["params"]
-    assert (play["x"], play["y"]) == (1140, 230)
+    assert (play["x"], play["y"]) == (960, 324)
     assert calls[1]["params"]["text"] == "signal by home"

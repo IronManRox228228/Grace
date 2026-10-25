@@ -140,7 +140,7 @@ def _change_verdict(
     # Focus
     if after["focus_id"] != before["focus_id"]:
         name = after["focus_name"] or f"[{after['focus_id']}]"
-        changes.append(f"Focus moved to [{after['focus_id']}] '{name}'")
+        changes.append(f"keyboard focus moved to [{after['focus_id']}] '{name}'")
     elif after["focus_value"] != before["focus_value"]:
         changes.append(f"Focused field now reads '{after['focus_value'][:60]}'")
     else:
@@ -449,7 +449,7 @@ class ComputerUse:
         elif "_rendered_element_ids" in params:
             rendered = params.get("_rendered_element_ids")
             rendered_set = set(rendered) if rendered is not None else set()
-            if element_index is not None and element_index not in rendered_set:
+            if rendered_set and element_index is not None and element_index not in rendered_set:
                 element_index = None
         relative_to = params.get("relative_to")
         direction = params.get("direction", "left").lower().strip()
@@ -582,7 +582,7 @@ class ComputerUse:
         elif "_rendered_element_ids" in params:
             rendered = params.get("_rendered_element_ids")
             rendered_set = set(rendered) if rendered is not None else set()
-            if element_id is not None and element_id not in rendered_set:
+            if rendered_set and element_id is not None and element_id not in rendered_set:
                 logger.info(
                     f"_target_from_params: dropping unshown element_id={element_id} "
                     f"(rendered: {rendered_set}); resolving by target_name='{target_name}'"
@@ -624,7 +624,7 @@ class ComputerUse:
         elif "_rendered_element_ids" in params:
             rendered = params.get("_rendered_element_ids")
             rendered_set = set(rendered) if rendered is not None else set()
-            if element_id is not None and element_id not in rendered_set:
+            if rendered_set and element_id is not None and element_id not in rendered_set:
                 logger.info(
                     f"_resolve_from_graph: dropping unshown element_id={element_id} "
                     f"(rendered: {rendered_set}); resolving by target_name='{target_name}'"
