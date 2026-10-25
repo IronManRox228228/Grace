@@ -1921,3 +1921,14 @@ Implementation of Cockpit 2: the model judges its own progress; the harness repo
   - **1470 passed, 0 failed, 1 skipped** in 310.75s (count exceeds 1451 requirement).
 - **Rust test suite (`cargo test --workspace`):**
   - **all workspace crates passed, 0 failed** (21 + 10 + 2 + 2 + 175 + 2 + 27 passed; 3 ignored).
+
+## Cockpit 3
+
+- Commits: `16536f0` fix(planner): understand nested action objects; `321b134` fix(agent): honest message when plans are unparseable.
+- `agent/planner.py`: `_unwrap_action` normalises `{"action": {"tool"|"name"|"action"|"function", "params"|"arguments"|"args"|"parameters"}}`, top-level `{"tool", "params"}` and `{"name", "arguments"}`. Envelope fields (`expect`, `is_completed`, `user_update`, `final_response`, `thought`) are read from the top level, then from inside the action object. Inner params win over top-level. JSON-string `arguments` are parsed.
+- `Planner.last_failure` is `"no_response"` or `"unparseable"`. `AgentLoop._plan_failure_result` says "I couldn't make sense of my own plan for that, so I've stopped." for unparseable plans and unknown tools; connection wording stays for empty responses.
+- `.env` untouched.
+- Tests: full serial run 1474 passed, 2 failed, 1 skipped. Neither failure is from this work:
+  - `test_agent_loop.py::TestWallClockBudget::test_the_default_is_not_unlimited` fails because `.env` sets `AGENT_MAX_SECONDS=0`.
+  - `test_ui_inspector.py::TestUIInspector::test_click_mismatch_names_the_resolved_element` fails on a clean checkout too. It asserts `status == "element_not_found"` and the click result has no `status` key (cockpit-1 R10 change).
+  - The known `[agentic_two_step]` VAD test passed this run.
