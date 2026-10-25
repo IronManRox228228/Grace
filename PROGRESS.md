@@ -1328,3 +1328,30 @@ now passes — no regressions; the 6 failures are pre-existing on HEAD).
 
 ---
 
+### Item 10 — wrong element ids / OCR fragments — DONE
+
+Commit `d1c0c06` `fix(desktop): refuse clicks whose element text does not plausibly match target_name (real-desktop #10)` — pushed to origin/main.
+
+**Root cause:** With UIA dead, the only elements were OCR fragments (e.g. the "(9)" tab-count
+badge). Holo's "address bar, element 1" resolved to the badge, so clicks hit the tab strip and
+a history item, and Edge navigated to an unrelated site. OCR fragments were also presented to
+the planner as plain controls.
+
+**Fix:**
+- `src/grace/perception/elements.py`: added `name_match_score()` (token-overlap) and
+  `NAME_MATCH_THRESHOLD = 0.5`; an explicit element id stays authoritative, but a name-resolved
+  element whose text does not plausibly match `target_name` (e.g. "search" matching
+  "researching" only as a substring) is refused. OCR fragments now carry `source` in compact
+  element JSON and `elements_to_prompt` labels them as recognised text, not interactive
+  controls.
+- `src/grace/automation/computer_use.py`: `_click` returns an `element_mismatch` error naming
+  the resolved element vs `target_name` when the match is implausible; nothing is clicked.
+
+**Tests:** `tests/test_element_graph.py` (name_match_score scoring, OCR prompt label/source),
+`tests/test_ui_inspector.py` (click mismatch names the resolved element). All pass.
+
+**Suite:** `6 failed, 1274 passed, 1 skipped` (up from 1267; no regressions; the 6 failures
+are pre-existing on HEAD).
+
+---
+
