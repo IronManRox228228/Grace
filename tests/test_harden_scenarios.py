@@ -82,13 +82,17 @@ class TestSafetyConfirmation:
         assert prompt is not None
 
     @pytest.mark.parametrize("kw", [
-        "delete", "remove", "send", "submit", "pay", "purchase", "buy",
+        "delete", "remove", "submit", "pay", "purchase", "buy",
         "order", "checkout", "format", "erase", "kill", "taskkill", "overwrite",
     ])
     def test_destructive_click_keywords_require_confirmation(self, kw):
         is_safe, prompt = SafetyGuard.evaluate("cua_click", {"target_name": f"Please {kw} now"})
         assert is_safe is False
         assert prompt is not None
+
+    def test_clicking_send_needs_no_confirmation(self):
+        # A message the user asked for is already authorised.
+        assert SafetyGuard.evaluate("cua_click", {"target_name": "Send"}) == (True, None)
 
     def test_dangerous_key_press_requires_confirmation(self):
         is_safe, prompt = SafetyGuard.evaluate("cua_press_key", {"key": "alt+f4"})

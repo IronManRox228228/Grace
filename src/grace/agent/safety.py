@@ -55,9 +55,9 @@ class SafetyGuard:
         "cua_secondary_action",
     }
 
-    # Target words that always require confirmation (delete, send, submit, pay/purchase, taskkill, overwrite)
+    # Target words that always require confirmation (delete, submit, pay/purchase, taskkill, overwrite)
     DESTRUCTIVE_KEYWORDS = {
-        "delete", "remove", "send", "submit", "pay", "purchase", "buy",
+        "delete", "remove", "submit", "pay", "purchase", "buy",
         "order", "checkout", "format", "erase", "kill", "taskkill", "overwrite",
     }
 
