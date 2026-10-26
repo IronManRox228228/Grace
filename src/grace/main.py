@@ -26,6 +26,11 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Run as a script (the Tauri shell does `python src/grace/main.py`), Python
+# puts src/grace itself on sys.path, so `import training` finds grace/training
+# (a regular package) ahead of the repo-root training/ namespace package.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path[:] = [p for p in sys.path if not p or os.path.abspath(p) != _SCRIPT_DIR]
 
 # Config field defaults are os.getenv(...) calls evaluated at import time, so
 # .env must be applied before Config is imported.
