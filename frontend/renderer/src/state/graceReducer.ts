@@ -1,36 +1,58 @@
-import { GraceEvent, GraceSnapshot, INITIAL_SNAPSHOT } from './types';
+import { ChatMessage, GraceEvent, GraceSnapshot, INITIAL_SNAPSHOT } from './types';
 
 // Pure function: (snapshot, backend event) -> next snapshot.
 // Keeping this pure and dependency-free makes it trivial to swap the
 // transport (WebSocket today, Tauri IPC later) without touching a component.
 //
-// The switch is exhaustive over GraceEvent: the `never` assertion in the
-// default branch makes adding a variant to contract/grace-events.schema.json
-// a compile error here until it is handled. That is deliberate - the previous
-// silent `return snapshot` default is how FollowupListeningStarted and
-// TurnTrace went two releases without anyone noticing the union was wrong.
+// The only status text this ever produces is text the backend sent (the
+// UnderstandingStarted / ToolExecutionStarted label). There are no hard-coded
+// state labels such as "Listening…" or "Responding…".
+//
+// The conversation is a list of messages in order - user, assistant, user,
+// assistant - and each reply is its own message: a new reply never gets glued
+// onto the previous one.
+
+function appendReplyChunk(snapshot: GraceSnapshot, text: string): GraceSnapshot {
+  const last = snapshot.messages[snapshot.messages.length - 1];
+  if (snapshot.replyOpen && last && last.role === 'assistant') {
+    const updated: ChatMessage = { role: 'assistant', text: last.text + text };
+    return {
+      ...snapshot,
+      state: 'speaking',
+      responseText: updated.text,
+      messages: [...snapshot.messages.slice(0, -1), updated],
+    };
+  }
+  return {
+    ...snapshot,
+    state: 'speaking',
+    responseText: text,
+    replyOpen: true,
+    messages: [...snapshot.messages, { role: 'assistant', text }],
+  };
+}
+
 export function graceReducer(snapshot: GraceSnapshot, event: GraceEvent): GraceSnapshot {
   switch (event.type) {
     case 'Idle':
       return INITIAL_SNAPSHOT;
 
     case 'WakeWordDetected':
-      return { ...INITIAL_SNAPSHOT, state: 'listening', statusLabel: 'Listening…' };
+      return { ...INITIAL_SNAPSHOT, state: 'listening' };
 
+    // The mic opens for the user's turn or for the answer to a question Grace
+    // just asked. The conversation so far stays on screen either way.
     case 'ListeningStarted':
-      return { ...snapshot, state: 'listening', statusLabel: 'Listening…', userTranscript: '', responseText: '' };
-
-    // No-op, matching the behavior this event has always had: it was absent
-    // from the union and fell through the old silent default. Showing a
-    // "Listening…" affordance for the follow-up window is very likely the
-    // right UX, but changing it here would make every Phase 0 golden tape
-    // disagree with the recorded baseline for a reason unrelated to the port.
-    // Tracked as post-migration work.
-    case 'FollowupListeningStarted':
-      return snapshot;
+      return { ...snapshot, state: 'listening', statusLabel: '', replyOpen: false };
 
     case 'FinalTranscript':
-      return { ...snapshot, userTranscript: event.text };
+      return {
+        ...snapshot,
+        userTranscript: event.text,
+        responseText: '',
+        replyOpen: false,
+        messages: [...snapshot.messages, { role: 'user', text: event.text }],
+      };
 
     case 'ListeningStopped':
       return snapshot;
@@ -48,23 +70,20 @@ export function graceReducer(snapshot: GraceSnapshot, event: GraceEvent): GraceS
       return snapshot;
 
     case 'ResponseChunk':
-      return {
-        ...snapshot,
-        state: 'speaking',
-        responseText: snapshot.responseText + event.text,
-      };
+      return appendReplyChunk(snapshot, event.text);
 
+    // A new spoken reply starts: its chunks form a new message.
     case 'SpeechStarted':
-      return { ...snapshot, state: 'speaking', statusLabel: 'Responding…' };
+      return { ...snapshot, state: 'speaking', replyOpen: false };
 
     case 'SpeechChunk':
       return snapshot;
 
     case 'SpeechFinished':
-      return snapshot;
+      return { ...snapshot, replyOpen: false };
 
     case 'ConversationFinished':
-      return { ...snapshot, state: 'completed', statusLabel: '' };
+      return { ...snapshot, state: 'completed', statusLabel: '', replyOpen: false };
 
     // Diagnostic only - carries no user-visible state.
     case 'TurnTrace':
@@ -74,7 +93,11 @@ export function graceReducer(snapshot: GraceSnapshot, event: GraceEvent): GraceS
       return { ...snapshot, state: 'error', errorMessage: event.message };
 
     default: {
-      const unhandled: never = event;
+      // The frozen contract still declares FollowupListeningStarted, but the
+      // backend no longer emits it and the UI has nothing to show for it.
+      // Every other variant must be handled above: adding one to the schema
+      // is a compile error here until it is.
+      const unhandled: { type: 'FollowupListeningStarted' } = event;
       void unhandled;
       return snapshot;
     }

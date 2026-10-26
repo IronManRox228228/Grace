@@ -72,6 +72,7 @@ describe('the corpus replays through the reducer', () => {
       expect(typeof snapshot.userTranscript).toBe('string');
       expect(typeof snapshot.statusLabel).toBe('string');
       expect(typeof snapshot.responseText).toBe('string');
+      expect(Array.isArray(snapshot.messages)).toBe(true);
     }
   });
 
@@ -104,15 +105,72 @@ describe('the reducer itself', () => {
     expect(replay(events).at(-1)?.responseText).toBe('Opening Notepad.');
   });
 
-  it('clears the previous turn when listening starts', () => {
-    // A turn that showed the last turn's answer while listening to the next
-    // one is how a voice-only user loses track of what Grace is doing.
+  it('keeps the conversation when the mic reopens for an answer', () => {
+    // Grace asked a question: the question must stay on screen while the user
+    // answers it.
     const after = replay([
-      { type: 'ResponseChunk', text: 'the old answer' },
+      { type: 'FinalTranscript', text: 'delete the draft' },
+      { type: 'SpeechStarted' },
+      { type: 'ResponseChunk', text: 'Are you sure?' },
+      { type: 'SpeechFinished' },
+      { type: 'ConversationFinished' },
       { type: 'ListeningStarted' },
     ]).at(-1);
-    expect(after?.responseText).toBe('');
-    expect(after?.userTranscript).toBe('');
+    expect(after?.state).toBe('listening');
+    expect(after?.messages.map((m) => m.text)).toEqual(['delete the draft', 'Are you sure?']);
+  });
+
+  it('alternates user and assistant messages, each its own block', () => {
+    const after = replay([
+      { type: 'WakeWordDetected' },
+      { type: 'FinalTranscript', text: 'delete the draft' },
+      { type: 'SpeechStarted' },
+      { type: 'ResponseChunk', text: 'Are you sure ' },
+      { type: 'ResponseChunk', text: 'you want that?' },
+      { type: 'SpeechFinished' },
+      { type: 'ConversationFinished' },
+      { type: 'ListeningStarted' },
+      { type: 'FinalTranscript', text: 'yes' },
+      { type: 'SpeechStarted' },
+      { type: 'ResponseChunk', text: 'Done.' },
+      { type: 'SpeechFinished' },
+      { type: 'ConversationFinished' },
+    ]).at(-1);
+    expect(after?.messages).toEqual([
+      { role: 'user', text: 'delete the draft' },
+      { role: 'assistant', text: 'Are you sure you want that?' },
+      { role: 'user', text: 'yes' },
+      { role: 'assistant', text: 'Done.' },
+    ]);
+  });
+
+  it('never glues two assistant replies into one paragraph', () => {
+    // Two replies with no user message between them (progress, then result).
+    const after = replay([
+      { type: 'SpeechStarted' },
+      { type: 'ResponseChunk', text: 'Opening Notepad.' },
+      { type: 'SpeechFinished' },
+      { type: 'SpeechStarted' },
+      { type: 'ResponseChunk', text: 'Typing now.' },
+      { type: 'SpeechFinished' },
+    ]).at(-1);
+    expect(after?.messages).toEqual([
+      { role: 'assistant', text: 'Opening Notepad.' },
+      { role: 'assistant', text: 'Typing now.' },
+    ]);
+  });
+
+  it('shows only status text the backend sent', () => {
+    const snaps = replay([
+      { type: 'WakeWordDetected' },
+      { type: 'ListeningStarted' },
+      { type: 'SpeechStarted' },
+    ]);
+    for (const snap of snaps) expect(snap.statusLabel).toBe('');
+    const sent = replay([{ type: 'ToolExecutionStarted', label: 'Opening Word…' }]).at(-1);
+    expect(sent?.statusLabel).toBe('Opening Word…');
+    const understanding = replay([{ type: 'UnderstandingStarted', label: 'Understanding request…' }]).at(-1);
+    expect(understanding?.statusLabel).toBe('Understanding request…');
   });
 
   it('returns to the initial snapshot on Idle', () => {
@@ -127,5 +185,6 @@ describe('the reducer itself', () => {
     const before: GraceSnapshot = { ...INITIAL_SNAPSHOT, responseText: 'kept' };
     graceReducer(before, { type: 'ResponseChunk', text: ' and more' });
     expect(before.responseText).toBe('kept');
+    expect(before.messages).toEqual([]);
   });
 });

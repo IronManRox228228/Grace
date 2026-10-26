@@ -47,11 +47,21 @@ export type GraceState =
   | 'completed'
   | 'error';
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 export interface GraceSnapshot {
   state: GraceState;
-  userTranscript: string; // live/partial + final user speech
-  statusLabel: string; // "Understanding request…", "Opening Microsoft Edge…"
-  responseText: string; // streamed assistant response
+  userTranscript: string; // the latest user utterance
+  statusLabel: string; // only what the backend sent: "Opening Microsoft Edge…"
+  responseText: string; // the assistant reply currently streaming (or last one)
+  // The conversation, in order: user, assistant, user, assistant. Each entry
+  // is its own block; replies are never concatenated into one paragraph.
+  messages: ChatMessage[];
+  // True while chunks still belong to the last assistant message.
+  replyOpen: boolean;
   errorMessage?: string;
 }
 
@@ -60,6 +70,8 @@ export const INITIAL_SNAPSHOT: GraceSnapshot = {
   userTranscript: '',
   statusLabel: '',
   responseText: '',
+  messages: [],
+  replyOpen: false,
 };
 """
 

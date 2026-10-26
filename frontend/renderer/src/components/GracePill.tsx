@@ -39,14 +39,7 @@ export function GracePill({ expanded, onClick, hoverRef, children }: GracePillPr
         {expanded ? (
           children
         ) : (
-          <div className="flex items-center gap-2 px-2 text-xs font-bold text-stone-800">
-            <motion.span
-              className="h-2 w-2 rounded-full bg-emerald-600 shadow-xs"
-              animate={{ opacity: [0.6, 1, 0.6] }}
-              transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
-            />
-            <span>Grace • Ready</span>
-          </div>
+          <span className="px-2 text-xs font-bold text-stone-800">Grace</span>
         )}
       </motion.div>
     </motion.div>
