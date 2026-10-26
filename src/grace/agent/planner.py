@@ -498,7 +498,13 @@ def _unwrap_action(data: dict) -> tuple[dict, Any, dict]:
             None,
         )
         params = dict(top_params)
-        params.update(_first_params(inner))
+        inner_params = _first_params(inner)
+        if not inner_params:
+            # Flat form: the arguments sit beside the tool name,
+            # {"tool": "cua_click", "element_id": 4, "x": 100}.
+            reserved = set(_TOOL_KEYS) | set(_PARAM_KEYS) | set(_ENVELOPE_KEYS)
+            inner_params = {k: v for k, v in inner.items() if k not in reserved}
+        params.update(inner_params)
         envelope = dict(data)
         for k in _ENVELOPE_KEYS:
             if envelope.get(k) in (None, "") and k in inner:
@@ -584,6 +590,79 @@ def parse_planned_step_with_reason(text: str) -> tuple[Optional[PlannedStep], st
     )
 
 
+def repair_json(text: str) -> str:
+    """Deterministic repair of near-miss JSON, applied before parsing.
+
+    - Takes the first complete top-level JSON object (``raw_decode`` from the
+      first ``{``) and drops anything after it.
+    - Failing that, removes trailing commas before ``}`` / ``]`` and appends
+      the missing closing braces and brackets (braces inside strings are
+      ignored).
+    Only repairs; never invents fields. Text that is already valid JSON is
+    returned unchanged.
+    """
+    if not isinstance(text, str):
+        return text
+    start = text.find("{")
+    if start == -1:
+        return text
+    decoder = json.JSONDecoder()
+    try:
+        _, end = decoder.raw_decode(text, start)
+        return text if (start == 0 and end == len(text)) else text[start:end]
+    except json.JSONDecodeError:
+        pass
+
+    out: list[str] = []
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    i = start
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+            out.append(ch)
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+            out.append(ch)
+        elif ch in "}]":
+            # Trailing comma directly before the closer.
+            j = len(out) - 1
+            while j >= 0 and out[j].isspace():
+                j -= 1
+            if j >= 0 and out[j] == ",":
+                del out[j]
+            out.append(ch)
+            if stack:
+                stack.pop()
+            if not stack:
+                return "".join(out)
+        else:
+            out.append(ch)
+        i += 1
+
+    # Ran out of text with the object still open: close it.
+    if in_string:
+        out.append('"')
+    j = len(out) - 1
+    while j >= 0 and out[j].isspace():
+        j -= 1
+    if j >= 0 and out[j] == ",":
+        del out[j]
+    out.extend(reversed(stack))
+    return "".join(out)
+
+
 def _load_json_object(candidate: str) -> Optional[dict]:
     data, _ = _load_json_object_with_error(candidate)
     return data
@@ -591,7 +670,7 @@ def _load_json_object(candidate: str) -> Optional[dict]:
 
 def _load_json_object_with_error(candidate: str) -> tuple[Optional[dict], str]:
     try:
-        data = json.loads(candidate)
+        data = json.loads(repair_json(candidate))
     except json.JSONDecodeError as e:
         return None, f"JSONDecodeError: {e.msg} (line {e.lineno} col {e.colno})"
     except Exception as e:
