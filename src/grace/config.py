@@ -140,6 +140,8 @@ class Config:
 
     # Whisper
     whisper_model_path: str = field(default_factory=lambda: os.getenv("WHISPER_MODEL_PATH", "small"))
+    # float16 | int8_float16 | int8 (CTranslate2 compute types; there is no fp8).
+    whisper_compute_type: str = field(default_factory=lambda: os.getenv("WHISPER_COMPUTE_TYPE", "float16"))
     whisper_vad_threshold: float = field(default_factory=lambda: float(os.getenv("WHISPER_VAD_THRESHOLD", "0.008")))
     whisper_silence_duration_ms: int = field(default_factory=lambda: int(os.getenv("WHISPER_SILENCE_DURATION_MS", "1200")))
 

@@ -36,8 +36,10 @@ class TestConfigBreak:
         with pytest.raises(Exception):
             config.llama_port = 9999
 
-    def test_whisper_model_path_exists(self):
+    def test_whisper_model_path_exists(self, monkeypatch):
         """Config now has whisper_model_path (fix for main.py reference)."""
+        # The default, not the developer's .env (which load_dotenv put in os.environ).
+        monkeypatch.delenv("WHISPER_MODEL_PATH", raising=False)
         config = Config()
         assert hasattr(config, "whisper_model_path")
         assert config.whisper_model_path == "small"

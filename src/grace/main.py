@@ -211,7 +211,7 @@ class GraceApp:
             self.whisper = WhisperStreaming(
                 model_path=self.config.whisper_model_path,
                 device="cuda",
-                compute_type="float16",
+                compute_type=self.config.whisper_compute_type,
             )
 
         # Model hot-swap: only needed when a distinct local planner model is configured.
