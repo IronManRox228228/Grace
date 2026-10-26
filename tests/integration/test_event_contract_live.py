@@ -42,7 +42,11 @@ SKIP = {os.path.join("harness", "replay.py"), os.path.join("harness", "generate.
 # needs it for the sidecar-unavailable and supervisor-failure paths that Python
 # has no equivalent of. Listed here rather than allowed silently, so that a
 # *second* unemitted event has to be justified rather than blending in.
-RESERVED = {"Error"}
+#
+# FollowupListeningStarted: the frozen schema still declares it (recorded tapes
+# carry it), but open-ended follow-up listening was removed and the answer
+# window announces itself with ListeningStarted, so the backend never sends it.
+RESERVED = {"Error", "FollowupListeningStarted"}
 
 
 def schema_event_types() -> set[str]:
