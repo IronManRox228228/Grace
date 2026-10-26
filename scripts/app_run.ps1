@@ -14,17 +14,22 @@ $env:GRACE_CAPTURE_RUN = "1"
 
 $vite = $null
 $viteUp = $false
-try { $viteUp = (Test-NetConnection 127.0.0.1 -Port 5173 -WarningAction SilentlyContinue).TcpTestSucceeded } catch {}
+# Vite binds to "localhost", which can be IPv6-only ([::1]), so try both.
+function Test-Vite {
+    foreach ($addr in @("::1", "127.0.0.1")) {
+        try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect($addr, 5173); $c.Close(); return $true } catch {}
+    }
+    return $false
+}
+$viteUp = Test-Vite
 if (-not $viteUp) {
     Write-Host "Starting the UI dev server on :5173..." -ForegroundColor Cyan
     $vite = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "dev:renderer" `
         -WorkingDirectory (Join-Path $repoRoot "frontend") -WindowStyle Hidden -PassThru
     $deadline = (Get-Date).AddSeconds(60)
     while ((Get-Date) -lt $deadline) {
-        try {
-            $c = New-Object System.Net.Sockets.TcpClient
-            $c.Connect("127.0.0.1", 5173); $c.Close(); $viteUp = $true; break
-        } catch { Start-Sleep -Milliseconds 500 }
+        if (Test-Vite) { $viteUp = $true; break }
+        Start-Sleep -Milliseconds 500
     }
     if (-not $viteUp) { throw "The UI dev server did not come up on :5173 within 60 s." }
 }
