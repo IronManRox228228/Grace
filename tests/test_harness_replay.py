@@ -98,7 +98,7 @@ def scripted_backend(monkeypatch, tmp_path):
         use_cloud_llm=True,
         gemini_api_key="test-key",
         whisper_silence_duration_ms=275,
-        followup_timeout_seconds=0,
+        answer_timeout_seconds=0,
     )
 
     async def _fake_gemini(self, messages, temperature=0.2, max_tokens=1024, model=None):

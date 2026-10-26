@@ -655,6 +655,10 @@ def _config_from(tape: Tape):
 
     recorded = (tape.meta or {}).get("config") or {}
     names = {f.name for f in dataclasses.fields(Config)}
+    recorded = dict(recorded)
+    # Tapes recorded before the answer window was renamed carry the old key.
+    if "followup_timeout_seconds" in recorded and "answer_timeout_seconds" not in recorded:
+        recorded["answer_timeout_seconds"] = recorded.pop("followup_timeout_seconds")
     overrides = {k: v for k, v in recorded.items() if k in names}
     if not overrides:
         return Config()

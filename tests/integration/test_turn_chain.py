@@ -1,7 +1,7 @@
 """The activation turn and the follow-up turn must route the same way.
 
 `main.py` used to hold two near-copies of the intent -> router -> dispatch
-chain: one in `_handle_activation_turn`, one in `_handle_followup_transcript`.
+chain: one in `_handle_activation_turn`, one in `_handle_answer_transcript`.
 They were maintained by hand and had already drifted - the safety-confirmation
 park was added to one before the other, and the agentic pre-execution step
 exists in both only because someone remembered.
@@ -13,7 +13,7 @@ still leaves the follow-up window holding its own hand-maintained copy, so
 this class's remaining job is to hold that copy to the same decisions the
 shared body makes.
 
-Nothing tests the follow-up copy at all, so a fix applied to the shared path
+Nothing tests the answer-window copy at all, so a fix applied to the shared path
 and not the follow-up path is invisible until a user says something in the ten
 seconds after a turn - which, for a user who cannot reach a keyboard to retry,
 is most of how they talk to Grace.
@@ -37,9 +37,9 @@ MAIN = os.path.abspath(
 
 ACTIVATION = "_handle_activation_turn"
 # The extracted body: one intent -> router -> dispatch chain shared by the
-# wake-word path and the typed path (`--text`). Hold the follow-up copy to it.
+# wake-word path and the typed path (`--text`). Hold the answer-window copy to it.
 ROUTE = "_route_transcript"
-FOLLOWUP = "_handle_followup_transcript"
+ANSWER = "_handle_answer_transcript"
 TYPED = "_handle_text_activation"
 
 # Every caller that must route through the shared body instead of a copy.
@@ -102,8 +102,8 @@ class TestBothTurnsMakeTheSameDecisions:
                 f"{name} stopped routing through the shared body; a typed string "
                 f"and a heard string could then take different paths"
             )
-        assert call in calls_in(FOLLOWUP), (
-            f"{FOLLOWUP} does not call {call}, so a follow-up utterance takes a "
+        assert call in calls_in(ANSWER), (
+            f"{ANSWER} does not call {call}, so a follow-up utterance takes a "
             f"different route from the same words said after the wake word"
         )
 
@@ -112,7 +112,7 @@ class TestBothTurnsMakeTheSameDecisions:
         # confirmation gets answered - the activation path only sees one if the
         # user waited out the window and said the wake word again. The typed
         # path sees it whenever the entrypoint's stdin reader gets the answer.
-        for name in (ROUTE, FOLLOWUP):
+        for name in (ROUTE, ANSWER):
             assert "self._resolve_pending_confirmation" in calls_in(name), name
         for name in ROUTERS:
             assert "self._route_transcript" in calls_in(name), name
@@ -120,7 +120,7 @@ class TestBothTurnsMakeTheSameDecisions:
     def test_both_paths_park_a_refused_dispatch(self):
         # Without this the fast path speaks the confirmation question and then
         # throws away the action it was asking about, so "yes" answers nothing.
-        for name in (ROUTE, FOLLOWUP):
+        for name in (ROUTE, ANSWER):
             assert "self._park_if_confirmation_required" in calls_in(name), name
         for name in ROUTERS:
             assert "self._route_transcript" in calls_in(name), name
@@ -128,16 +128,16 @@ class TestBothTurnsMakeTheSameDecisions:
     def test_both_paths_pre_execute_the_same_setup_intents(self):
         # `open_app` and `cua_launch` run before the loop starts, so the agent
         # observes the app it was asked about rather than the desktop. The
-        # shared body and the follow-up copy must each keep the rule.
+        # shared body and the answer-window copy must each keep the rule.
         for tool in ("open_app", "cua_launch"):
             assert tool in strings_in(ROUTE), f"{ROUTE} lost {tool}"
-            assert tool in strings_in(FOLLOWUP), (
-                f"{FOLLOWUP} does not pre-execute {tool}, so an agentic "
+            assert tool in strings_in(ANSWER), (
+                f"{ANSWER} does not pre-execute {tool}, so an agentic "
                 f"follow-up starts by looking at the wrong window"
             )
 
     def test_both_paths_handle_a_rate_limit(self):
-        for name in (ROUTE, FOLLOWUP):
+        for name in (ROUTE, ANSWER):
             handlers = [
                 _dotted(node.type)
                 for node in ast.walk(function_body(name))

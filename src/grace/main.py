@@ -118,6 +118,10 @@ class GraceApp:
     Wires all components together and runs the main event loop.
     """
 
+    # True while the last agent goal ended by asking the user something
+    # (`needs_user_input`); see `_awaiting_answer`.
+    _awaiting_user_input = False
+
     def __init__(self, tts_off: bool = False, capture_dir: Optional[Any] = None):
         self.config = Config()
         self._running = False
@@ -455,7 +459,13 @@ class GraceApp:
         self.wake_word.resume()
         forwarder = asyncio.create_task(self._pump_audio_to_wake_word())
         try:
-            return await self.agent_loop.run(user_goal=transcript, pre_exec_step=pre_exec_step)
+            result = await self.agent_loop.run(user_goal=transcript, pre_exec_step=pre_exec_step)
+            # A sign-in cover and the like end the goal by asking the user
+            # something: the answer window opens for it (and only for it).
+            self._awaiting_user_input = (
+                isinstance(result, dict) and result.get("status") == "needs_user_input"
+            )
+            return result
         finally:
             forwarder.cancel()
             try:
@@ -1170,7 +1180,7 @@ class GraceApp:
             )
         await self._speak_response(response_text)
         await self.ws_server.emit({"type": "ConversationFinished"})
-        self._stop_followup = True
+        self._stop_answer_wait = True
 
     def _handle_switch_action(self, action) -> None:
         """Handle incoming switch action (YES, NO, STOP) with voice coexistence."""
@@ -1229,7 +1239,7 @@ class GraceApp:
                 log.info(f"Switch selected scanned mark: '{selected}'")
                 self._active_mark_scanner = None
                 if selected:
-                    _dispatch_async(self._handle_followup_transcript(selected))
+                    _dispatch_async(self._handle_answer_transcript(selected))
                 return
             elif action_val == "no":
                 log.info("Switch rejected scanned mark choices")
@@ -1368,10 +1378,13 @@ class GraceApp:
             await self._speak_response("Sorry, something went wrong. I'm ready for your next command.")
 
     async def _handle_activation(self):
-        """Time one activation cycle end to end, then hand off to the follow-up window.
+        """Time one activation cycle end to end.
 
-        The follow-up window runs outside this trace so each of its turns can be
-        measured on its own rather than inflating the wake-word turn.
+        After a normal turn Grace goes back to waiting for the wake word. Only
+        when Grace has just asked the user something does the answer window
+        open (see `_awaiting_answer`). It runs outside this trace so each of
+        its turns can be measured on its own rather than inflating the
+        wake-word turn.
         """
         turn_result = False
         with start_turn("activation") as trace:
@@ -1386,15 +1399,37 @@ class GraceApp:
                     await self.ws_server.emit({"type": "TurnTrace", "trace": trace.to_dict()})
                 except Exception as e:
                     log.debug(f"Failed to emit TurnTrace / write latency: {e}")
-                # The follow-up window pauses/resumes the detector itself once it
+                # The answer window pauses/resumes the detector itself once it
                 # actually starts. Every other exit from this turn - an aborted
-                # False, or an exception below - must resume it here instead, or
-                # "Grace" is never heard again.
-                if turn_result is False:
+                # False, a turn that asked nothing, or an exception below -
+                # must resume it here instead, or "Grace" is never heard again.
+                if turn_result is False or not self._awaiting_answer():
                     self.wake_word.resume()
 
-        if turn_result is not False:
-            await self._run_followup_window(timeout_seconds=self.config.followup_timeout_seconds)
+        if turn_result is not False and self._awaiting_answer():
+            await self._run_answer_window(timeout_seconds=self.config.answer_timeout_seconds)
+        elif turn_result is not False:
+            # A finished turn with nothing asked: back to the wake word.
+            self._flush_mic_buffer()
+            await self.ws_server.emit({"type": "Idle"})
+
+    def _awaiting_answer(self) -> bool:
+        """True when Grace has just asked the user something and needs the reply.
+
+        That is a parked yes/no confirmation (terminal cover, delete, ...), a
+        `needs_user_input` question such as the sign-in cover, or a scanned
+        mark choice. Nothing else keeps the microphone open without the wake
+        word.
+        """
+        loop = getattr(self, "agent_loop", None)
+        if loop is not None and getattr(loop, "has_pending_confirmation", False):
+            return True
+        if getattr(self, "_awaiting_user_input", False):
+            return True
+        scanner = getattr(self, "_active_mark_scanner", None)
+        if scanner is not None and getattr(scanner, "_running", False):
+            return True
+        return getattr(self, "_choice_race_resolver", None) is not None
 
     async def _handle_activation_turn(self, trace) -> bool:
         """Handle a wake word activation cycle. Returns False if aborted/silence, True on turn success."""
@@ -1637,6 +1672,7 @@ class GraceApp:
         execution paths. The wake-word turn applies personal voice
         corrections before calling this; typed input needs none. There is
         no other gate: whatever route this takes, it is the only route."""
+        self._awaiting_user_input = False  # a new utterance answers any open question
         self._last_raw_transcript = transcript
         turn_start_time = time.monotonic()
 
@@ -1918,21 +1954,23 @@ class GraceApp:
                 break
             await self._handle_text_activation(answer)
 
-    async def _run_followup_window(self, timeout_seconds: int = 10):
-        """Keep listening without a wake word, restarting the window after each turn.
+    async def _run_answer_window(self, timeout_seconds: int = 10):
+        """Listen without a wake word for the answer to a question Grace just asked.
 
-        Handling a follow-up used to re-enter this method recursively, so a long
-        back-and-forth grew the Python stack one frame per exchange until it
-        overflowed. It is now an outer loop.
+        Opened only while `_awaiting_answer()` is true. Once the answer has been
+        handled and nothing further is being asked, the window closes and Grace
+        waits for the wake word again (it is never an
+        open-ended listener). If the answer raises another question, the window restarts
+        in an outer loop rather than recursing.
         """
         import time
 
-        log.info(f"Entering active {timeout_seconds}s follow-up listening window...")
+        log.info(f"Entering {timeout_seconds}s window to hear the answer to Grace's question...")
         self.wake_word.pause()
         FeedbackSounds.play_listening()
 
         while self._running:
-            await self.ws_server.emit({"type": "FollowupListeningStarted", "timeout": timeout_seconds})
+            await self.ws_server.emit({"type": "ListeningStarted"})
             self.vad.reset()
             self.whisper.reset_buffer()
             self.pump.drain()
@@ -1945,8 +1983,8 @@ class GraceApp:
             hard_max_seconds = 30.0
 
             while self._running:
-                if getattr(self, "_stop_followup", False):
-                    self._stop_followup = False
+                if getattr(self, "_stop_answer_wait", False):
+                    self._stop_answer_wait = False
                     handled = False
                     break
                 now = time.time()
@@ -1976,12 +2014,12 @@ class GraceApp:
                     if not self.vad.process_chunk(chunk, self.capture):
                         continue
 
-                    log.info(f"Follow-up VAD natural speech boundary detected after {len(audio_buffer)} bytes")
+                    log.info(f"Answer-window VAD natural speech boundary detected after {len(audio_buffer)} bytes")
                     raw_pcm = bytes(audio_buffer)
                     transcript = await asyncio.to_thread(self.whisper.transcribe_bytes, raw_pcm)
 
                     if transcript.strip():
-                        handled = await self._handle_followup_transcript(transcript)
+                        handled = await self._handle_answer_transcript(transcript)
                         if handled:
                             break
 
@@ -1989,20 +2027,21 @@ class GraceApp:
                     self.vad.reset()
                     has_speech_started = False
                 except Exception as e:
-                    log.error(f"Error in follow-up listening window: {e}")
+                    log.error(f"Error in answer window: {e}")
                     handled = False
                     break
 
-            if not handled:
+            if not handled or not self._awaiting_answer():
                 break
 
-        log.info("Follow-up listening window timed out. Returning to idle.")
+        log.info("Answer window closed. Returning to idle.")
         scanner = getattr(self, "_active_mark_scanner", None)
         if scanner is not None:
             scanner.stop()
             self._active_mark_scanner = None
         self._choice_race_resolver = None
         self._confirmation_race_resolver = None
+        self._awaiting_user_input = False
         if self.agent_loop.has_pending_confirmation:
             # A parked delete or app-close that nobody answered must not still
             # be approvable once we're back to idle and a new "yes" could be
@@ -2013,9 +2052,10 @@ class GraceApp:
         self._flush_mic_buffer()
         await self.ws_server.emit({"type": "Idle"})
 
-    async def _handle_followup_transcript(self, transcript: str) -> bool:
-        """Act on one follow-up utterance. Returns True if the window should restart."""
-        log.info(f"Follow-up transcribed: '{transcript}'")
+    async def _handle_answer_transcript(self, transcript: str) -> bool:
+        """Act on one utterance heard in the answer window. Returns True if it was handled."""
+        log.info(f"Answer-window transcribed: '{transcript}'")
+        self._awaiting_user_input = False  # this utterance answers the open question
         await self.ws_server.emit({"type": "FinalTranscript", "text": transcript})
 
         # Cancel any ongoing TTS output if user barged in
@@ -2070,18 +2110,18 @@ class GraceApp:
             log.debug(f"Dropped Voice Access command phrase: '{transcript}'")
             return False
 
-        # Immediate voice stop reflex in follow-up window
+        # Immediate voice stop reflex in the answer window
         if clean_transcript in self._STOP_COMMANDS or clean_transcript.startswith("stop ") or clean_transcript == "stop":
-            log.info(f"Follow-up stop command detected: '{transcript}'")
+            log.info(f"Answer-window stop command detected: '{transcript}'")
             self.response_gen.stop_speaking()
             if self.agent_loop.has_pending_confirmation:
                 self.agent_loop.cancel_pending()
             FeedbackSounds.play_cancel()
             return False
 
-        # Immediate voice repeat reflex in follow-up window
+        # Immediate voice repeat reflex in the answer window
         if clean_transcript in self._REPEAT_COMMANDS:
-            log.info(f"Follow-up repeat command detected: '{transcript}'")
+            log.info(f"Answer-window repeat command detected: '{transcript}'")
             if self.agent_loop.has_pending_confirmation:
                 prompt = self.agent_loop.pending_prompt or self._last_spoken_text or "Are you sure you want me to proceed?"
                 await self._speak_response(prompt)
@@ -2107,7 +2147,7 @@ class GraceApp:
                     system_prompt=self._get_intent_system_prompt(),
                 )
         except RateLimitError as e:
-            log.error(f"Follow-up intent generation rate limited: {e}")
+            log.error(f"Answer-window intent generation rate limited: {e}")
             await self._speak_response(
                 "I've hit my request limit for now. Please try again in a moment."
             )
@@ -2120,13 +2160,13 @@ class GraceApp:
             try:
                 intent = self.intent_parser.parse(intent_json)
             except Exception as e:
-                log.debug(f"Follow-up intent parse failed: {e}")
+                log.debug(f"Answer-window intent parse failed: {e}")
 
         if intent and intent.tool == "remember":
             val = str(intent.params.get("value", "")).strip()
             topic = str(intent.params.get("topic", "")).strip()
             if not val or not is_value_in_transcript(val, transcript):
-                log.warning(f"Provenance safety: rejected follow-up remember intent; value '{val}' was not spoken in '{transcript}'")
+                log.warning(f"Provenance safety: rejected remember intent heard in the answer window; value '{val}' was not spoken in '{transcript}'")
                 await self._speak_response("I can only remember things you say to me.")
                 return True
             prompt = intent.params.get("confirmation_prompt") or f"Should I remember that {topic} is {val}?"

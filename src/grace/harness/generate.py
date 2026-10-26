@@ -139,6 +139,25 @@ class Turn:
     replies: list[Reply] = field(default_factory=list)
 
 
+#: Scenarios whose later turns are open-ended follow-ups: spoken after a normal
+#: turn with no wake word and with nothing asked. Grace no longer listens then,
+#: so only their first turn is heard and the scripted rest never runs. Their
+#: tapes under corpus/ were recorded before that decision and are left as they
+#: are; tests that depend on the extra turns are skipped with the reason here.
+OPEN_ENDED_FOLLOWUP_SCENARIOS: dict[str, str] = {
+    "followup_chain_three_turns": "turns 2 and 3 are open-ended follow-ups after a finished turn",
+    "followup_agentic": "turn 2 is an open-ended follow-up after a finished turn",
+    "wake_during_tts_barge_in": "turn 2 is a 'stop' spoken in an open-ended follow-up window",
+    "turn_crash_and_recovery": "turn 2 is an open-ended follow-up after the crashed turn",
+    "memory_forget": "turns 2 and 3 are open-ended follow-ups after a finished turn",
+    "correction_learning": "turn 2 is an open-ended follow-up correction after a finished turn",
+    "memory_remember_recall_forget": (
+        "turns 2 and 3 (recall, forget) are follow-ups; they are now only heard as "
+        "unclear answers to the pending remember confirmation, not as recall and forget"
+    ),
+}
+
+
 @dataclass
 class Scenario:
     """A scripted session. Produces exactly one tape."""
@@ -160,10 +179,12 @@ class Scenario:
     # Results for ComputerUse.perform, in call order.
     cua_results: list[dict] = field(default_factory=list)
 
-    # Seconds the follow-up window stays open. 0 closes it immediately, which
-    # is what a single-turn scenario wants; a multi-turn one needs long enough
-    # for the next utterance's chunks to arrive.
-    followup_timeout: int = 0
+    # Seconds the answer window stays open after Grace asks something (a yes/no
+    # confirmation, a needs-input question). It opens only then: after a normal
+    # turn Grace goes back to the wake word. 0 closes it immediately, which is
+    # what a single-turn scenario wants; a multi-turn one needs long enough for
+    # the next utterance's chunks to arrive.
+    answer_timeout: int = 0
 
     # Scheduled switch actions to simulate during execution: list of (delay_seconds, SwitchAction)
     switch_actions: list[tuple[float, Any]] = field(default_factory=list)
@@ -518,7 +539,7 @@ def _config_for(scenario: Scenario):
         # note there. Production's own value is larger; what a generated tape
         # grades is the routing above the VAD, not the VAD's tuning.
         whisper_silence_duration_ms=275,
-        followup_timeout_seconds=scenario.followup_timeout,
+        answer_timeout_seconds=scenario.answer_timeout,
     )
 
 
@@ -813,7 +834,7 @@ def _catalogue() -> list[Scenario]:
                 Turn("yes", []),
             ],
             tool_results={"close_app": {"status": "ok", "text": "I've closed notepad."}},
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="fastpath_search_files",
@@ -848,7 +869,7 @@ def _catalogue() -> list[Scenario]:
                 Turn("yes", []),
             ],
             tool_results={"lock_computer": {"status": "ok", "text": "I've locked your computer."}},
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="fastpath_open_calculator",
@@ -871,7 +892,7 @@ def _catalogue() -> list[Scenario]:
                 "status": "ok", "action": "delete_file",
                 "text": "I've moved 'old notes.txt' to the Recycle Bin.",
             }},
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="fastpath_cua_list_windows",
@@ -1227,7 +1248,7 @@ def _catalogue() -> list[Scenario]:
                 "status": "ok", "action": "delete_file",
                 "text": "I've moved 'draft.txt' to the Recycle Bin.",
             }},
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="safety_confirm_declined",
@@ -1249,7 +1270,7 @@ def _catalogue() -> list[Scenario]:
                 Turn("no don't do that", []),
             ],
             snapshots=[_NOTEPAD],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="safety_confirm_hijacked",
@@ -1276,7 +1297,7 @@ def _catalogue() -> list[Scenario]:
                 ),
             ],
             snapshots=[_NOTEPAD],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="safety_press_key_confirm",
@@ -1297,7 +1318,7 @@ def _catalogue() -> list[Scenario]:
                 Turn("no cancel that", []),
             ],
             snapshots=[_NOTEPAD],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
 
         # -- degraded paths -------------------------------------------------
@@ -1360,7 +1381,7 @@ def _catalogue() -> list[Scenario]:
                 "open_app": {"status": "ok", "text": "I've opened Notepad."},
                 "adjust_volume": {"status": "ok", "text": "Volume set to 60 percent.", "volume": 60},
             },
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="followup_agentic",
@@ -1380,7 +1401,7 @@ def _catalogue() -> list[Scenario]:
             ],
             snapshots=[_BROWSER],
             cua_results=[{"ok": True, "message": "clicked"}],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
 
         # -- hardened scenarios --------------------------------------------
@@ -1448,7 +1469,7 @@ def _catalogue() -> list[Scenario]:
                 "status": "ok", "action": "delete_file",
                 "text": "I've deleted 'old_draft.txt'.",
             }},
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="safety_confirm_timeout",
@@ -1469,7 +1490,7 @@ def _catalogue() -> list[Scenario]:
                 Turn("", []),
             ],
             snapshots=[_NOTEPAD],
-            followup_timeout=1,
+            answer_timeout=1,
         ),
         Scenario(
             name="stop_during_model_call",
@@ -1599,7 +1620,7 @@ def _catalogue() -> list[Scenario]:
                 ),
                 Turn("stop", []),
             ],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="safety_confirm_second_spoken_while_pending",
@@ -1641,7 +1662,7 @@ def _catalogue() -> list[Scenario]:
                     {"status": "ok", "action": "delete_file", "text": "I've moved 'draft.txt' to the Recycle Bin."},
                 ],
             },
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="turn_crash_and_recovery",
@@ -1663,7 +1684,7 @@ def _catalogue() -> list[Scenario]:
                 "open_file": RuntimeError("Simulated disk read crash: I/O device failure"),
                 "open_calculator": {"status": "ok", "text": "I've opened the calculator."},
             },
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="app_not_installed",
@@ -1747,7 +1768,7 @@ def _catalogue() -> list[Scenario]:
             ],
             snapshots=[_CHOICE_SCREEN],
             cua_results=[{"ok": True, "message": "clicked"}],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="memory_remember_recall_forget",
@@ -1763,7 +1784,7 @@ def _catalogue() -> list[Scenario]:
                 Turn("forget Priya is my sister",
                      [_intent("converse", response="I've forgotten that Priya is your sister.")]),
             ],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="memory_remember",
@@ -1774,7 +1795,7 @@ def _catalogue() -> list[Scenario]:
                     [_intent("converse", response="I'll remember Priya is your sister, right?")],
                 ),
             ],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="memory_confirm",
@@ -1789,7 +1810,7 @@ def _catalogue() -> list[Scenario]:
                     [_intent("converse", response="I've remembered that Priya is your sister.")],
                 ),
             ],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="memory_conflict",
@@ -1804,7 +1825,7 @@ def _catalogue() -> list[Scenario]:
                     [_intent("converse", response="Updated record for Priya.")],
                 ),
             ],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="memory_forget",
@@ -1814,7 +1835,7 @@ def _catalogue() -> list[Scenario]:
                 Turn("forget what I did in Chrome", []),
                 Turn("forget everything", []),
             ],
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="prompt_injection_web_title_file",
@@ -1877,7 +1898,7 @@ def _catalogue() -> list[Scenario]:
                 ),
             ],
             tool_results={"open_app": {"status": "ok", "app": "Chrome", "text": "Google Chrome opened."}},
-            followup_timeout=6,
+            answer_timeout=6,
         ),
         Scenario(
             name="switch_yes",
@@ -1905,7 +1926,7 @@ def _catalogue() -> list[Scenario]:
                 "text": "I've moved 'draft.txt' to the Recycle Bin.",
             }},
             switch_actions=[("on_confirmation", SwitchAction.YES)],
-            followup_timeout=4,
+            answer_timeout=4,
         ),
         Scenario(
             name="switch_no",
@@ -1930,7 +1951,7 @@ def _catalogue() -> list[Scenario]:
                 "text": "I've moved 'draft.txt' to the Recycle Bin.",
             }},
             switch_actions=[("on_confirmation", SwitchAction.NO)],
-            followup_timeout=4,
+            answer_timeout=4,
         ),
         Scenario(
             name="switch_stop",
@@ -1950,7 +1971,7 @@ def _catalogue() -> list[Scenario]:
             ],
             snapshots=[_NOTEPAD],
             switch_actions=[(0.05, SwitchAction.STOP)],
-            followup_timeout=0,
+            answer_timeout=0,
         ),
         Scenario(
             name="mark_scanning",
@@ -1975,7 +1996,7 @@ def _catalogue() -> list[Scenario]:
             snapshots=[_CHOICE_SCREEN],
             cua_results=[{"ok": True, "message": "clicked"}],
             switch_actions=[("on_mark_scanner", SwitchAction.YES)],
-            followup_timeout=4,
+            answer_timeout=4,
         ),
     ]
 

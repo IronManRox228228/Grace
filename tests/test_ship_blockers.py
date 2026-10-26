@@ -32,14 +32,14 @@ def make_app(**attrs):
 
 
 class TestWakeWordResumesAfterActivation:
-    """main.py:591 pauses the detector; only `_run_followup_window` resumed it,
+    """main.py:591 pauses the detector; only `_run_answer_window` resumed it,
     and main.py:577 now skips that window whenever `turn_result is False` - so
     an aborted turn (silence, a stop command, a transcription error) left the
     detector paused forever and "Grace" was never heard again.
     """
 
     def test_a_false_turn_result_leaves_the_detector_resumed(self):
-        app = make_app(_run_followup_window=AsyncMock())
+        app = make_app(_run_answer_window=AsyncMock())
 
         async def aborted(trace):
             return False
@@ -48,10 +48,16 @@ class TestWakeWordResumesAfterActivation:
         asyncio.run(app._handle_activation())
 
         app.wake_word.resume.assert_called_once()
-        app._run_followup_window.assert_not_awaited()
+        app._run_answer_window.assert_not_awaited()
 
-    def test_a_successful_turn_leaves_resuming_to_the_followup_window(self):
-        app = make_app(_run_followup_window=AsyncMock(), config=MagicMock(followup_timeout_seconds=10))
+    def test_a_normal_turn_goes_back_to_the_wake_word_with_no_listening_window(self):
+        """Cockpit 6 item 7: after a normal agent turn no listening window opens."""
+        app = make_app(
+            _run_answer_window=AsyncMock(),
+            config=MagicMock(answer_timeout_seconds=10),
+            agent_loop=MagicMock(has_pending_confirmation=False),
+            _flush_mic_buffer=MagicMock(),
+        )
 
         async def ok(trace):
             return True
@@ -59,11 +65,41 @@ class TestWakeWordResumesAfterActivation:
         app._handle_activation_turn = ok
         asyncio.run(app._handle_activation())
 
-        # `_run_followup_window` pauses/resumes the detector itself; resuming
-        # it again here too would just be redundant, not wrong, but asserting
-        # it was NOT called here pins the intended division of responsibility.
+        app._run_answer_window.assert_not_awaited()
+        app.wake_word.resume.assert_called_once()
+
+    def test_a_turn_that_asked_a_question_opens_the_answer_window(self):
+        app = make_app(
+            _run_answer_window=AsyncMock(),
+            config=MagicMock(answer_timeout_seconds=10),
+            agent_loop=MagicMock(has_pending_confirmation=True),
+        )
+
+        async def asked(trace):
+            return True
+
+        app._handle_activation_turn = asked
+        asyncio.run(app._handle_activation())
+
+        # `_run_answer_window` pauses/resumes the detector itself; asserting
+        # it was NOT resumed here pins the intended division of responsibility.
         app.wake_word.resume.assert_not_called()
-        app._run_followup_window.assert_awaited_once()
+        app._run_answer_window.assert_awaited_once()
+
+    def test_a_needs_user_input_goal_opens_the_answer_window(self):
+        app = make_app(
+            _run_answer_window=AsyncMock(),
+            config=MagicMock(answer_timeout_seconds=10),
+            agent_loop=MagicMock(has_pending_confirmation=False),
+            _awaiting_user_input=True,
+        )
+
+        async def asked(trace):
+            return True
+
+        app._handle_activation_turn = asked
+        asyncio.run(app._handle_activation())
+        app._run_answer_window.assert_awaited_once()
 
     def test_an_exception_still_resumes_the_detector(self):
         app = make_app()
@@ -101,8 +137,8 @@ class TestConfirmationAnswerIsStrict:
         assert GraceApp._confirmation_answer(utterance) is False
 
 
-class TestFollowupTimeoutCancelsPendingConfirmation:
-    """A parked confirmation must not survive its own follow-up window closing
+class TestAnswerWindowTimeoutCancelsPendingConfirmation:
+    """A parked confirmation must not survive its own answer window closing
     unanswered - otherwise a later, unrelated "yes" can approve it.
     """
 
@@ -120,7 +156,7 @@ class TestFollowupTimeoutCancelsPendingConfirmation:
 
         # timeout_seconds=0 makes the inner listening loop time out on its
         # very first check, with nothing captured or handled.
-        asyncio.run(app._run_followup_window(timeout_seconds=0))
+        asyncio.run(app._run_answer_window(timeout_seconds=0))
 
         app.agent_loop.cancel_pending.assert_called_once()
         app.wake_word.resume.assert_called_once()

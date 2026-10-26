@@ -37,7 +37,7 @@ class TestOfflineGuarantee:
             Config(),
             use_cloud_llm=False,
             whisper_silence_duration_ms=275,
-            followup_timeout_seconds=0,
+            answer_timeout_seconds=0,
         )
 
         connections_attempted = []
@@ -113,7 +113,7 @@ class TestOfflineGuarantee:
             app.vad.process_chunk.return_value = True
             app.capture = mock.MagicMock()
             app.capture.get_rms.return_value = 1000.0
-            app._run_followup_window = mock.AsyncMock()
+            app._run_answer_window = mock.AsyncMock()
             app.gemma.generate_intent = mock.AsyncMock(
                 return_value='{"tool": "converse", "params": {"response": "Hello world"}}'
             )

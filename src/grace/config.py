@@ -123,7 +123,9 @@ class Config:
     mic_chunk: int = field(default_factory=lambda: int(os.getenv("MIC_CHUNK", "512")))
     mic_channels: int = field(default_factory=lambda: int(os.getenv("MIC_CHANNELS", "1")))
     mic_width: int = field(default_factory=lambda: int(os.getenv("MIC_WIDTH", "2")))
-    followup_timeout_seconds: int = field(default_factory=lambda: int(os.getenv("FOLLOWUP_TIMEOUT_SECONDS", "10")))
+    # How long the answer window stays open after Grace asks a question
+    # (a yes/no confirmation, a needs-input question). FOLLOWUP_TIMEOUT_SECONDS is the legacy name.
+    answer_timeout_seconds: int = field(default_factory=lambda: int(os.getenv("ANSWER_TIMEOUT_SECONDS", os.getenv("FOLLOWUP_TIMEOUT_SECONDS", "10"))))
     initial_listen_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("INITIAL_LISTEN_TIMEOUT_SECONDS", "6.0")))
 
     # Wake Word

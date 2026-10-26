@@ -18,6 +18,7 @@ import os
 import pytest
 
 from grace.harness.generate import (
+    OPEN_ENDED_FOLLOWUP_SCENARIOS,
     SCENARIOS,
     SIDE_EFFECTING_HANDLERS,
     RateLimited,
@@ -126,7 +127,7 @@ def test_a_generated_tape_says_it_is_synthetic(tmp_path):
     assert meta["covers"] == scenario.covers
     # The config still has to be there: replay reads the follow-up timeout and
     # the VAD silence window back out of it.
-    assert meta["config"]["followup_timeout_seconds"] == scenario.followup_timeout
+    assert meta["config"]["answer_timeout_seconds"] == scenario.answer_timeout
 
 
 def test_regenerating_replaces_the_previous_tape(tmp_path):
@@ -152,13 +153,13 @@ def test_scenario_names_are_unique_and_described():
         assert scenario.turns, f"{scenario.name} has no turns"
 
 
-def test_multi_turn_scenarios_leave_the_followup_window_open():
-    """A follow-up turn with a 0s window has no chance to be heard."""
+def test_multi_turn_scenarios_leave_the_answer_window_open():
+    """An answer with a 0s window has no chance to be heard."""
     for scenario in SCENARIOS:
         if len(scenario.turns) > 1:
-            assert scenario.followup_timeout > 0, (
+            assert scenario.answer_timeout > 0, (
                 f"{scenario.name} scripts {len(scenario.turns)} turns but closes "
-                "the follow-up window immediately"
+                "the answer window immediately"
             )
 
 
@@ -178,8 +179,21 @@ _REPRESENTATIVE = (
 
 def _round_trip_scenarios():
     if os.getenv("GRACE_FULL_CORPUS", "").lower() in ("1", "true", "yes"):
-        return SCENARIOS
-    return [s for s in SCENARIOS if s.name in _REPRESENTATIVE]
+        chosen = SCENARIOS
+    else:
+        chosen = [s for s in SCENARIOS if s.name in _REPRESENTATIVE]
+    return [
+        pytest.param(
+            s,
+            marks=pytest.mark.skip(
+                reason=f"depends on open-ended follow-up listening, which was removed: "
+                f"{OPEN_ENDED_FOLLOWUP_SCENARIOS[s.name]}"
+            ),
+        )
+        if s.name in OPEN_ENDED_FOLLOWUP_SCENARIOS
+        else s
+        for s in chosen
+    ]
 
 
 @pytest.mark.parametrize(
@@ -211,6 +225,30 @@ def test_a_generated_tape_replays_to_itself(scenario, tmp_path):
 
 
 # -- the paths the catalogue exists to pin ---------------------------------
+
+
+def _types_after(tape, marker):
+    types = [e["type"] for e in tape.event_stream if e["type"] != "TurnTrace"]
+    return types[types.index(marker) + 1:]
+
+
+def test_after_a_normal_turn_no_listening_window_opens(tmp_path):
+    """Cockpit 6 item 7: a finished turn goes back to the wake word."""
+    tape = _tape_for("conversation_plain", tmp_path)
+
+    assert _types_after(tape, "ConversationFinished") == ["Idle"]
+    assert "FollowupListeningStarted" not in [e["type"] for e in tape.event_stream]
+
+
+def test_after_a_confirm_prompt_the_answer_window_opens_and_yes_resumes(tmp_path):
+    tape = _tape_for("safety_confirm_accepted", tmp_path)
+
+    after_question = _types_after(tape, "ConversationFinished")
+    assert after_question[0] == "ListeningStarted"  # the window for the answer
+    assert tape.dispatch_calls == [{"tool": "delete_file", "params": {"name": "draft.txt"}}]
+    # Once the confirmed action is done nothing further is listened for.
+    assert after_question[-1] == "Idle"
+    assert after_question.count("ListeningStarted") == 1
 
 
 def _tape_for(name, tmp_path):
@@ -253,6 +291,10 @@ def test_a_rate_limited_turn_reaches_no_tool(tmp_path):
     assert "request limit" in spoken
 
 
+@pytest.mark.skip(
+    reason="open-ended follow-up listening was removed: after a normal turn Grace "
+    "waits for the wake word, so turns 2 and 3 of this tape are never heard"
+)
 def test_the_followup_chain_handles_three_turns_without_a_wake_word(tmp_path):
     tape = _tape_for("followup_chain_three_turns", tmp_path)
 
@@ -263,6 +305,10 @@ def test_the_followup_chain_handles_three_turns_without_a_wake_word(tmp_path):
     assert [call["tool"] for call in tape.dispatch_calls] == ["open_app", "adjust_volume"]
 
 
+@pytest.mark.skip(
+    reason="uses followup_chain_three_turns, whose turns 2 and 3 are open-ended "
+    "follow-ups that are no longer listened for"
+)
 def test_each_turn_of_a_session_produces_distinct_audio(tmp_path):
     """Identical PCM across turns collapses the tape's transcript index.
 
