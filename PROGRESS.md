@@ -94,6 +94,118 @@ PS C:\Users\Ashman Das\Documents\Grace> Get-Process | Where-Object { $_.ProcessN
 
 ---
 
+## Cockpit 5
+
+Scope: `cockpit-5.md` — the terminal cover must check the window that actually gets the keys.
+Repo: `C:\Users\Ashman Das\Documents\Grace`, branch `main`. Commit `7007e0c`
+`fix(agent): terminal cover checks the window that actually receives the keys`, pushed to `origin/main`.
+
+### Gap
+
+`evaluate_context` (called at plan time in `loop.py`) only looked at
+`snapshot.active_window` — the window in front when the plan was made. Later in the
+same step the loop activates a different window (`window`/`window_title` param) via
+`cua_activate`, then dispatches the keystrokes. So a step naming Windows PowerShell
+while Notepad was in front passed the cover and ran with no yes.
+
+### Fix (two layers, both required)
+
+**1. Plan time — `src/grace/agent/context_covers.py`**
+
+- `evaluate_context` now also resolves any window the step names (`window` dict with
+  `title`/`hwnd`, or `window_title`) through `_resolve_target_window` and checks it
+  with `_terminal_hwnd` (process name via `window_process_name`, class name via
+  `win32gui.GetClassName`). If **either** the front window or the named target is a
+  terminal, the existing confirm yes/no flow fires (`CoverDecision(kind="confirm",
+  ...)`).
+- Title resolution reuses `pick_best_window_match`/`window_titles_match` from
+  `automation/computer_use.py` (imported lazily to avoid an import cycle; no new
+  matcher written).
+
+**2. Send time — `src/grace/automation/computer_use.py`**
+
+- `_type_text`, `_set_value` and `_press_key` re-read `GetForegroundWindow()` (process
+  + class) right before input is dispatched. If it is a terminal
+  (imported `TERMINAL_PROCESSES`/`TERMINAL_CLASSES`, **not** duplicated) and the call
+  was not confirmed, nothing is sent and an error result returns the fact:
+  `"The window in front is a terminal (<process>); typing there needs the user's yes."`
+- For `cua_press_key`, only submit/paste keys in `_TERMINAL_KEYS` are stopped; arrow
+  keys pass, exactly as at plan time.
+- `confirmed` threads `Dispatcher.execute` -> `_execute_cua` ->
+  `ComputerUse.perform` -> the three handlers (`src/grace/tools/dispatcher.py`); a
+  confirmed call (user said yes) goes through unchanged.
+- Harness stubs updated to accept the new `confirmed` kwarg:
+  `NullComputerUse` (`src/grace/harness/replay.py`), `ScriptedComputerUse`
+  (`src/grace/harness/generate.py`).
+
+### Files and lines changed
+
+- `src/grace/agent/context_covers.py`: added `_terminal_hwnd` and
+  `_resolve_target_window` (after `_terminal_window`, ~lines 246-317); extended the
+  terminal branch of `evaluate_context` (~lines 335-350).
+- `src/grace/automation/computer_use.py`: added `_terminal_foreground` (~lines
+  322-359); `perform` (~line 521), `_type_text` (~line 959), `_set_value` (~line
+  2026) and `_press_key` (~line 1173) take `confirmed=False` and apply the send-time
+  terminal check before dispatching.
+- `src/grace/tools/dispatcher.py`: `_execute` (~line 279) and `_execute_cua`
+  (~lines 357, 366) accept and forward `confirmed`.
+- `src/grace/harness/replay.py`: `NullComputerUse.perform` accepts `confirmed`
+  (line 583).
+- `src/grace/harness/generate.py`: `ScriptedComputerUse.perform` accepts `confirmed`
+  (line 367).
+
+### Tests added
+
+`tests/test_context_covers.py` — new class `TestTerminalCoverTargetWindow`:
+- `test_plan_time_checks_named_terminal_window` — front window Notepad, step names
+  `Windows PowerShell` (fake hwnd whose process is `powershell.exe`); `cua_type_text`
+  returns the confirm decision with the exact text
+  `"Run this in the terminal: 'rm -r ...'? Say yes or no."`
+- `test_plan_time_named_notepad_is_no_cover` — target named `Untitled - Notepad`
+  (process `notepad.exe`); no cover.
+- `test_plan_time_window_title_without_hwnd_matches_live_window` — `window_title` only
+  (no hwnd); resolved against live windows by title and confirmed.
+
+`tests/test_terminal_send_time_cover.py` (new):
+- `test_type_text_blocked_when_foreground_is_terminal_and_unconfirmed` — fake foreground
+  `WindowsTerminal.exe`, `confirmed=False`; `_type_text` sends nothing (fake input
+  driver got zero calls) and returns the error fact.
+- `test_type_text_sends_when_confirmed_true` — `confirmed=True` sends normally.
+- `test_set_value_blocked_when_foreground_is_terminal_and_unconfirmed` / `test_set_value_sends_when_confirmed_true` — same for `cua_set_value`.
+- `test_press_key_enter_blocked_but_down_passes` — `Enter` stopped, `Down` passes,
+  confirmed `Enter` goes through.
+
+### Existing tests touched (kept hermetic)
+
+The real foreground window on this machine is a terminal, so existing tests that type
+without mocking the foreground now mock
+`grace.automation.computer_use._terminal_foreground` to return `None` (they already
+mocked pyautogui/focus helpers):
+- `tests/test_type_text_submit.py::test_type_text_with_submit_types_and_presses_enter`
+- `tests/test_cua_enhancements.py::test_press_key_mapping`
+- `tests/integration/test_param_contract.py::TestTypeText::test_replace_clears_the_field_first`
+  and `test_append_is_still_the_default`
+- `tests/integration/test_planner_to_executor.py` — `chain` fixture mocks
+  `_terminal_foreground` (same class of env dependency the fixture's comment already
+  flagged for `_foreground_title`)
+- `tests/test_open_app_forward.py::FakeCua.perform` accepts `confirmed`
+
+All cockpit-4 terminal/cover tests in `tests/test_context_covers.py` still pass
+unchanged.
+
+### Full-run count
+
+`./venv/Scripts/python.exe -m pytest -q -p no:cacheprovider` (serial):
+**1544 passed, 0 failed, 1 skipped** (requirement: 0 failed, at least 1536 passed).
+
+### Rules honoured
+
+- Did not run Grace, did not start llama-server, never drove the real desktop, never
+  touched `tests/conftest.py`'s real-input guard, never edited `.env`. Fakes only;
+  temp dirs only.
+
+---
+
 ## Holo and typed
 
 Task: `grace-prompts/holo-and-typed-glm.md` (A: Holo mock-drive with the real
