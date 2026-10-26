@@ -319,6 +319,40 @@ def _foreground_title() -> str:
         return ""
 
 
+def _terminal_foreground() -> Optional[str]:
+    """Return the foreground terminal's process name, or None when it isn't one.
+
+    Reads the real foreground window right before input is dispatched, so a
+    window that became the foreground after the plan was made is still caught.
+    """
+    from grace.agent.context_covers import (
+        TERMINAL_CLASSES,
+        TERMINAL_PROCESSES,
+        window_process_name,
+    )
+
+    try:
+        import win32gui
+
+        hwnd = win32gui.GetForegroundWindow()
+    except Exception:
+        return None
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return None
+    class_name = ""
+    try:
+        class_name = win32gui.GetClassName(hwnd) or ""
+    except Exception:
+        pass
+    if class_name in TERMINAL_CLASSES:
+        proc = window_process_name(hwnd)
+        return proc or "<unknown>"
+    proc = window_process_name(hwnd)
+    if proc and proc.lower() in TERMINAL_PROCESSES:
+        return proc
+    return None
+
+
 def _normalize_title_tokens(title: str) -> list[str]:
     if not title:
         return []
@@ -484,13 +518,18 @@ class ComputerUse:
         """Clean up resources."""
         self._available = False
 
-    def perform(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
+    def perform(self, action: str, params: dict[str, Any], confirmed: bool = False) -> dict[str, Any]:
         """Execute a CUA action and return the result."""
         handler = getattr(self, f"_{action}", None)
         if handler is None:
             return {"error": f"Unknown action: {action}", "sent": False, "verified": False,
                     "evidence": "no handler exists for this action"}
         try:
+            # `confirmed` (the user's yes to a terminal/destructive cover) only
+            # changes behaviour for the text-input handlers; everyone else gets
+            # the existing signature.
+            if action in ("type_text", "set_value", "press_key"):
+                return _contract(handler(params, confirmed=confirmed))
             return _contract(handler(params))
         except Exception as e:
             logger.error(f"Action {action} failed: {e}")
@@ -917,7 +956,7 @@ class ComputerUse:
         except Exception:
             pass
 
-    def _type_text(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _type_text(self, params: dict[str, Any], confirmed: bool = False) -> dict[str, Any]:
         import pyautogui
         text = str(params.get("text", ""))
 
@@ -969,6 +1008,24 @@ class ComputerUse:
         if refused is not None:
             logger.warning(f"_type_text aborted right before typing: {refused['error']}")
             return refused
+
+        # Send-time terminal cover: re-check the real foreground right before
+        # keys go out. A confirmed call (the user said yes) goes through.
+        if not confirmed:
+            fg_proc = _terminal_foreground()
+            if fg_proc is not None:
+                fact = f"The window in front is a terminal ({fg_proc}); typing there needs the user's yes."
+                logger.warning(f"_type_text aborted right before typing: {fact}")
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "verified": False,
+                    "action": "type_text",
+                    "status": "refused",
+                    "error": fact,
+                    "text": fact,
+                    "evidence": "no keystrokes were sent",
+                }
 
         typed_chars = 0
         typing_cut_off = False
@@ -1091,7 +1148,7 @@ class ComputerUse:
             ok = text in value
         return ok, f"'{after['focus_name']}' now reads '{value[:80]}'"
 
-    def _press_key(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _press_key(self, params: dict[str, Any], confirmed: bool = False) -> dict[str, Any]:
         import pyautogui
         raw_key = str(params.get("key", ""))
 
@@ -1107,6 +1164,26 @@ class ComputerUse:
         if refused is not None:
             logger.warning(f"_press_key aborted right before key dispatch: {refused['error']}")
             return refused
+
+        # Send-time terminal cover: only submit/paste keys are stopped. Arrow
+        # keys and similar pass, exactly as at plan time.
+        from grace.agent.context_covers import _terminal_key
+
+        if not confirmed and _terminal_key(raw_key):
+            fg_proc = _terminal_foreground()
+            if fg_proc is not None:
+                fact = f"The window in front is a terminal ({fg_proc}); typing there needs the user's yes."
+                logger.warning(f"_press_key aborted right before key dispatch: {fact}")
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "verified": False,
+                    "action": "press_key",
+                    "status": "refused",
+                    "error": fact,
+                    "text": fact,
+                    "evidence": "no keystrokes were sent",
+                }
 
         # Map CUA / X11 keysyms to PyAutoGUI key names
         key_map = {
@@ -1899,7 +1976,7 @@ class ComputerUse:
             "elements": elements,
         }
 
-    def _set_value(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _set_value(self, params: dict[str, Any], confirmed: bool = False) -> dict[str, Any]:
         """Replace the contents of a specific editable field.
 
         The schema has always taken an `element_index`, but this used to be a
@@ -1944,6 +2021,24 @@ class ComputerUse:
         refused = _wrong_window(params, "set_value", initial_title=_foreground_title())
         if refused is not None:
             return refused
+
+        # Send-time terminal cover: re-check the real foreground right before
+        # keys go out. A confirmed call (the user said yes) goes through.
+        if not confirmed:
+            fg_proc = _terminal_foreground()
+            if fg_proc is not None:
+                fact = f"The window in front is a terminal ({fg_proc}); typing there needs the user's yes."
+                logger.warning(f"_set_value aborted right before typing: {fact}")
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "verified": False,
+                    "action": "set_value",
+                    "status": "refused",
+                    "error": fact,
+                    "text": fact,
+                    "evidence": "no keystrokes were sent",
+                }
 
         try:
             # Select-all then type, so this sets rather than appends.

@@ -128,11 +128,12 @@ class TestElementTargetNaming:
 
 
 class TestTypeText:
-    def test_replace_clears_the_field_first(self, desktop):
+    def test_replace_clears_the_field_first(self, desktop, monkeypatch):
         # The WhatsApp failure: "Chemistry" was still in the search box, so
         # typing "Coordination Compounds" produced
         # "ChemistryCoordination Compounds" and no results.
         cua, fake = desktop
+        monkeypatch.setattr("grace.automation.computer_use._terminal_foreground", lambda: None)
         cua.perform("type_text", {"text": "Coordination Compounds", "replace": True})
 
         assert ("hotkey", "ctrl", "a") in fake.calls, (
@@ -143,10 +144,11 @@ class TestTypeText:
             ("write", "Coordination Compounds")
         ), "the field was cleared after typing, not before"
 
-    def test_append_is_still_the_default(self, desktop):
+    def test_append_is_still_the_default(self, desktop, monkeypatch):
         # Typing into an empty field must not select-all first; that would make
         # every ordinary keystroke destructive.
         cua, fake = desktop
+        monkeypatch.setattr("grace.automation.computer_use._terminal_foreground", lambda: None)
         cua.perform("type_text", {"text": "hello"})
         assert ("hotkey", "ctrl", "a") not in fake.calls
         assert ("write", "hello") in fake.calls

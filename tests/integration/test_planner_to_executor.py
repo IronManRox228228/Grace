@@ -138,6 +138,9 @@ def chain(monkeypatch):
     monkeypatch.setattr(
         "grace.automation.computer_use._foreground_title", lambda: "Test Window"
     )
+    # `_terminal_foreground` reads the real foreground window otherwise, which
+    # makes every typing assertion here depend on what is open on the machine.
+    monkeypatch.setattr("grace.automation.computer_use._terminal_foreground", lambda: None)
     monkeypatch.setattr(
         "grace.automation.win32_driver.Win32Driver.click_at",
         lambda x, y, hwnd=None, clicks=1: (fake_gui.click(x, y), True)[1],

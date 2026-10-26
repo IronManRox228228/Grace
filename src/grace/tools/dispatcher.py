@@ -276,7 +276,7 @@ class Dispatcher:
         params = intent.params
 
         if tool.startswith("cua_"):
-            return await self._execute_cua(tool, params)
+            return await self._execute_cua(tool, params, confirmed=confirmed)
 
         if tool == "voice_training_status":
             await self._emit_tool_started(tool, params)
@@ -354,7 +354,7 @@ class Dispatcher:
         if self._ws:
             await self._ws.emit({"type": "ToolExecutionFinished"})
 
-    async def _execute_cua(self, tool: str, params: dict) -> dict:
+    async def _execute_cua(self, tool: str, params: dict, confirmed: bool = False) -> dict:
         """Execute a CUA tool via the local ComputerUse backend."""
         if not self._cua or not self._cua.is_ready:
             return {"status": "error", "error": "Computer use not available"}
@@ -362,7 +362,7 @@ class Dispatcher:
         action = tool[4:]
         await self._emit_cua_started(action)
         try:
-            result = await asyncio.to_thread(self._cua.perform, action, params)
+            result = await asyncio.to_thread(self._cua.perform, action, params, confirmed=confirmed)
             await self._emit_tool_finished()
             if result and result.get("error"):
                 # The handler's own envelope is carried through, not replaced.

@@ -580,7 +580,7 @@ class NullComputerUse(_Constructible):
     is_ready = False
     def start(self): return None
     def stop(self): return None
-    def perform(self, action, params): return {}
+    def perform(self, action, params, confirmed=False): return {}
 
 
 class _NullFeedbackSounds:

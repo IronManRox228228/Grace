@@ -35,6 +35,7 @@ def test_type_text_with_submit_types_and_presses_enter(monkeypatch):
     # Mock window checks
     monkeypatch.setattr("grace.automation.computer_use._foreground_title", lambda: "Notepad")
     monkeypatch.setattr("grace.automation.computer_use._wrong_window", lambda params, action, initial_title=None: None)
+    monkeypatch.setattr("grace.automation.computer_use._terminal_foreground", lambda: None)
     monkeypatch.setattr("grace.automation.computer_use._invalidate_graph", lambda: None)
 
     # 1. submit = True

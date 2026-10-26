@@ -147,6 +147,54 @@ class TestTerminalCover:
         assert evaluate_context("cua_type_text", {"text": "hello"}, s, goal="x", process="notepad.exe") is None
 
 
+class TestTerminalCoverTargetWindow:
+    # Cockpit 5 layer 1: even when the front window is not a terminal, naming a
+    # terminal window as the step's target must still produce the confirm
+    # decision, because the loop activates that window before typing.
+
+    def test_plan_time_checks_named_terminal_window(self, monkeypatch):
+        monkeypatch.setattr(
+            "grace.agent.context_covers.window_process_name",
+            lambda hwnd: "powershell.exe" if hwnd == 0x4321 else "",
+        )
+        s = snap("Untitled - Notepad", class_name="Notepad")
+        params = {
+            "window": {"title": "Windows PowerShell", "hwnd": 0x4321},
+            "text": "rm -r ...",
+            "submit": True,
+        }
+        d = evaluate_context("cua_type_text", params, s, goal="clear the drive")
+        assert d is not None and d.kind == "confirm"
+        assert d.message == "Run this in the terminal: 'rm -r ...'? Say yes or no."
+
+    def test_plan_time_named_notepad_is_no_cover(self, monkeypatch):
+        monkeypatch.setattr(
+            "grace.agent.context_covers.window_process_name",
+            lambda hwnd: "notepad.exe" if hwnd == 0x4322 else "",
+        )
+        s = snap("Untitled - Notepad", class_name="Notepad")
+        params = {
+            "window": {"title": "Untitled - Notepad", "hwnd": 0x4322},
+            "text": "hello",
+        }
+        assert evaluate_context("cua_type_text", params, s, goal="x") is None
+
+    def test_plan_time_window_title_without_hwnd_matches_live_window(self, monkeypatch):
+        # `window_title` only (no hwnd): resolve against live windows by title.
+        monkeypatch.setattr(
+            "grace.agent.context_covers.window_process_name",
+            lambda hwnd: "powershell.exe" if hwnd == 0x9999 else "",
+        )
+        monkeypatch.setattr(
+            "win32gui.EnumWindows",
+            lambda callback, results: results.append((0x9999, "Windows PowerShell")),
+        )
+        s = snap("Untitled - Notepad", class_name="Notepad")
+        params = {"window_title": "Windows PowerShell", "text": "rm -r ...", "submit": True}
+        d = evaluate_context("cua_type_text", params, s, goal="x")
+        assert d is not None and d.kind == "confirm"
+
+
 def _loop(snapshot, replies):
     gemma = AsyncMock()
     gemma.generate_text.side_effect = replies

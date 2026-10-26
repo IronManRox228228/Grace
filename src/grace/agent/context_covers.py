@@ -243,6 +243,76 @@ def _terminal_window(snapshot: Any, process: Optional[str]) -> bool:
     return False
 
 
+def _terminal_hwnd(hwnd: int) -> bool:
+    """True if `hwnd` is a terminal window, by class name or process name.
+
+    Mirrors `_terminal_window`'s signals for an arbitrary window handle, so a
+    target window the step names can be judged even though it isn't the front
+    window when the plan is made.
+    """
+    if not hwnd:
+        return False
+    class_name = ""
+    try:
+        import win32gui
+
+        class_name = win32gui.GetClassName(hwnd) or ""
+    except Exception:
+        pass
+    if class_name in TERMINAL_CLASSES:
+        return True
+    proc = window_process_name(hwnd)
+    return bool(proc) and proc.lower() in TERMINAL_PROCESSES
+
+
+def _resolve_target_window(params: dict[str, Any]) -> Optional[int]:
+    """Resolve the window a step names to an hwnd, if any window is named.
+
+    A `window` dict may carry `hwnd` directly. Otherwise a `title` (from
+    `window.title` or the `window_title` param) is matched against the live
+    windows with the same title-matching helper the activation path uses, so
+    the cover checks the window that will actually receive the keys.
+    """
+    window = params.get("window")
+    hwnd = None
+    if isinstance(window, dict):
+        raw = window.get("hwnd")
+        if raw is not None:
+            try:
+                hwnd = int(raw)
+            except (TypeError, ValueError):
+                hwnd = None
+    if hwnd is not None:
+        return hwnd
+    title = params.get("window_title")
+    if not title and isinstance(window, dict):
+        title = window.get("title")
+    if not title and isinstance(window, str):
+        title = window
+    if not title:
+        return None
+    from grace.automation.computer_use import pick_best_window_match
+
+    wanted = str(title).strip()
+    if not wanted:
+        return None
+    try:
+        import win32gui
+
+        def _enum(h, results):
+            if win32gui.IsWindowVisible(h):
+                t = win32gui.GetWindowText(h) or ""
+                if t:
+                    results.append((h, t))
+
+        results: list[tuple[int, str]] = []
+        win32gui.EnumWindows(_enum, results)
+    except Exception:
+        results = []
+    best = pick_best_window_match(wanted, results)
+    return best[0] if best else None
+
+
 def _terminal_key(raw: Any) -> bool:
     from grace.agent.safety import SafetyGuard
 
@@ -262,9 +332,14 @@ def evaluate_context(
     process: Optional[str] = None,
 ) -> Optional[CoverDecision]:
     """Run the screen-aware covers; None means go ahead."""
-    # Terminals: the same yes/no flow `delete` uses.
+    # Terminals: the same yes/no flow `delete` uses. Both the front window and
+    # any window the step names are checked, because the loop may activate a
+    # different window after the plan is made and before the keys go out.
     if action in TEXT_ENTRY_TOOLS or action == "cua_press_key":
-        if _terminal_window(snapshot, process):
+        front_is_terminal = _terminal_window(snapshot, process)
+        target_hwnd = _resolve_target_window(params)
+        target_is_terminal = bool(target_hwnd) and _terminal_hwnd(target_hwnd)
+        if front_is_terminal or target_is_terminal:
             if action == "cua_press_key":
                 if _terminal_key(params.get("key")):
                     return CoverDecision(

@@ -364,7 +364,7 @@ class ScriptedComputerUse:
     def stop(self) -> None:
         return None
 
-    def perform(self, action: str, params: dict) -> dict:
+    def perform(self, action: str, params: dict, confirmed: bool = False) -> dict:
         self.calls.append((action, params))
         if self._results:
             return self._results.pop(0)

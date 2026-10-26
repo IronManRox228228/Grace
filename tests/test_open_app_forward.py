@@ -21,7 +21,7 @@ class FakeCua:
         self.calls = []
         self.activate_ok = activate_ok
 
-    def perform(self, action, params):
+    def perform(self, action, params, confirmed=False):
         self.calls.append((action, params))
         if action == "list_windows":
             windows = self.snapshots[0] if len(self.calls) == 1 else self.snapshots[1]

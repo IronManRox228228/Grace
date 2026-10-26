@@ -19,6 +19,7 @@ class TestCuaEnhancements:
         monkeypatch.setattr(pyautogui, "position", lambda: (500, 500))
         monkeypatch.setattr(pyautogui, "hotkey", lambda *a, **k: None)
         monkeypatch.setattr(pyautogui, "press", lambda *a, **k: None)
+        monkeypatch.setattr("grace.automation.computer_use._terminal_foreground", lambda: None)
         res1 = self.cua.perform("press_key", {"key": "Return"})
         assert res1.get("ok") is True
 
