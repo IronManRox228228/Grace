@@ -16,9 +16,9 @@ $vite = $null
 $viteUp = $false
 # Vite binds to "localhost", which can be IPv6-only ([::1]), so try both.
 function Test-Vite {
-    foreach ($addr in @("::1", "127.0.0.1")) {
-        try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect($addr, 5173); $c.Close(); return $true } catch {}
-    }
+    # The (host, port) constructor resolves "localhost" and tries every address
+    # family; a default TcpClient is IPv4-only and can never reach [::1].
+    try { $c = New-Object System.Net.Sockets.TcpClient("localhost", 5173); $c.Close(); return $true } catch {}
     return $false
 }
 $viteUp = Test-Vite
