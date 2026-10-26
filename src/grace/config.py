@@ -70,6 +70,8 @@ class Config:
     llama_cache_type_v: str = field(default_factory=lambda: os.getenv("LLAMA_CACHE_TYPE_V", "f16"))
     llama_flash_attn: bool = field(default_factory=lambda: os.getenv("LLAMA_FLASH_ATTN", "true").lower() in ("true", "1", "yes"))
     llama_parallel_slots: int = field(default_factory=lambda: int(os.getenv("LLAMA_PARALLEL_SLOTS", "1")))
+    # false = --no-mmap --mlock (weights pinned in RAM). The CPU tier always maps.
+    use_mmap: bool = field(default_factory=lambda: os.getenv("LLAMA_USE_MMAP", "true").lower() in ("true", "1", "yes"))
     latency_log_path: str = field(default_factory=lambda: os.getenv(
         "GRACE_LATENCY_LOG",
         os.path.join(os.getenv("LOCALAPPDATA", "."), "Grace", "logs", "latency.jsonl")
