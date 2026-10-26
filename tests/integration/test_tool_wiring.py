@@ -100,7 +100,9 @@ class TestComputerUseHandlers:
 class TestDispatcherRouting:
     def test_every_system_tool_is_wired(self):
         wired = dispatcher_handler_map_keys()
-        missing = sorted(SYSTEM_TOOLS - wired)
+        # `screen_task` only routes a request to the agent loop; the router
+        # always sends it there, so the dispatcher never receives it.
+        missing = sorted(SYSTEM_TOOLS - wired - {"screen_task"})
         assert missing == [], f"declared but unreachable through Dispatcher: {missing}"
 
     def test_no_phantom_handlers(self):

@@ -79,6 +79,7 @@ class CapabilityRouter:
         "read_pdf",
         "summarize_pdf",
         "type_saved_secret",
+        "screen_task",
     }
 
     # Words that join a second clause onto the first. A second clause is a

@@ -52,13 +52,14 @@ def test_every_side_effecting_tool_leaf_is_replaced():
     Derived from the tool schema rather than from a hand-kept list, so adding a
     tool to Grace fails this test until the generator is taught to stub it.
     `converse` is excluded deliberately: it is pure, and running the real one
-    is the point.
+    is the point. `screen_task` is never dispatched; it only routes a request
+    to the agent loop.
     """
     from grace.intent.tools import ALL_TOOLS
 
     dispatchable = {
         tool.name for tool in ALL_TOOLS if not tool.name.startswith("cua_")
-    } - {"converse"}
+    } - {"converse", "screen_task"}
     stubbed = {name.lstrip("_") for name in SIDE_EFFECTING_HANDLERS}
 
     assert dispatchable == stubbed, (

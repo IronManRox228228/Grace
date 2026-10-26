@@ -260,7 +260,7 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
     ),
     ToolDefinition(
         name="converse",
-        description="Speak directly to the user to answer questions or report goal completion.",
+        description="Speak directly to the user: chat, or answer from what you already know. Never for anything that needs the screen.",
         params=[
             ToolParam("response", "Direct spoken answer to communicate to the user", True, None, "str"),
         ],
@@ -284,6 +284,12 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
         params=[
             ToolParam("rate", "Speech rate speed multiplier (e.g. 0.5 to 2.0, where 1.0 is normal)", True, "1.0", "float"),
         ],
+        is_system=True,
+    ),
+    ToolDefinition(
+        name="screen_task",
+        description="Hand the request to the agent, which sees the screen and works the desktop step by step. Use it for anything that needs to look at the screen or act in apps and no single tool above covers.",
+        params=[],
         is_system=True,
     ),
     ToolDefinition(
@@ -316,6 +322,10 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
 ALL_TOOLS: list[ToolDefinition] = CUA_TOOLS + SYSTEM_TOOLS
 
 
+# Intent-step tools the planner is never shown. `remember` must never be
+# driven by screen text (PLAN §12.1); `screen_task` only starts the planner.
+_INTENT_ONLY_TOOLS = {"remember", "screen_task"}
+
 # Tools the dispatcher and safety guard know that the planner is never shown.
 _UNLISTED_KNOWN_TOOLS = {"remember", "voice_training_status", "rollback_voice_model"}
 
@@ -329,7 +339,7 @@ _TOOL_SYNONYMS = {
 
 def planner_tool_names() -> list[str]:
     """The tool names the planner is told about, in prompt order."""
-    return [t.name for t in ALL_TOOLS if t.name != "remember"]
+    return [t.name for t in ALL_TOOLS if t.name not in _INTENT_ONLY_TOOLS]
 
 
 def resolve_tool_name(name: str) -> tuple[Optional[str], str]:
@@ -428,7 +438,7 @@ def format_tools_for_prompt() -> str:
     """
     lines = []
     for tool in ALL_TOOLS:
-        if tool.name == "remember":
+        if tool.name in _INTENT_ONLY_TOOLS:
             continue
         lines.append(f"### `{tool.name}`")
         lines.append(f"Description: {tool.description}")

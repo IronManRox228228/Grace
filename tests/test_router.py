@@ -33,6 +33,20 @@ class TestIntentIsTrustedFirst:
         intent = Intent(tool="cua_click", params={"x": 1, "y": 2})
         assert route("click the button", intent) == TaskComplexity.AGENTIC_GOAL
 
+    def test_screen_task_starts_the_agent(self):
+        # The intent step can't see the screen; screen_task is how it says
+        # "the agent has to look". It used to answer with converse instead.
+        intent = Intent(tool="screen_task", params={})
+        text = "look at the question on my screen and solve it"
+        assert route(text, intent) == TaskComplexity.AGENTIC_GOAL
+
+    def test_screen_task_is_parsed_but_hidden_from_the_planner(self):
+        from grace.intent.parser import VALID_TOOLS
+        from grace.intent.tools import format_tools_for_prompt, planner_tool_names
+        assert "screen_task" in VALID_TOOLS
+        assert "screen_task" not in planner_tool_names()
+        assert "screen_task" not in format_tools_for_prompt()
+
     def test_pdf_work_stays_agentic(self):
         intent = Intent(tool="summarize_pdf", params={"path": "a.pdf"})
         assert route("summarize this", intent) == TaskComplexity.AGENTIC_GOAL
