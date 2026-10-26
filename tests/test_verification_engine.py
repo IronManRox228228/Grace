@@ -125,10 +125,12 @@ class TestVerificationEngine:
         from grace.agent.perception import OcrLine
         loop = AgentLoop(gemma=None, dispatcher=None)
         memory = AgentMemory(user_goal="Play Signal by Home")
+        memory.add_step("Click play", "cua_click", {"target_name": "Play"}, {"status": "error", "error": "not found"})
 
         snapshot = ScreenSnapshot(
             active_window=WindowInfo(hwnd=123, title="https://music.youtube.com/search?q=Signal+by+Home", class_name="Chrome_WidgetWin_1", rect=(0,0,1000,800)),
             ocr_lines=[OcrLine(text="Signal", bounding_box=(0,0,10,10)), OcrLine(text="Song • Home • 3:42", bounding_box=(0,0,10,10)), OcrLine(text="Play", bounding_box=(0,0,10,10))],
+            ui_elements=list(range(10)),
             width=1920,
             height=1080,
         )

@@ -1526,12 +1526,14 @@ class AgentLoop:
 
         Deliberately a narrow check. It cannot tell whether the goal was
         *achieved* - that needs to understand the goal - only whether the claim
-        is compatible with what happened. Two things are incompatible with it:
+        is compatible with what happened. One thing is incompatible with it:
 
-        * nothing was ever done to the desktop;
         * the last thing done to the desktop reported that it failed, and the
           screen is readable enough that the planner had no excuse for reading
           the failure as success.
+
+        A claim with no desktop interaction at all is accepted: reading or
+        solving what is on screen produces an answer, not an action.
 
         The second is the case the loop actually hit: a step returned
         ``wrong_focus``, the planner announced the goal was complete anyway, and
@@ -1557,10 +1559,9 @@ class AgentLoop:
             )]
 
         if not interactive:
-            return False, (
-                "Goal observation check: no desktop interaction has been performed yet. "
-                "Inspect what is on screen and execute the next action."
-            )
+            # Reading, summarising or solving what is on screen needs no
+            # interaction; the answer is the work, so the claim stands.
+            return True, None
 
         if getattr(snapshot, "is_blind", False):
             # No channel to check against. Trust the claim rather than

@@ -222,7 +222,10 @@ class TestVerification:
     @pytest.mark.parametrize("goal", ["which file is open", "make this white", "finish this"])
     def test_substring_hi_no_longer_counts_as_conversational(self, goal):
         loop, _, _ = make_loop([])
-        verified, hint = loop._verify_goal_completion(goal, snapshot(), AgentMemory(goal))
+        memory = AgentMemory(goal)
+        memory.add_step("t", "cua_click", {}, {"status": "error", "error": "not found"})
+        readable = snapshot(ui_elements=list(range(10)))
+        verified, hint = loop._verify_goal_completion(goal, readable, memory)
         assert verified is False
         assert "Goal observation check" in hint
 
@@ -241,24 +244,21 @@ class TestVerification:
         memory.add_step("t", "open_app", {"name": "Notepad"}, {"status": "ok"})
         assert loop._verify_goal_completion("open notepad", snapshot(), memory)[0] is True
 
-    def test_completion_blocked_when_only_observations_happened(self):
+    def test_completion_accepted_when_only_observations_happened(self):
+        # "Read the question on my screen and solve it" never touches the
+        # desktop; the answer is the work, so the claim stands.
         loop, _, _ = make_loop([])
-        memory = AgentMemory("open notepad")
+        memory = AgentMemory("solve the question on my screen")
         memory.add_step("t", "cua_list_windows", {}, {"status": "ok"})
-        assert loop._verify_goal_completion("open notepad", snapshot(), memory)[0] is False
+        verified, hint = loop._verify_goal_completion("solve the question on my screen", snapshot(), memory)
+        assert verified is True and hint is None
 
-    def test_rejected_completion_keeps_the_loop_going(self):
-        # First the model claims done with nothing performed; it must be pushed
-        # back, act, and only then be allowed to finish.
-        loop, _, dispatcher = make_loop([
-            DONE,
-            '{"action": "open_app", "params": {"name": "Notepad"}, "expect": "Notepad is open"}',
-            DONE,
-        ])
-        res = asyncio.run(loop.run(user_goal="open Notepad"))
+    def test_a_screen_reading_goal_finishes_without_any_interaction(self):
+        loop, _, dispatcher = make_loop([DONE])
+        res = asyncio.run(loop.run(user_goal="read the email on screen to me"))
         assert res["status"] == "ok"
         assert res["final_response"] == "All done."
-        assert any(s["action"] == "open_app" for s in res["steps"])
+        assert dispatcher.execute.await_count == 0
 
     def test_completion_rejected_when_only_the_last_step_failed(self):
         # A regression required BOTH of the last two interactive steps to have
