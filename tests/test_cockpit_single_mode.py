@@ -359,3 +359,33 @@ def test_truly_absent_window_returns_window_not_found(monkeypatch):
     assert res["ok"] is False
     assert res["status"] == "window_not_found"
     assert "Open windows: 'YouTube Music' (id: 101)" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_single_mode_parked_click_resumes_with_scaled_coordinates():
+    """A click parked for confirmation dispatches the scaled x/y on 'yes', not the raw 0-1000 numbers."""
+    gemma = AsyncMock()
+    dispatcher = AsyncMock()
+    perception = MagicMock()
+    grounder = AsyncMock()
+    perception.capture_snapshot.return_value = make_snapshot([], image_size=(1920, 1080))
+    gemma.generate_text.side_effect = [
+        '{"thought": "Click", "action": "cua_click", "params": {"x": 258, "y": 320, "target_name": "Delete"}, "is_completed": false, "user_update": "Clicking"}',
+        '{"thought": "Done", "action": "converse", "params": {"response": "Done"}, "is_completed": true, "final_response": "Done"}',
+    ]
+    dispatcher.execute.return_value = {
+        "status": "ok",
+        "result": {"ok": True, "sent": True, "verified": True, "message": "Clicked"},
+    }
+    loop = AgentLoop(gemma=gemma, dispatcher=dispatcher, perception=perception, grounder=grounder,
+                     fleet_config=build_gpu_single_preset())
+
+    parked = await loop.run("delete it")
+    assert parked["status"] == "safety_confirmation_required"
+    assert dispatcher.execute.call_count == 0
+
+    await loop.resume_pending(approved=True)
+    calls = [c for c in dispatcher.execute.call_args_list if c[0][0].tool == "cua_click"]
+    assert len(calls) == 1
+    assert calls[0].kwargs.get("confirmed") is True
+    assert (calls[0][0][0].params["x"], calls[0][0][0].params["y"]) == (495, 346)

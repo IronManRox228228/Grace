@@ -759,25 +759,6 @@ class AgentLoop:
                         "final_response": fact,
                         "steps": [s.to_dict() for s in memory.steps_taken],
                     }
-            if not is_safe:
-                logger.warning(f"AgentLoop: safety confirmation required for '{step.action}'")
-                memory.safety_pending = {
-                    "action": step.action,
-                    "params": step.params,
-                    "prompt": confirm_prompt,
-                }
-                memory.pause_clock()
-                self._pending = {
-                    "memory": memory, "step": step, "prompt": confirm_prompt,
-                    "parked_at": time.monotonic(),
-                }
-                return {
-                    "status": "safety_confirmation_required",
-                    "confirmation_prompt": confirm_prompt,
-                    "pending_step": step.to_dict(),
-                    "steps": [s.to_dict() for s in memory.steps_taken],
-                }
-
             # Decision Ladder (PLAN §3, §5, Task 13):
             # Split of responsibilities: tool caller decides what; decision model decides where
             if self._fleet_config.is_fleet and step and step.action in ("cua_click", "cua_secondary_action", "cua_set_value"):
@@ -954,6 +935,27 @@ class AgentLoop:
                     step.params["_rendered_element_ids"] = set(step.rendered_element_ids)
                 if hide_tree or getattr(step, "target_guidance", False):
                     step.params["_target_guidance"] = True
+
+            # Parked only now, after coordinates are scaled and ids resolved, so
+            # resume_pending dispatches exactly what would have run unparked.
+            if not is_safe and unshown_error_result is None:
+                logger.warning(f"AgentLoop: safety confirmation required for '{step.action}'")
+                memory.safety_pending = {
+                    "action": step.action,
+                    "params": step.params,
+                    "prompt": confirm_prompt,
+                }
+                memory.pause_clock()
+                self._pending = {
+                    "memory": memory, "step": step, "prompt": confirm_prompt,
+                    "parked_at": time.monotonic(),
+                }
+                return {
+                    "status": "safety_confirmation_required",
+                    "confirmation_prompt": confirm_prompt,
+                    "pending_step": step.to_dict(),
+                    "steps": [s.to_dict() for s in memory.steps_taken],
+                }
 
             # Checked again here, not just at the top of the loop: planning
             # (and grounding, above) can take long enough that a "stop" heard
