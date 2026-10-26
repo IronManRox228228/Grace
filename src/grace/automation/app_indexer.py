@@ -29,6 +29,8 @@ class AppIndexer:
     def __init__(self, use_cache: bool = True):
         self._apps: Dict[str, str] = {}
         self._uwp_apps: Dict[str, str] = {}
+        # lower-case index key -> name as the system spells it (for messages)
+        self._display: Dict[str, str] = {}
         self._indexed = False
         self._lock = threading.Lock()
         if use_cache and self._load_cache():
@@ -63,6 +65,7 @@ class AppIndexer:
         with self._lock:
             self._apps = dict(apps)
             self._uwp_apps = dict(uwp)
+            self._display = dict(data.get("display") or {})
             self._indexed = True
         logger.info(f"Loaded app index from cache ({len(apps)} apps, {len(uwp)} UWP)")
         return True
@@ -75,6 +78,7 @@ class AppIndexer:
                     "version": CACHE_VERSION,
                     "apps": self._apps,
                     "uwp": self._uwp_apps,
+                    "display": self._display,
                 }
             # Write-then-rename so a crash mid-write cannot leave a truncated
             # cache that would be loaded as authoritative next launch.
@@ -90,6 +94,7 @@ class AppIndexer:
         with self._lock:
             self._apps = {}
             self._uwp_apps = {}
+            self._display = {}
         self._index_apps()
         self._save_cache()
 
@@ -109,9 +114,11 @@ class AppIndexer:
             for path_pattern in search_paths:  # Index all search paths
                 try:
                     for filepath in glob.glob(path_pattern, recursive=True):
-                        basename = os.path.splitext(os.path.basename(filepath))[0].lower().strip()
+                        original = os.path.splitext(os.path.basename(filepath))[0].strip()
+                        basename = original.lower()
                         if basename and basename not in self._apps:
                             self._apps[basename] = filepath
+                            self._display[basename] = original
                 except Exception as e:
                     logger.debug(f"Error scanning pattern {path_pattern}: {e}")
 
@@ -137,10 +144,12 @@ class AppIndexer:
                 if isinstance(data, list):
                     with self._lock:
                         for item in data:
-                            name = item.get("Name", "").lower().strip()
+                            original = item.get("Name", "").strip()
+                            name = original.lower()
                             appid = item.get("AppID", "").strip()
                             if name and appid:
                                 self._uwp_apps[name] = appid
+                                self._display[name] = original
                         logger.info(f"Indexed {len(self._uwp_apps)} Windows UWP Apps (Get-StartApps)")
         except Exception as e:
             logger.debug(f"UWP App index query skipped: {e}")
@@ -211,6 +220,42 @@ class AppIndexer:
                 return f"uwp:{uwp_candidates[0][3]}"
 
         return None
+
+    @staticmethod
+    def _words(text: str) -> set[str]:
+        import re
+
+        return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+    def nearest_apps(self, query: str, limit: int = 5) -> list[str]:
+        """Up to `limit` installed app names closest to `query`, best first.
+
+        Scored by word overlap in both directions (the query containing the
+        app's words, and the app's name containing the query's words),
+        case-insensitive. Apps sharing no word with the query are never listed.
+        """
+        q_words = self._words(query)
+        if not q_words:
+            return []
+        scored: list[tuple[float, int, str]] = []
+        seen: set[str] = set()
+        with self._lock:
+            names = list(self._apps) + list(self._uwp_apps)
+            display = dict(getattr(self, "_display", {}) or {})
+        for key in names:
+            if key in seen:
+                continue
+            seen.add(key)
+            a_words = self._words(key)
+            if not a_words or self._is_uninstaller(key):
+                continue
+            common = len(q_words & a_words)
+            if not common:
+                continue
+            score = common / len(a_words) + common / len(q_words)
+            scored.append((-score, len(key), key))
+        scored.sort()
+        return [display.get(key, key) for _, _, key in scored[: max(0, limit)]]
 
     # Characters cmd.exe (or a future shell path) would re-parse as its own
     # syntax. `name` can be model-generated text, so a launch request must

@@ -512,6 +512,17 @@ class Dispatcher:
 
         # 2. Launch installed application via AppIndexer.
         indexer = await self._ensure_app_indexer()
+        # No installed app by this name: do not launch a guess. Hand the model
+        # the closest installed names and let it decide.
+        nearest_fn = getattr(indexer, "nearest_apps", None)
+        installed_fn = getattr(indexer, "is_installed", None)
+        if callable(nearest_fn) and callable(installed_fn) and not any(ch in name for ch in "&|<>^\"%"):
+            if not await asyncio.to_thread(installed_fn, name):
+                near = await asyncio.to_thread(nearest_fn, name)
+                if near:
+                    listed = ", ".join(f"'{n}'" for n in near)
+                    msg = f"No installed app is named '{name}'. Closest installed apps: {listed}."
+                    return {"status": "error", "error": msg, "text": msg}
         result = await asyncio.to_thread(indexer.launch, name)
         if isinstance(result, dict) and result.get("status") == "ok":
             fact = await self._bring_forward(name, before)
