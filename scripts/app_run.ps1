@@ -1,0 +1,42 @@
+# scripts/app_run.ps1
+#
+# Starts the Grace app (Tauri overlay + Python backend) with run capture on.
+# A dev build loads the UI from the Vite dev server on :5173, so this starts
+# that first and stops it again when the shell exits.
+#
+# Captures land in runs/<timestamp>/ under the repo root (gitignored).
+
+$ErrorActionPreference = "Stop"
+$repoRoot = Split-Path -Parent $PSScriptRoot
+
+$env:GRACE_BACKEND = "python"
+$env:GRACE_CAPTURE_RUN = "1"
+
+$vite = $null
+$viteUp = $false
+try { $viteUp = (Test-NetConnection 127.0.0.1 -Port 5173 -WarningAction SilentlyContinue).TcpTestSucceeded } catch {}
+if (-not $viteUp) {
+    Write-Host "Starting the UI dev server on :5173..." -ForegroundColor Cyan
+    $vite = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "dev:renderer" `
+        -WorkingDirectory (Join-Path $repoRoot "frontend") -WindowStyle Hidden -PassThru
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $c = New-Object System.Net.Sockets.TcpClient
+            $c.Connect("127.0.0.1", 5173); $c.Close(); $viteUp = $true; break
+        } catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (-not $viteUp) { throw "The UI dev server did not come up on :5173 within 60 s." }
+}
+
+try {
+    Write-Host "Starting Grace (Python backend, run capture on)..." -ForegroundColor Cyan
+    Push-Location $repoRoot
+    cargo run -p grace-shell
+} finally {
+    Pop-Location
+    if ($vite -ne $null -and -not $vite.HasExited) {
+        # npm spawns node as a child; stop the whole tree it started.
+        & taskkill /PID $vite.Id /T /F | Out-Null
+    }
+}
