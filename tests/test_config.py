@@ -11,8 +11,12 @@ from grace.config import Config
 class TestConfig:
     """Test suite for Config."""
 
-    def test_init_with_defaults(self):
+    def test_init_with_defaults(self, monkeypatch):
         """Test config initializes with default values."""
+        # Defaults, not the developer's .env (which load_dotenv put in os.environ).
+        for var in ("LLAMA_CONTEXT_WINDOW", "LLAMA_CACHE_TYPE_K", "LLAMA_CACHE_TYPE_V",
+                    "LLAMA_NGL", "LLAMA_PORT", "LLAMA_HOST"):
+            monkeypatch.delenv(var, raising=False)
         config = Config()
         assert config.llama_port == 8080
         assert config.llama_host == "127.0.0.1"
