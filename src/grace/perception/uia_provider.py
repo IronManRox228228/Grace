@@ -69,6 +69,12 @@ INTERACTIVE_CONTROL_IDS = {
 # Nodes we descend through but do not report as targets themselves.
 CONTAINER_CONTROL_IDS = {50008, 50009, 50010, 50023, 50026, 50030, 50032, 50033, 50036, 50034}
 
+# Group / custom nodes are containers, but apps such as WhatsApp (WebView2 /
+# WinUI) expose their clickable list rows as exactly these. A named one that
+# supports Invoke, SelectionItem or a legacy default action is reported as a
+# target too (and still descended into).
+ROW_CANDIDATE_CONTROL_IDS = {50025, 50026}
+
 # Containers whose name is worth inheriting as an element's `container`.
 NAMED_REGION_CONTROL_IDS = {50021, 50026, 50030, 50033, 50008, 50009, 50010}
 
@@ -115,6 +121,10 @@ class _Uia:
             "aria_props": client.UIA_AriaPropertiesPropertyId,
             "value": client.UIA_ValueValuePropertyId,
             "is_password": getattr(client, "UIA_IsPasswordPropertyId", 30019),
+            "runtime_id": getattr(client, "UIA_RuntimeIdPropertyId", 30000),
+            "invoke": getattr(client, "UIA_IsInvokePatternAvailablePropertyId", 30031),
+            "selection_item": getattr(client, "UIA_IsSelectionItemPatternAvailablePropertyId", 30036),
+            "legacy_action": getattr(client, "UIA_LegacyIAccessibleDefaultActionPropertyId", 30100),
         }
 
         # One request, reused for every walk: each element then costs a single
@@ -165,6 +175,25 @@ def _cached(element, pid, default=None):
     return default if value is None else value
 
 
+def _runtime_id(element, uia: "_Uia") -> Optional[tuple]:
+    """The node's UIA runtime id as a hashable tuple, or None when unavailable."""
+    raw = _cached(element, uia.props.get("runtime_id", 0))
+    if not raw:
+        return None
+    try:
+        return tuple(int(v) for v in raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_clickable_row(element, uia: "_Uia") -> bool:
+    """True when a group/custom node can be invoked, selected or has a default action."""
+    for key in ("invoke", "selection_item"):
+        if bool(_cached(element, uia.props.get(key, 0), False)):
+            return True
+    return bool(str(_cached(element, uia.props.get("legacy_action", 0), "") or "").strip())
+
+
 def _parse_aria_properties(raw: str) -> dict[str, str]:
     """Parse UIA's AriaProperties string, e.g. ``placeholder=Search;expanded=false``."""
     parsed: dict[str, str] = {}
@@ -212,8 +241,9 @@ class UiaProvider:
         elements: list[ElementNode] = []
         counter = [start_id]
         deadline = time.monotonic() + timeout
+        seen: tuple[set, set] = (set(), set())
         try:
-            self._walk(uia, root, elements, counter, 0, max_depth, cap, base_frame, "", deadline)
+            self._walk(uia, root, elements, counter, 0, max_depth, cap, base_frame, "", deadline, seen)
         except Exception as e:
             logger.debug(f"UIA walk aborted: {e}")
 
@@ -231,7 +261,11 @@ class UiaProvider:
         frame: str,
         container: str,
         deadline: Optional[float] = None,
+        seen: Optional[tuple[set, set]] = None,
     ) -> None:
+        if seen is None:
+            seen = (set(), set())
+        seen_runtime_ids, seen_keys = seen
         if len(elements) >= cap or depth > max_depth or (deadline and time.monotonic() > deadline):
             return
 
@@ -247,14 +281,37 @@ class UiaProvider:
             control_type = _cached(child, uia.props["control_type"], 0)
             name = str(_cached(child, uia.props["name"], "") or "").strip()
 
+            # The same UIA node can be reachable through two parents (WebView2
+            # hosts do this), which used to list every control in the shared
+            # subtree twice. A node whose runtime id was already walked is
+            # skipped along with its subtree.
+            runtime_id = _runtime_id(child, uia)
+            if runtime_id is not None:
+                if runtime_id in seen_runtime_ids:
+                    try:
+                        child = uia.walker.GetNextSiblingElementBuildCache(child, uia.cache_request)
+                    except Exception:
+                        return
+                    continue
+                seen_runtime_ids.add(runtime_id)
+
             # The document node marks the boundary between browser UI and the
             # rendered page - the distinction the planner needs most.
             child_frame = FRAME_PAGE if control_type == DOCUMENT_CONTROL_TYPE else frame
 
-            if control_type in INTERACTIVE_CONTROL_IDS:
+            reportable = control_type in INTERACTIVE_CONTROL_IDS or (
+                control_type in ROW_CANDIDATE_CONTROL_IDS and bool(name) and _is_clickable_row(child, uia)
+            )
+            if reportable:
                 node_obj = self._build_node(uia, child, control_type, name, child_frame, container, counter)
                 if node_obj is not None:
-                    elements.append(node_obj)
+                    # Same role + name + rect is one element, whichever path found it.
+                    key = (node_obj.role, node_obj.name, node_obj.rect)
+                    if key in seen_keys:
+                        counter[0] -= 1
+                    else:
+                        seen_keys.add(key)
+                        elements.append(node_obj)
 
             if control_type in CONTAINER_CONTROL_IDS or control_type not in INTERACTIVE_CONTROL_IDS:
                 child_container = container
@@ -262,7 +319,7 @@ class UiaProvider:
                     child_container = name[:60]
                 self._walk(
                     uia, child, elements, counter, depth + 1, max_depth, cap,
-                    child_frame, child_container, deadline,
+                    child_frame, child_container, deadline, seen,
                 )
 
             try:
@@ -296,6 +353,12 @@ class UiaProvider:
 
         aria_role = str(_cached(element, uia.props["aria_role"], "") or "").strip().lower()
         role = aria_role or CONTROL_TYPE_ROLES.get(control_type, f"control_{control_type}")
+        if (
+            not aria_role
+            and control_type in ROW_CANDIDATE_CONTROL_IDS
+            and bool(_cached(element, uia.props.get("selection_item", 0), False))
+        ):
+            role = "listitem"
 
         # A control with no name at all is only useful if it has a placeholder
         # or an automation id to identify it by.
