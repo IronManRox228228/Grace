@@ -158,7 +158,7 @@ def get_planner_system_prompt(is_single: bool = True) -> str:
 
 You may interact in any of these ways:
 - **By position (pointing):** `cua_click` (and `cua_secondary_action`) accepts `x` and `y` in normalised `[0-1000]` coordinates of the screenshot you are shown. `(0, 0)` is the top-left corner, and `(1000, 1000)` is the bottom-right corner. `cua_drag` takes the same space: `x`,`y` to `to_x`,`to_y`, or a freehand `path` of `[x, y]` points.
-- **By element id:** Provide `element_id` from the interactive elements list. If both `element_id` and `x`/`y` are given, the element id takes precedence.
+- **By element id:** Provide `element_id` from the interactive elements list. If both `element_id` and `x`/`y` are given, `x`/`y` takes precedence.
 - **By description:** Provide `target_name` alone in plain words (e.g. 'the search box'). A visual grounder will locate it as a fallback."""
     else:
         screen_guidance = """The screen is described to you in one of two ways, and you will always get exactly one of them.

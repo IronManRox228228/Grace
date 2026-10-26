@@ -45,3 +45,10 @@ def test_single_mode_prompt_says_whole_screen():
     prompt = get_planner_system_prompt(is_single=True)
     assert "current screenshot of the whole screen" in prompt
     assert "current screenshot of the active window" not in prompt
+
+
+def test_single_mode_prompt_says_xy_beats_element_id():
+    prompt = get_planner_system_prompt(is_single=True)
+    assert "`x`/`y` takes precedence" in prompt
+    assert "the element id takes precedence" not in prompt
+    assert "takes precedence" not in get_planner_system_prompt(is_single=False)
