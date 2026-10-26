@@ -26,6 +26,31 @@ class TestCuaEnhancements:
         res2 = self.cua.perform("press_key", {"key": "Control_L+a"})
         assert res2.get("ok") is True
 
+    def test_press_key_unknown_name_is_an_error_and_sends_nothing(self, monkeypatch):
+        import pyautogui
+        sent = []
+        monkeypatch.setattr(pyautogui, "position", lambda: (500, 500))
+        monkeypatch.setattr(pyautogui, "hotkey", lambda *a, **k: sent.append(a))
+        monkeypatch.setattr(pyautogui, "press", lambda *a, **k: sent.append(a))
+        monkeypatch.setattr("grace.automation.computer_use._terminal_foreground", lambda: None)
+        res = self.cua.perform("press_key", {"key": "Windows"})
+        assert res.get("ok") is False and res.get("sent") is False
+        assert "'Windows' is not a key name. Valid names include: win, enter, esc, tab" in res["error"]
+        assert sent == []
+        res = self.cua.perform("press_key", {"key": "ctrl+Windows"})
+        assert res.get("ok") is False and sent == []
+
+    def test_press_key_valid_names_still_work(self, monkeypatch):
+        import pyautogui
+        sent = []
+        monkeypatch.setattr(pyautogui, "position", lambda: (500, 500))
+        monkeypatch.setattr(pyautogui, "hotkey", lambda *a, **k: sent.append(a))
+        monkeypatch.setattr(pyautogui, "press", lambda *a, **k: sent.append(a))
+        monkeypatch.setattr("grace.automation.computer_use._terminal_foreground", lambda: None)
+        for key in ("win", "ctrl+c", "enter"):
+            assert self.cua.perform("press_key", {"key": key}).get("ok") is True
+        assert sent == [("win",), ("ctrl", "c"), ("enter",)]
+
     def test_activate_heuristics(self):
         """Verify activate handles window dicts, titles, and hwnds safely."""
         res1 = self.cua.perform("activate", {"window": {"id": 999999, "title": "NonExistentWindow"}})

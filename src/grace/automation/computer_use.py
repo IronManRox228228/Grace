@@ -1205,6 +1205,32 @@ class ComputerUse:
             "space": "space",
         }
         parts = [key_map.get(k.strip().lower(), k.strip().lower()) for k in raw_key.split("+")]
+
+        # An unknown key name is silently ignored by PyAutoGUI, which used to
+        # come back as a success. Check every part first; send nothing and tell
+        # the model which names exist. No aliases: the model chooses.
+        valid_keys = getattr(pyautogui, "KEYBOARD_KEYS", None)
+        if isinstance(valid_keys, (list, tuple, set, frozenset)):
+            unknown = [p for p in parts if p not in valid_keys]
+            if unknown:
+                bad = raw_key if len(parts) == 1 else ", ".join(
+                    k.strip() for k, p in zip(raw_key.split("+"), parts) if p in unknown
+                )
+                msg = (
+                    f"'{bad}' is not a key name. Valid names include: "
+                    "win, enter, esc, tab, space, backspace, delete, ctrl, shift, alt, "
+                    "up, down, left, right, home, end, pageup, pagedown, f1-f12."
+                )
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "verified": False,
+                    "action": "press_key",
+                    "status": "unknown_key",
+                    "error": msg,
+                    "text": msg,
+                    "evidence": "no keystrokes were sent",
+                }
         try:
             pyautogui.hotkey(*parts)
         except pyautogui.FailSafeException:
