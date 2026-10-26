@@ -522,7 +522,9 @@ class Dispatcher:
                 if near:
                     listed = ", ".join(f"'{n}'" for n in near)
                     msg = f"No installed app is named '{name}'. Closest installed apps: {listed}."
-                    return {"status": "error", "error": msg, "text": msg}
+                else:
+                    msg = f"No installed app is named '{name}'."
+                return {"status": "error", "error": msg, "text": msg}
         result = await asyncio.to_thread(indexer.launch, name)
         if isinstance(result, dict) and result.get("status") == "ok":
             fact = await self._bring_forward(name, before)

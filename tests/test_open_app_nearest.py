@@ -87,3 +87,22 @@ def test_no_match_error_reaches_agent_step_zero_memory():
     mem.add_step(thought="t", action="open_app", params={"name": "X"},
                  result={"status": "error", "error": msg, "text": msg}, user_update="u", step_number=0)
     assert "Closest installed apps: 'PC Manager'" in mem.format_history_markdown()
+
+
+def test_no_match_and_no_nearest_errors_instead_of_launching(monkeypatch):
+    idx = make_indexer(monkeypatch, uwp={"Calculator": "c!App"})
+    monkeypatch.setattr(AppIndexer, "_is_system_command", staticmethod(lambda clean: False))
+    ln = Launcher(idx)
+    res = _open(ln, "zzqx frobnicator")
+    assert res["status"] == "error"
+    assert res["error"] == "No installed app is named 'zzqx frobnicator'."
+    assert ln.launched == []
+
+
+def test_protocol_and_system_command_names_still_count_as_installed(monkeypatch):
+    idx = make_indexer(monkeypatch)
+    assert idx.is_installed("whatsapp") is True
+    assert idx.is_installed("settings") is True
+    assert idx.is_installed("cmd") is True  # PATH program in no Start Menu index
+    assert idx.is_installed("C:\Windows\System32\cmd.exe") is False
+    assert idx.is_installed("zzqx frobnicator") is False

@@ -274,7 +274,41 @@ class AppIndexer:
         clean = (name or "").lower().strip()
         if not clean or any(ch in clean for ch in self._UNSAFE_NAME_CHARS):
             return False
-        return clean in self.PROTOCOL_MAP or self.find_app(clean) is not None
+        return (
+            clean in self.PROTOCOL_MAP
+            or self.find_app(clean) is not None
+            or self._is_system_command(clean)
+        )
+
+    @staticmethod
+    def _is_system_command(clean: str) -> bool:
+        """True for a bare program name Windows itself resolves (PATH or App Paths).
+
+        `launch` ends in `os.startfile(name)`, which opens things like notepad,
+        cmd or regedit that are in no Start Menu index. Paths are excluded: only
+        a bare name counts.
+        """
+        import shutil
+
+        if any(ch in clean for ch in "\\/:"):
+            return False
+        if shutil.which(clean, path=os.environ.get("PATH", "")):
+            return True
+        try:
+            import winreg
+
+            exe = clean if clean.endswith(".exe") else clean + ".exe"
+            for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                try:
+                    with winreg.OpenKey(
+                        hive, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}"
+                    ):
+                        return True
+                except OSError:
+                    continue
+        except ImportError:
+            pass
+        return False
 
     def launch(self, name: str) -> dict[str, Any]:
         """Launch an application by name or search query."""
