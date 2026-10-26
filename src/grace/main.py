@@ -2340,6 +2340,11 @@ def main():
             import sys; sys.exit(1)
 
     capture_dir = None
+    # The Tauri shell spawns this process without CLI flags; GRACE_CAPTURE_RUN
+    # (1 = runs/<timestamp>, or a directory) turns capture on from there.
+    if args.capture_run is None and os.getenv("GRACE_CAPTURE_RUN"):
+        env_capture = os.getenv("GRACE_CAPTURE_RUN", "")
+        args.capture_run = "" if env_capture.lower() in ("1", "true", "yes") else env_capture
     if args.capture_run is not None:
         if args.capture_run == "":
             from datetime import datetime
