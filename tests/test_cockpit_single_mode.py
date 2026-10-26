@@ -194,43 +194,58 @@ async def test_unshown_element_id_without_fallback_gives_honest_error():
     assert "[1, 2]" in steps[0]["result"]["error"]
 
 
-@pytest.mark.asyncio
-async def test_both_xy_and_shown_id_given_id_wins():
-    """Both x/y and a shown id given: the id wins, and notes that."""
+async def _run_click(planner_params: str, preset, elements):
     gemma = AsyncMock()
     dispatcher = AsyncMock()
     perception = MagicMock()
     grounder = AsyncMock()
-
-    elements = [make_test_node(5, "PlayButton", frame=FRAME_PAGE, rect=(100, 200, 150, 250))]
-    snap = make_snapshot(elements)
-    perception.capture_snapshot.return_value = snap
-
+    perception.capture_snapshot.return_value = make_snapshot(elements, image_size=(1920, 1080))
     gemma.generate_text.side_effect = [
-        '{"thought": "Click both", "action": "cua_click", "params": {"element_id": 5, "x": 500, "y": 500}, "is_completed": false, "user_update": "Clicking"}',
+        '{"thought": "Click", "action": "cua_click", "params": ' + planner_params + ', "is_completed": false, "user_update": "Clicking"}',
         '{"thought": "Done", "action": "converse", "params": {"response": "Done"}, "is_completed": true, "final_response": "Done"}',
     ]
-
     dispatcher.execute.return_value = {
         "status": "ok",
         "result": {"ok": True, "sent": True, "verified": True, "message": "Clicked"},
     }
-
-    loop = AgentLoop(
-        gemma=gemma,
-        dispatcher=dispatcher,
-        perception=perception,
-        grounder=grounder,
-        fleet_config=build_gpu_single_preset(),
-    )
-
+    loop = AgentLoop(gemma=gemma, dispatcher=dispatcher, perception=perception, grounder=grounder, fleet_config=preset)
     result = await loop.run("test both")
     assert result["status"] == "ok"
-
     calls = [c[0][0] for c in dispatcher.execute.call_args_list if c[0][0].tool == "cua_click"]
     assert len(calls) == 1
-    assert calls[0].params.get("element_id") == 5
-    assert calls[0].params.get("_id_won_over_xy") is True
+    return calls[0], grounder
+
+
+@pytest.mark.asyncio
+async def test_single_mode_xy_wins_over_element_id():
+    """Cockpit 6 item 1: Holo step-2 params click at the scaled (100, 230), not element 4."""
+    elements = [
+        make_test_node(4, "Chats", rect=(10, 10, 50, 50)),
+        make_test_node(5, "Mamma", rect=(300, 300, 400, 400)),
+    ]
+    call, grounder = await _run_click('{"element_id": 4, "x": 100, "y": 230}', build_gpu_single_preset(), elements)
+    assert call.params.get("element_id") is None
+    assert call.params.get("element_index") is None
+    assert (round(call.params["x"]), round(call.params["y"])) == (192, 248)
+    assert call.params.get("_raw_x") == 100.0
+    grounder.locate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_single_mode_id_without_xy_resolves_by_id():
+    elements = [make_test_node(5, "PlayButton", rect=(100, 200, 150, 250))]
+    call, _ = await _run_click('{"element_id": 5}', build_gpu_single_preset(), elements)
+    assert call.params.get("element_id") == 5
+    assert call.params.get("x") is None
+
+
+@pytest.mark.asyncio
+async def test_fleet_mode_id_wins_over_xy():
+    elements = [make_test_node(5, "PlayButton", rect=(100, 200, 150, 250))]
+    call, _ = await _run_click('{"element_id": 5, "x": 500, "y": 500}', build_cpu_fleet_preset(), elements)
+    assert call.params.get("element_id") == 5
+    assert call.params.get("x") is None
+    assert call.params.get("_id_won_over_xy") is True
 
 
 @pytest.mark.asyncio

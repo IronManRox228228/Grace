@@ -855,9 +855,22 @@ class AgentLoop:
                         },
                     }
 
-            # In single mode:
-            # - If shown element_id given: it wins over x/y, never invokes grounder.
-            # - If x/y given (without shown id): scale to screen coordinates; do NOT strip because target_name is present.
+            # Single mode (computer-use model): coordinates are primary. If x/y
+            # are present they win; element_id/element_index are dropped and
+            # x/y are scaled below. The id is used only when no x/y were given.
+            # Fleet mode: a shown element_id wins over x/y (ids are the truth).
+            if (
+                is_single
+                and is_shown_id
+                and step.action != "cua_drag"
+                and step.params.get("x") is not None
+                and step.params.get("y") is not None
+            ):
+                step.params["_raw_element_id"] = raw_elem_id
+                step.params.pop("element_id", None)
+                step.params.pop("element_index", None)
+                is_shown_id = False
+
             if is_shown_id:
                 if step.params.get("x") is not None and step.params.get("y") is not None:
                     step.params["_id_won_over_xy"] = True
