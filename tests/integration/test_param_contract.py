@@ -31,6 +31,14 @@ import pytest
 from grace.automation.computer_use import ComputerUse
 from grace.intent.tools import ALL_TOOLS
 
+
+@pytest.fixture(autouse=True)
+def _no_terminal_in_front(monkeypatch):
+    # The send-time terminal check reads the real foreground window; a test run
+    # started from a terminal would otherwise refuse every keystroke.
+    import grace.automation.computer_use as cu
+    monkeypatch.setattr(cu, "_terminal_foreground", lambda: None)
+
 pytestmark = pytest.mark.integration
 
 

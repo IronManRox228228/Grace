@@ -17,6 +17,14 @@ from grace.agent.planner import wrap_untrusted
 from grace.tools.dispatcher import Dispatcher
 
 
+@pytest.fixture(autouse=True)
+def _no_terminal_in_front(monkeypatch):
+    # The send-time terminal check reads the real foreground window; a test run
+    # started from a terminal would otherwise refuse every keystroke.
+    import grace.automation.computer_use as cu
+    monkeypatch.setattr(cu, "_terminal_foreground", lambda: None)
+
+
 # ============================================================================
 # 1. Agentic multi-step tests
 # ============================================================================

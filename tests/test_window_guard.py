@@ -11,6 +11,14 @@ import pytest
 from grace.automation.computer_use import ComputerUse, _wrong_window
 
 
+@pytest.fixture(autouse=True)
+def _no_terminal_in_front(monkeypatch):
+    # The send-time terminal check reads the real foreground window; a test run
+    # started from a terminal would otherwise refuse every keystroke.
+    import grace.automation.computer_use as cu
+    monkeypatch.setattr(cu, "_terminal_foreground", lambda: None)
+
+
 class FakeAutoGui:
     def __init__(self):
         self.calls = []
