@@ -1247,8 +1247,16 @@ class ComputerUse:
         except Exception:
             try:
                 pyautogui.press(parts[-1] if parts else raw_key)
-            except Exception:
-                pass
+            except Exception as e:
+                _invalidate_graph()
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "verified": False,
+                    "action": "press_key",
+                    "error": f"Could not send {raw_key}: {e}",
+                    "evidence": "key press failed",
+                }
         _invalidate_graph()
         verified, evidence = _change_verdict(before, _settled_state())
         return {

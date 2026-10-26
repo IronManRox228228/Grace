@@ -51,6 +51,20 @@ class TestCuaEnhancements:
             assert self.cua.perform("press_key", {"key": key}).get("ok") is True
         assert sent == [("win",), ("ctrl", "c"), ("enter",)]
 
+    def test_press_key_reports_failure_when_hotkey_and_fallback_both_raise(self, monkeypatch):
+        import pyautogui
+
+        def boom(*a, **k):
+            raise RuntimeError("keyboard blocked")
+
+        monkeypatch.setattr(pyautogui, "position", lambda: (500, 500))
+        monkeypatch.setattr(pyautogui, "hotkey", boom)
+        monkeypatch.setattr(pyautogui, "press", boom)
+        monkeypatch.setattr("grace.automation.computer_use._terminal_foreground", lambda: None)
+        res = self.cua.perform("press_key", {"key": "enter"})
+        assert res.get("ok") is False and res.get("sent") is False
+        assert "keyboard blocked" in res["error"]
+
     def test_activate_heuristics(self):
         """Verify activate handles window dicts, titles, and hwnds safely."""
         res1 = self.cua.perform("activate", {"window": {"id": 999999, "title": "NonExistentWindow"}})
