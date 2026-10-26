@@ -467,6 +467,8 @@ class AgentLoop:
                 user_update=pre_exec_step.get("user_update", "Pre-executing setup action"),
                 step_number=0,
             )
+        if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
+            self._run_capture.begin_turn(user_goal)
         self._planner.reset()
         self._pending = None
         self._cancel_requested = False

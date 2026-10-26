@@ -1709,6 +1709,7 @@ class GraceApp:
             trace.mark_event(f"route_{complexity.value}")
 
             if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
+                self._run_capture.begin_turn(transcript)
                 self._run_capture.record_intent(
                     raw_output="",
                     intent=intent,
@@ -1785,6 +1786,7 @@ class GraceApp:
         trace.mark_event(f"route_{complexity.value}")
 
         if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
+            self._run_capture.begin_turn(transcript)
             self._run_capture.record_intent(
                 raw_output=intent_json or "",
                 intent=intent,

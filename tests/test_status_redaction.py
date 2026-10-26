@@ -79,7 +79,7 @@ class TestStatusRedaction:
             timings={"start": 0.0, "end": 1.0, "duration": 1.0},
         )
 
-        step_file = tmp_path / "step_001" / "step.json"
+        step_file = tmp_path / "turn_001" / "step_001" / "step.json"
         assert step_file.exists()
 
         data = json.loads(step_file.read_text(encoding="utf-8"))

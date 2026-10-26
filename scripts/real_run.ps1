@@ -3,7 +3,8 @@
 # Thin wrapper to run one Grace turn against the real desktop and capture run artifacts.
 # Uses Grace's in-process --capture-run feature.
 #
-# Output lands in runs/<timestamp>/ under the repo root.
+# Output lands in runs/<timestamp>/ under the repo root: log.txt, summary.json and
+# turn_001/step_NNN/ (this wrapper runs exactly one turn).
 # runs/ is gitignored.
 
 param(

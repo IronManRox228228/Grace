@@ -124,11 +124,11 @@ class TestRunCapture:
 
         # Verify all files exist
         assert (run_dir / "log.txt").is_file()
-        assert (run_dir / "intent.json").is_file()
+        assert (run_dir / "turn_001" / "intent.json").is_file()
         assert (run_dir / "summary.json").is_file()
 
         for step_idx in (1, 2):
-            step_dir = run_dir / f"step_{step_idx:03d}"
+            step_dir = run_dir / "turn_001" / f"step_{step_idx:03d}"
             assert step_dir.is_dir()
             assert (step_dir / "screenshot.png").is_file()
             assert (step_dir / "screenshot_meta.json").is_file()
@@ -137,18 +137,18 @@ class TestRunCapture:
             assert (step_dir / "step.json").is_file()
 
         # Check step_001 content
-        meta1 = json.loads((run_dir / "step_001" / "screenshot_meta.json").read_text(encoding="utf-8"))
+        meta1 = json.loads((run_dir / "turn_001" / "step_001" / "screenshot_meta.json").read_text(encoding="utf-8"))
         assert meta1["original_size"] == [1920, 1080]
         assert meta1["sent_size"] == [1280, 720]
         assert abs(meta1["scale"] - (1280 / 1920)) < 1e-4
 
-        raw1 = (run_dir / "step_001" / "planner_raw.txt").read_text(encoding="utf-8")
+        raw1 = (run_dir / "turn_001" / "step_001" / "planner_raw.txt").read_text(encoding="utf-8")
         assert "cua_click" in raw1
 
-        prompt1 = (run_dir / "step_001" / "planner_prompt.txt").read_text(encoding="utf-8")
+        prompt1 = (run_dir / "turn_001" / "step_001" / "planner_prompt.txt").read_text(encoding="utf-8")
         assert "Step 1 prompt" in prompt1
 
-        step1 = json.loads((run_dir / "step_001" / "step.json").read_text(encoding="utf-8"))
+        step1 = json.loads((run_dir / "turn_001" / "step_001" / "step.json").read_text(encoding="utf-8"))
         assert step1["action"] == "cua_click"
         assert step1["params"] == {"element_id": 1}
         assert step1["grounded_point"] == [300, 400]
@@ -160,7 +160,7 @@ class TestRunCapture:
         assert "duration" in step1["timings"]
 
         # Check intent.json
-        intent_data = json.loads((run_dir / "intent.json").read_text(encoding="utf-8"))
+        intent_data = json.loads((run_dir / "turn_001" / "intent.json").read_text(encoding="utf-8"))
         assert "open_app" in intent_data["raw_output"]
         assert intent_data["route"] == "agentic_goal"
 
@@ -293,14 +293,14 @@ class TestRunCapture:
 
         assert res["status"] == "ok"
         assert (run_dir / "summary.json").is_file()
-        assert (run_dir / "step_001" / "screenshot.png").is_file()
-        assert (run_dir / "step_001" / "screenshot_meta.json").is_file()
-        assert (run_dir / "step_001" / "step.json").is_file()
-        assert (run_dir / "step_001" / "planner_raw.txt").is_file()
-        assert (run_dir / "step_001" / "planner_prompt.txt").is_file()
+        assert (run_dir / "turn_001" / "step_001" / "screenshot.png").is_file()
+        assert (run_dir / "turn_001" / "step_001" / "screenshot_meta.json").is_file()
+        assert (run_dir / "turn_001" / "step_001" / "step.json").is_file()
+        assert (run_dir / "turn_001" / "step_001" / "planner_raw.txt").is_file()
+        assert (run_dir / "turn_001" / "step_001" / "planner_prompt.txt").is_file()
 
-        assert (run_dir / "step_002" / "screenshot.png").is_file()
-        assert (run_dir / "step_002" / "step.json").is_file()
+        assert (run_dir / "turn_001" / "step_002" / "screenshot.png").is_file()
+        assert (run_dir / "turn_001" / "step_002" / "step.json").is_file()
 
         summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
         assert summary["goal"] == "Do the 2-step test task"
@@ -328,3 +328,30 @@ class TestRunCapture:
 
         # Assert capture directory was NEVER created
         assert not fake_run_dir.exists()
+
+
+class TestTurnFolders:
+    def test_each_turn_gets_its_own_folder_and_summary_lists_turns(self, tmp_path):
+        run_dir = tmp_path / "run"
+        rc = RunCapture(run_dir=run_dir, enabled=True, vault_secrets=[])
+        for n, goal in ((1, "first goal"), (2, "second goal")):
+            assert rc.begin_turn(goal) == n
+            rc.record_planner(step_no=1, prompt=f"p{n}", raw=f"r{n}")
+            rc.record_summary(goal=goal, status="complete", step_count=1, total_time=1.0)
+        rc.close()
+
+        assert (run_dir / "turn_001" / "step_001" / "planner_raw.txt").read_text(encoding="utf-8") == "r1"
+        assert (run_dir / "turn_002" / "step_001" / "planner_raw.txt").read_text(encoding="utf-8") == "r2"
+        assert not (run_dir / "step_001").exists()
+        summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+        assert [(t["turn"], t["goal"], t["status"], t["step_count"]) for t in summary["turns"]] == [
+            (1, "first goal", "complete", 1),
+            (2, "second goal", "complete", 1),
+        ]
+
+    def test_begin_turn_twice_for_same_goal_reuses_the_turn(self, tmp_path):
+        rc = RunCapture(run_dir=tmp_path / "run", enabled=True, vault_secrets=[])
+        assert rc.begin_turn("g") == 1
+        assert rc.begin_turn("g") == 1
+        rc.record_planner(step_no=1, prompt="p", raw="r")
+        assert rc.begin_turn("g") == 2

@@ -101,7 +101,11 @@ class RunCapture:
         self.enabled = bool(enabled and run_dir)
         self.run_dir = Path(run_dir) if run_dir else None
         self._file_handler: Optional[RedactingFileHandler] = None
-        self._has_summary = False
+        # One entry per agent loop / goal: {"turn", "goal", "status", "step_count", ...}.
+        # Step artifacts live in run_dir/turn_NNN/step_NNN so a new task in the
+        # same session never overwrites the previous task's steps.
+        self._turns: list[dict[str, Any]] = []
+        self._turn_has_steps = False
 
         if self.enabled:
             if vault_secrets is not None:
@@ -117,7 +121,38 @@ class RunCapture:
 
     @property
     def has_summary(self) -> bool:
-        return self._has_summary
+        """True when the current turn already has its summary recorded."""
+        return bool(self._turns and self._turns[-1].get("_summarised"))
+
+    def begin_turn(self, goal: str = "") -> int:
+        """Start a new turn (one agent loop or goal) and return its number.
+
+        A turn that was just begun and has no steps or summary yet is reused,
+        so the router and the agent loop can both announce the same goal.
+        """
+        if self._turns:
+            cur = self._turns[-1]
+            if (
+                not self._turn_has_steps
+                and not cur.get("_summarised")
+                and cur.get("goal") in ("", goal)
+            ):
+                cur["goal"] = goal or cur.get("goal", "")
+                return cur["turn"]
+        number = len(self._turns) + 1
+        self._turns.append({"turn": number, "goal": goal or ""})
+        self._turn_has_steps = False
+        return number
+
+    def _turn_dir(self) -> Path:
+        """Directory of the current turn (turn 1 is started on demand)."""
+        if not self._turns:
+            self.begin_turn("")
+        return self.run_dir / f"turn_{self._turns[-1]['turn']:03d}"
+
+    def _step_dir(self, step_no: int) -> Path:
+        self._turn_has_steps = True
+        return self._turn_dir() / f"step_{step_no:03d}"
 
     def _redact_str(self, text: str) -> str:
         if not text:
@@ -180,7 +215,7 @@ class RunCapture:
         if not self.is_enabled:
             return
 
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self._turn_dir().mkdir(parents=True, exist_ok=True)
         intent_dict: Any = None
         if hasattr(intent, "to_dict"):
             intent_dict = intent.to_dict()
@@ -201,7 +236,7 @@ class RunCapture:
             "route": str(route or ""),
         }
         redacted = self._redact(data)
-        out_path = self.run_dir / "intent.json"
+        out_path = self._turn_dir() / "intent.json"
         out_path.write_text(json.dumps(redacted, indent=2, default=str), encoding="utf-8")
 
     def record_screenshot(
@@ -210,11 +245,11 @@ class RunCapture:
         snapshot: Any,
         view: Any = None,
     ) -> None:
-        """Write step_NNN/screenshot.png and step_NNN/screenshot_meta.json."""
+        """Write turn_NNN/step_NNN/screenshot.png and screenshot_meta.json."""
         if not self.is_enabled:
             return
 
-        step_dir = self.run_dir / f"step_{step_no:03d}"
+        step_dir = self._step_dir(step_no)
         step_dir.mkdir(parents=True, exist_ok=True)
 
         width = getattr(snapshot, "width", 1920) or 1920
@@ -260,7 +295,7 @@ class RunCapture:
         if not self.is_enabled:
             return
 
-        step_dir = self.run_dir / f"step_{step_no:03d}"
+        step_dir = self._step_dir(step_no)
         step_dir.mkdir(parents=True, exist_ok=True)
 
         (step_dir / "planner_prompt.txt").write_text(
@@ -284,7 +319,7 @@ class RunCapture:
         if not self.is_enabled:
             return
 
-        step_dir = self.run_dir / f"step_{step_no:03d}"
+        step_dir = self._step_dir(step_no)
         step_dir.mkdir(parents=True, exist_ok=True)
 
         elements = []
@@ -342,6 +377,19 @@ class RunCapture:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         commit = git_commit if git_commit is not None else get_git_commit()
 
+        if not self._turns:
+            self.begin_turn(goal)
+        turn = self._turns[-1]
+        turn.update(
+            {
+                "goal": goal,
+                "status": status,
+                "step_count": step_count,
+                "total_time": round(total_time, 3) if isinstance(total_time, float) else total_time,
+                "_summarised": True,
+            }
+        )
+
         summary_data = {
             "goal": goal,
             "status": status,
@@ -350,12 +398,14 @@ class RunCapture:
             "model": model or "",
             "tier": tier or "",
             "git_commit": commit,
+            "turns": [
+                {k: v for k, v in t.items() if not k.startswith("_")} for t in self._turns
+            ],
         }
         redacted = self._redact(summary_data)
         (self.run_dir / "summary.json").write_text(
             json.dumps(redacted, indent=2, default=str), encoding="utf-8"
         )
-        self._has_summary = True
 
     def close(self) -> None:
         """Flush and remove logging handler."""
