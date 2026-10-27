@@ -152,14 +152,25 @@ class GraceApp:
         if getattr(self.config, "process_priority_control", True):
             set_idle_priority()
 
-        # Audio
-        self.capture = AudioCapture(
-            sample_rate=self.config.mic_sample_rate,
-            chunk_size=self.config.mic_chunk,
-            channels=self.config.mic_channels,
-            width=self.config.mic_width,
-            device_index=self.config.mic_device_index,
-        )
+        # Audio. GRACE_FAKE_MIC (dev only) swaps the mic for a folder of WAVs.
+        fake_mic = os.getenv("GRACE_FAKE_MIC", "")
+        if fake_mic:
+            from grace.audio.fake_mic import FakeMicCapture
+            self.capture = FakeMicCapture(
+                fake_mic,
+                sample_rate=self.config.mic_sample_rate,
+                chunk_size=self.config.mic_chunk,
+                channels=self.config.mic_channels,
+                width=self.config.mic_width,
+            )
+        else:
+            self.capture = AudioCapture(
+                sample_rate=self.config.mic_sample_rate,
+                chunk_size=self.config.mic_chunk,
+                channels=self.config.mic_channels,
+                width=self.config.mic_width,
+                device_index=self.config.mic_device_index,
+            )
 
         # Blocking mic reads happen on the pump's thread, never on the loop.
         self.pump = AudioPump(self.capture)
