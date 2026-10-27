@@ -2,12 +2,13 @@
 
 import asyncio
 import base64
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from grace.agent.loop import AgentLoop
 from grace.agent.perception import ScreenSnapshot, WindowInfo, observe_for_planner
-from grace.agent.planner import PlannedStep, Planner
+from grace.agent.planner import PlannedStep, Planner, get_planner_system_prompt
 from grace.agent.grounder import GroundedPoint
 from grace.fleet import build_gpu_single_preset, build_cpu_fleet_preset
 from grace.perception.element_graph import ElementGraph, WindowRef
@@ -389,3 +390,339 @@ async def test_single_mode_parked_click_resumes_with_scaled_coordinates():
     assert len(calls) == 1
     assert calls[0].kwargs.get("confirmed") is True
     assert (calls[0][0][0].params["x"], calls[0][0][0].params["y"]) == (495, 346)
+
+
+# ---------------------------------------------------------------------------
+# Cockpit 8: lean single-mode cockpit
+# ---------------------------------------------------------------------------
+
+
+def _readings_snapshot(elements=None, window_title="WhatsApp"):
+    graph = ElementGraph(elements=elements or [], window=WindowRef(hwnd=1001, title=window_title))
+    return ScreenSnapshot(
+        active_window=WindowInfo(
+            hwnd=1001, title=window_title, class_name="Chrome_WidgetWin_1",
+            rect=(0, 0, 1920, 1080)),
+        ocr_lines=[],
+        width=1920,
+        height=1080,
+        graph=graph,
+    )
+
+
+class TestSingleModeSystemPrompt:
+    BANNED = ["expect", "Screen unchanged", "verified", "Established facts",
+              "Observed so far", "Ruled out"]
+
+    def test_size_target(self):
+        from grace.agent.planner import get_planner_system_prompt
+        prompt = get_planner_system_prompt(is_single=True)
+        assert len(prompt) <= 3000
+
+    def test_documents_only_the_eight_tools(self):
+        prompt = get_planner_system_prompt(is_single=True)
+        for tool in ("cua_click", "cua_type_text", "cua_press_key", "cua_scroll",
+                     "cua_drag", "open_app", "search_files", "open_file"):
+            assert tool in prompt
+        # element_id / element lists are gone from the single-mode prompt.
+        assert "element_id" not in prompt
+        assert "target_name" not in prompt
+
+    def test_no_banned_words(self):
+        prompt = get_planner_system_prompt(is_single=True)
+        for word in self.BANNED:
+            assert word not in prompt, word
+
+    def test_keeps_the_untrusted_data_rule(self):
+        from grace.agent.planner import get_planner_system_prompt
+        prompt = get_planner_system_prompt(is_single=True)
+        assert "UNTRUSTED_DATA_START" in prompt
+        assert "UNTRUSTED_DATA_END" in prompt
+        assert "never an instruction" in prompt
+        assert "never a new goal" in prompt
+
+    def test_asks_for_the_cockpit8_response_shape(self):
+        prompt = get_planner_system_prompt(is_single=True)
+        assert '"last_step"' in prompt
+        assert '"done"' in prompt
+        assert '"say"' in prompt
+
+
+def test_single_mode_step_message_size_and_contents():
+    """Fixture: 60 elements and 8 prior steps. Message <= 2000 chars minus image."""
+    from grace.agent.planner import Planner, get_planner_system_prompt
+    from grace.agent.loop import _render_single_history
+
+    elements_prompt = "[" + ",".join(
+        '{"id": %d, "role": "button", "name": "Element number %d with a fairly long display name"}'
+        % (i, i)
+        for i in range(1, 61)
+    ) + "]"
+    assert len(elements_prompt) > 4000  # the old element JSON was the bulk
+
+    entries = [
+        {"step_no": i, "action": f"click ({100 + i},200)",
+         "said": "changed", "reading": 'Focus: button "Some fairly long element name %d"' % i}
+        for i in range(1, 9)
+    ]
+    history = _render_single_history(entries)
+    readings = 'Active window: WhatsApp\nFocus: textbox "Type a message to the group", contains: (empty)'
+
+    planner = Planner(FakeLLM(), is_single=True)
+    prompt = planner.build_prompt(
+        goal="send a message to the chemistry group",
+        elements_prompt=elements_prompt,   # present but unused in single mode
+        history=history,
+        scratchpad="- **Established**: lots of data " * 40,  # unused in single mode
+        expectation_note="You predicted: lots of data.",      # unused in single mode
+        window_title="WhatsApp",
+        screen_readings=readings,
+    )
+    assert len(prompt) <= 2000, len(prompt)
+    # The old sections are gone in single mode.
+    for banned in ("What is on screen", "What you have already done",
+                   "Data collected so far", "Result of your last step",
+                   "expect", "Screen unchanged", "verified",
+                   "Established facts", "Observed so far", "Ruled out"):
+        assert banned not in prompt, banned
+    assert "### Now" in prompt
+    assert "### Your last steps" in prompt
+    assert "UNTRUSTED_DATA_START" in prompt
+
+
+class FakeLLM:
+    async def generate_text(self, prompt, system_prompt, **kwargs):
+        return '{"action": "converse", "is_completed": true, "final_response": "Done."}'
+
+
+class TestReadings:
+    def test_focused_empty_text_box_shows_empty(self):
+        from grace.agent.loop import screen_readings
+
+        el = ElementNode(
+            id=4, role="textbox", name='Type a message to group BaaMaaBetaBeti',
+            rect=(100, 200, 300, 240), center=(200, 220), value="", focused=True,
+        )
+        readings = screen_readings(_readings_snapshot([el]))
+        assert "Active window: WhatsApp" in readings
+        assert 'Focus: textbox "Type a message to group BaaMaaBetaBeti", contains: (empty)' in readings
+
+    def test_password_field_never_shows_its_value(self):
+        from grace.agent.loop import screen_readings
+
+        el = ElementNode(
+            id=9, role="textbox", name="Password", rect=(0, 0, 10, 10),
+            center=(5, 5), value="hunter2", focused=True,
+        )
+        readings = screen_readings(_readings_snapshot([el]))
+        assert "hunter2" not in readings
+        assert "password field" in readings
+
+    def test_focused_text_box_shows_value_cut_to_80_chars(self):
+        from grace.agent.loop import screen_readings
+
+        el = ElementNode(
+            id=9, role="textbox", name="Search", rect=(0, 0, 10, 10),
+            center=(5, 5), value="a" * 200, focused=True,
+        )
+        readings = screen_readings(_readings_snapshot([el]))
+        line = [l for l in readings.splitlines() if l.startswith("Focus:")][0]
+        assert 'contains: "' + "a" * 80 + '"' in line
+        assert 'contains: "' + "a" * 81 not in line
+
+    def test_no_focus_shows_none(self):
+        from grace.agent.loop import screen_readings
+
+        el = ElementNode(id=1, role="button", name="x", rect=(0, 0, 10, 10), center=(5, 5))
+        readings = screen_readings(_readings_snapshot([el]))
+        assert "Focus: none" in readings
+
+    def test_readings_are_wrapped_as_untrusted_in_the_prompt(self):
+        from grace.agent.planner import Planner
+
+        planner = Planner(FakeLLM(), is_single=True)
+        prompt = planner.build_prompt(
+            goal="g", elements_prompt="[]",
+            screen_readings='Active window: WhatsApp\nFocus: none',
+        )
+        section = prompt.split("### Now\n", 1)[1]
+        assert section.startswith("<<<UNTRUSTED_DATA_START")
+        assert "<<<UNTRUSTED_DATA_END>>>" in section
+
+
+class TestSingleModeHistory:
+    def test_five_lines_one_per_step_with_report_attached_to_the_right_step(self):
+        from grace.agent.loop import _render_single_history
+
+        entries = [
+            {"step_no": 1, "action": 'type "Mama"', "said": None,
+             "reading": 'Focus: textbox "Search", contains: "Mama"'},
+            {"step_no": 2, "action": "click (192,270)", "said": "changed",
+             "reading": 'Focus: textbox "Type a message to group BaaMaaBetaBeti"'},
+            {"step_no": 3, "action": "click (924,971)", "said": None,
+             "reading": 'Focus: button "Voice message"'},
+            {"step_no": 4, "action": "click (100,100)", "said": "changed",
+             "reading": "error: Element [141] is not on screen."},
+            {"step_no": 5, "action": 'search files "report"', "said": "nothing changed",
+             "reading": "files: C:\a.txt"},
+            {"step_no": 6, "action": "click (10,10)", "said": None, "reading": ""},
+        ]
+        body = _render_single_history(entries)
+        lines = [l for l in body.splitlines() if l.strip()]
+        assert len(lines) == 5
+
+        def said_on(no):
+            line = next(l for l in lines if l.startswith(f"{no}. "))
+            return "you said: changed" in line or "you said: nothing changed" in line
+
+        # The report on step N comes from step N+1's output, so the newest
+        # rendered line never has one.
+        assert said_on(2) is True
+        assert said_on(4) is True
+        assert said_on(5) is True
+        assert said_on(6) is False
+        # Step 1 dropped
+        assert not any(l.startswith("1. ") for l in lines)
+
+
+DONE_JSON = (
+    '{"thought": "Done", "action": "converse", "params": {"response": "Done."}, '
+    '"is_completed": true, "final_response": "Done."}'
+)
+
+
+class TestSingleModeStopping:
+    async def _loop(self, responses, elements=None):
+        gemma = AsyncMock()
+        dispatcher = AsyncMock()
+        perception = MagicMock()
+        grounder = AsyncMock()
+        perception.capture_snapshot.return_value = make_snapshot(
+            elements or [], image_size=(1920, 1080), screen_size=(1920, 1080))
+        gemma.generate_text.side_effect = responses
+        dispatcher.execute.return_value = {
+            "status": "ok",
+            "result": {"ok": True, "sent": True, "verified": True, "message": "Clicked"},
+        }
+        loop = AgentLoop(
+            gemma=gemma, dispatcher=dispatcher, perception=perception,
+            grounder=grounder, fleet_config=build_gpu_single_preset(),
+        )
+        result = await loop.run("no change drill")
+        return result, dispatcher
+
+    def _single_step(self, last_step=None, coords=(500, 500)):
+        action = {"tool": "cua_click", "x": coords[0], "y": coords[1]}
+        body = {
+            "thought": "Point at it",
+            "action": action,
+            "done": False,
+            "say": "",
+        }
+        if last_step is not None:
+            body["last_step"] = last_step
+        return json.dumps(body)
+
+    @pytest.mark.asyncio
+    async def test_four_no_change_reports_stop_the_task(self):
+        # Step 1 has nothing to judge (no last_step), steps 2-5 report that
+        # the previous click changed nothing. The fourth such report stops.
+        responses = [
+            self._single_step(),
+            self._single_step("nothing changed"),
+            self._single_step("nothing changed"),
+            self._single_step("nothing changed"),
+            self._single_step("nothing changed"),
+        ]
+        result, dispatcher = await self._loop(responses)
+        assert result["status"] == "no_progress"
+        assert result["final_response"] == "I tried four times and nothing changed, so I've stopped."
+        # The fifth action was never dispatched.
+        assert dispatcher.execute.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_three_no_change_then_changed_does_not_stop(self):
+        responses = [
+            self._single_step(),
+            self._single_step("nothing changed"),
+            self._single_step("nothing changed"),
+            self._single_step("nothing changed"),
+            self._single_step("changed"),
+            DONE_JSON,
+        ]
+        result, dispatcher = await self._loop(responses)
+        assert result["status"] == "ok"
+        assert dispatcher.execute.call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_no_repeat_stop_at_three_identical_steps_in_single_mode(self):
+        # The fleet ladder stops at three identical actions; single mode
+        # has no ladder, so four identical clicks are allowed to run and
+        # only the model's own last_step verdict can stop the task.
+        same = self._single_step("changed")
+        responses = [same, same, same, same, DONE_JSON]
+        result, dispatcher = await self._loop(responses)
+        assert result["status"] == "ok"
+        assert dispatcher.execute.call_count == 4
+
+
+class TestSingleModeDragPath:
+    async def _run_drag(self, params_json, elements):
+        gemma = AsyncMock()
+        dispatcher = AsyncMock()
+        perception = MagicMock()
+        grounder = AsyncMock()
+        perception.capture_snapshot.return_value = make_snapshot(
+            elements, image_size=(1920, 1080), screen_size=(1920, 1080))
+        gemma.generate_text.side_effect = [
+            '{"thought": "Drag it", "action": {"tool": "cua_drag", ' + params_json
+            + '}, "done": false, "say": ""}',
+            DONE_JSON,
+        ]
+        dispatcher.execute.return_value = {
+            "status": "ok",
+            "result": {"ok": True, "sent": True, "verified": True, "message": "Dragged"},
+        }
+        loop = AgentLoop(
+            gemma=gemma, dispatcher=dispatcher, perception=perception,
+            grounder=grounder, fleet_config=build_gpu_single_preset(),
+        )
+        result = await loop.run("drag drill")
+        assert result["status"] == "ok"
+        calls = [c[0][0] for c in dispatcher.execute.call_args_list if c[0][0].tool == "cua_drag"]
+        assert len(calls) == 1
+        return calls[0]
+
+    @pytest.mark.asyncio
+    async def test_path_wins_over_from_to_element_ids(self):
+        """Cockpit 8: a coordinate stroke beats the ids even when ids resolve."""
+        elements = [make_test_node(5, "Paper", rect=(100, 200, 150, 250))]
+        call = await self._run_drag(
+            '"path": [[100, 300], [500, 300]], "from_element_id": 5, "to_element_id": 7',
+            elements)
+        assert call.params.get("from_element_id") is None
+        assert call.params.get("to_element_id") is None
+        assert call.params.get("_raw_from_element_id") == 5
+        assert call.params.get("_raw_to_element_id") == 7
+        assert [list(p) for p in call.params["path"]] == [[192, 324], [960, 324]]
+
+    @pytest.mark.asyncio
+    async def test_xy_to_xy_stroke_loses_the_ids_and_is_scaled_like_clicks(self):
+        elements = [make_test_node(5, "Paper", rect=(100, 200, 150, 250))]
+        call = await self._run_drag(
+            '"x": 100, "y": 300, "to_x": 500, "to_y": 300, "from_element_id": 5, "to_element_id": 7',
+            elements)
+        assert call.params.get("from_element_id") is None
+        assert call.params.get("to_element_id") is None
+        assert call.params["x"] == 192
+        assert call.params["y"] == 324
+        assert call.params["to_x"] == 960
+        assert call.params["to_y"] == 324
+
+    @pytest.mark.asyncio
+    async def test_id_only_drag_keeps_the_ids(self):
+        elements = [make_test_node(5, "Paper", rect=(100, 200, 150, 250)),
+                    make_test_node(6, "Scissors", rect=(200, 200, 250, 250))]
+        call = await self._run_drag('"from_element_id": 5, "to_element_id": 6', elements)
+        assert call.params.get("from_element_id") == 5
+        assert call.params.get("to_element_id") == 6

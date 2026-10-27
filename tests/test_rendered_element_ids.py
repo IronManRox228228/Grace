@@ -67,13 +67,14 @@ class TestPlannerRenderedElementIds:
         assert step.target_guidance is True
 
     @pytest.mark.asyncio
-    async def test_single_mode_retains_shown_element_id(self):
+    async def test_fleet_mode_retains_shown_element_id(self):
+        # Fleet mode renders the element tree and tracks shown IDs
         mock_llm = MagicMock()
         mock_llm.generate_text = AsyncMock(return_value=(
             '{"thought": "Click search", "action": "cua_click", '
             '"params": {"target_name": "Search", "element_id": 16}}'
         ))
-        planner = Planner(llm=mock_llm)
+        planner = Planner(llm=mock_llm, is_single=False)
 
         prompt_tree = '[{"id": 16, "role": "search", "name": "Search"}]'
         step = await planner.plan(
@@ -87,13 +88,13 @@ class TestPlannerRenderedElementIds:
         assert step.rendered_element_ids == {16}
 
     @pytest.mark.asyncio
-    async def test_single_mode_drops_unshown_element_id(self):
+    async def test_fleet_mode_drops_unshown_element_id(self):
         mock_llm = MagicMock()
         mock_llm.generate_text = AsyncMock(return_value=(
             '{"thought": "Click 99", "action": "cua_click", '
             '"params": {"target_name": "Search", "element_id": 99}}'
         ))
-        planner = Planner(llm=mock_llm)
+        planner = Planner(llm=mock_llm, is_single=False)
 
         prompt_tree = '[{"id": 16, "role": "search", "name": "Search"}]'
         step = await planner.plan(
@@ -105,6 +106,21 @@ class TestPlannerRenderedElementIds:
         assert step is not None
         assert "element_id" not in step.params
         assert step.params["target_name"] == "Search"
+
+    @pytest.mark.asyncio
+    async def test_single_mode_renders_no_element_ids(self):
+        # Cockpit 8: single mode prompt renders no element list; rendered_element_ids is empty
+        mock_llm = MagicMock()
+        mock_llm.generate_text = AsyncMock(return_value=(
+            '{"thought": "Click", "action": {"tool": "cua_click", "x": 100, "y": 200}, "done": false, "say": ""}'
+        ))
+        planner = Planner(llm=mock_llm, is_single=True)
+        step = await planner.plan(
+            goal="search for song",
+            elements_prompt='[{"id": 16, "role": "search", "name": "Search"}]',
+        )
+        assert step is not None
+        assert step.rendered_element_ids == set()
 
 
 class TestComputerUseStep4Scenarios:

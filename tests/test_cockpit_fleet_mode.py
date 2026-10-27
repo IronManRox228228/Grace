@@ -16,9 +16,11 @@ from grace.agent.perception import (
     OBSERVABILITY_RICH,
     observe_for_planner,
 )
+from grace.agent.planner import Planner, get_planner_system_prompt
 from grace.fleet import build_cpu_fleet_preset
 from grace.perception.element_graph import ElementGraph, WindowRef
 from grace.perception.elements import ElementNode, FRAME_PAGE
+from tests.test_planner import FakeLLM
 
 
 def make_test_node(element_id: int, name: str, frame: str = FRAME_PAGE, rect=(100, 100, 200, 150)):
@@ -151,3 +153,34 @@ def test_observe_for_planner_fleet_mode_blind_window_fallback():
         assert obs.mode == OBSERVABILITY_BLIND
         assert obs.image_b64 is not None
         assert "Save" in obs.markdown
+
+
+# -- Cockpit 8: fleet prompts stay byte-identical -----------------------------
+#
+# Captured from the build before the single-mode changes landed (see
+# PROGRESS.md). Fleet mode's prompt, parsing and memory must not move at all;
+# every cockpit-8 change has to sit behind the single-mode branch.
+
+_FLEET_FIXTURE = dict(
+    goal="submit the form",
+    elements_prompt='[{"id": 10, "role": "button", "name": "Submit Form"}, {"id": 11, "role": "button", "name": "Cancel Operation"}]',
+    history="Step 1: cua_click(element_id=10) -> ok",
+    scratchpad="- **latest_extracted_text**: sample data",
+    expectation_note='You predicted: "the form is submitted".',
+    window_title="Fleet Test Window",
+)
+
+
+def test_fleet_system_prompt_is_byte_identical():
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "cockpit8_fleet_system_prompt.txt"
+    assert get_planner_system_prompt(is_single=False) == fixture.read_text(encoding="utf-8")
+
+
+def test_fleet_build_prompt_is_byte_identical():
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "cockpit8_fleet_build_prompt.txt"
+    planner = Planner(FakeLLM([]), is_single=False)
+    assert planner.build_prompt(**_FLEET_FIXTURE) == fixture.read_text(encoding="utf-8")

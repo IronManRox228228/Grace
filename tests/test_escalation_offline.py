@@ -11,6 +11,7 @@ from grace.agent.planner import PlannedStep
 
 
 def make_loop(responses, config=None):
+    from grace.fleet import build_cpu_fleet_preset
     gemma = AsyncMock()
     gemma.generate_text.side_effect = responses
     dispatcher = AsyncMock()
@@ -22,7 +23,14 @@ def make_loop(responses, config=None):
         width=1920,
         height=1080,
     )
-    loop = AgentLoop(gemma=gemma, dispatcher=dispatcher, perception=perception, config=config)
+    # Cockpit 8: Escalation is a fleet-only mechanism (removed from single mode)
+    loop = AgentLoop(
+        gemma=gemma,
+        dispatcher=dispatcher,
+        perception=perception,
+        config=config,
+        fleet_config=build_cpu_fleet_preset(),
+    )
     return loop, gemma
 
 

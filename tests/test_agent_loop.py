@@ -33,7 +33,18 @@ def snapshot(title="Untitled - Notepad", graph=None, ui_elements=None):
     )
 
 
-def make_loop(responses, dispatch_result=None, **kwargs):
+def make_loop(responses, dispatch_result=None, fleet=False, **kwargs):
+    """Build a loop with a canned planner.
+
+    `fleet=True` pins the cpu-fleet preset. The default is single mode - which
+    the real AgentLoop selects on any machine Grace actually runs on - but the
+    fleet-only machinery (the escalation ladder, Grace's own change verdicts,
+    the `expect` feedback note) now exists only there, so tests of it say so.
+    """
+    if fleet and "fleet_config" not in kwargs:
+        from grace.fleet import build_cpu_fleet_preset
+
+        kwargs["fleet_config"] = build_cpu_fleet_preset()
     gemma = AsyncMock()
     gemma.generate_text.side_effect = responses
     dispatcher = AsyncMock()
@@ -165,7 +176,10 @@ class TestNoProgressGuard:
     CLICK = '{"action": "cua_click", "params": {"x": 1, "y": 2}, "expect": "something"}'
 
     def test_repeating_one_action_ends_the_loop(self):
-        loop, _, _ = make_loop([self.CLICK] * 200)
+        # Fleet behaviour (cockpit 8): Foster-Grace's own change verdicts stop
+        # the loop only in fleet mode, where the planner reports nothing. In
+        # single mode the model's `last_step` report is the signal.
+        loop, _, _ = make_loop([self.CLICK] * 200, fleet=True)
         freeze_screen(loop)
         res = asyncio.run(loop.run(user_goal="find the pdf in my chemistry group"))
 
@@ -200,7 +214,7 @@ class TestNoProgressGuard:
         assert res["status"] == "ok"
 
     def test_it_names_the_app_it_cannot_read(self):
-        loop, _, _ = make_loop([self.CLICK] * 200)
+        loop, _, _ = make_loop([self.CLICK] * 200, fleet=True)
         freeze_screen(loop, title="WhatsApp")
 
         res = asyncio.run(loop.run(user_goal="open my chemistry group"))
@@ -329,24 +343,24 @@ class TestExpectationFeedback:
         step = PlannedStep(action="cua_click", params={}, expect="the search box is focused")
 
         note_single = loop._expectation_note(step, {"status": "ok"}, snapshot(), is_single=True)
-        assert note_single.startswith('You expected: "the search box is focused". Compare this with the screenshot now.')
+        assert note_single.startswith('You predicted: "the search box is focused". That was a prediction, not a result. Check it against the screenshot now.')
 
         note_fleet = loop._expectation_note(step, {"status": "ok"}, snapshot(), is_single=False)
-        assert note_fleet.startswith('You expected: "the search box is focused". Compare this with the screen description now.')
+        assert note_fleet.startswith('You predicted: "the search box is focused". That was a prediction, not a result. Check it against the screen description now.')
 
         empty_step = PlannedStep(action="cua_click", params={}, expect="")
         note_empty = loop._expectation_note(empty_step, {"status": "ok"}, snapshot(), is_single=True)
         assert note_empty.startswith("You did not state what you expected.")
 
     def test_system_prompt_requires_expect(self):
-        """System prompt explicitly requires expect on every action step."""
+        """The fleet system prompt requires `expect`; the lean cockpit-8 single
+        prompt must not ask for it (there is no expectation section any more)."""
         from grace.agent.planner import get_planner_system_prompt
-        prompt_single = get_planner_system_prompt(is_single=True)
-        assert "Every action step must fill `expect`" in prompt_single
-        assert "required" in prompt_single
         prompt_fleet = get_planner_system_prompt(is_single=False)
         assert "Every action step must fill `expect`" in prompt_fleet
         assert "required" in prompt_fleet
+        prompt_single = get_planner_system_prompt(is_single=True)
+        assert "expect" not in prompt_single
 
     def test_error_status_counts_as_failure(self):
         loop, _, _ = make_loop([])
@@ -374,7 +388,7 @@ class TestExpectationFeedback:
         loop, gemma, _ = make_loop([
             '{"action": "cua_click", "params": {"x": 1, "y": 2}, "expect": "the box is focused"}',
             DONE,
-        ], dispatch_result={"status": "ok", "result": {"ok": False, "error": "nothing there"}})
+        ], dispatch_result={"status": "ok", "result": {"ok": False, "error": "nothing there"}}, fleet=True)
         asyncio.run(loop.run(user_goal="click the box"))
         second_prompt = gemma.generate_text.call_args_list[1].kwargs["prompt"]
         assert "Tool error" in second_prompt
@@ -428,7 +442,7 @@ class TestActionVerdict:
     def test_two_tool_errors_do_not_return_needs_user_input(self):
         """Two tool errors on the same action continue the run; next prompt notes the count."""
         click = '{"action": "cua_click", "params": {"element_id": 1}, "expect": "open"}'
-        loop, gemma, dispatcher = make_loop([click, click, DONE])
+        loop, gemma, dispatcher = make_loop([click, click, DONE], fleet=True)
         dispatcher.execute.return_value = {"status": "error", "error": "element detached"}
         res = asyncio.run(loop.run(user_goal="click twice"))
         assert res["status"] != "needs_user_input"
@@ -503,14 +517,13 @@ class TestEscalationLadder:
         # Rung 2: repetition of a named target escalates to reground
         from grace.perception.elements import ElementNode
         from grace.perception.element_graph import ElementGraph
-        from grace.fleet import build_gpu_single_preset
+        from grace.fleet import build_cpu_fleet_preset
 
         el = ElementNode(id=3, role="button", name="Open", rect=(0, 0, 10, 10), center=(5, 5))
         graph = ElementGraph(elements=[el])
 
         click_name = '{"action": "cua_click", "params": {"target_name": "Open"}, "expect": "the message opens"}'
-        loop, _, _ = make_loop([click_name] * 6)
-        loop._fleet_config = build_gpu_single_preset()
+        loop, _, _ = make_loop([click_name] * 6, fleet=True)
         loop._ground = AsyncMock()
         freeze_screen(loop, graph=graph)
         asyncio.run(loop.run(user_goal="open the message"))
@@ -546,7 +559,7 @@ class TestEscalationLadder:
         assert step.params["element_id"] == 3
 
     def test_the_third_attempt_asks_a_stronger_model(self):
-        loop, _, _ = make_loop([self.CLICK] * 8)
+        loop, _, _ = make_loop([self.CLICK] * 8, fleet=True)
         freeze_screen(loop)
         asyncio.run(loop.run(user_goal="open the message"))
 
@@ -561,7 +574,7 @@ class TestEscalationLadder:
 
     def test_it_still_stops(self):
         # Escalation must not become a way of never giving up.
-        loop, _, _ = make_loop([self.CLICK] * 20)
+        loop, _, _ = make_loop([self.CLICK] * 20, fleet=True)
         freeze_screen(loop)
         res = asyncio.run(loop.run(user_goal="open the message"))
         assert res["status"] == "no_progress"
@@ -573,7 +586,7 @@ class TestEscalationLadder:
         # and took the whole process down with it.
         from grace.llm.gemma_client import RateLimitError
 
-        loop, _, _ = make_loop([self.CLICK] * 8)
+        loop, _, _ = make_loop([self.CLICK] * 8, fleet=True)
         freeze_screen(loop)
         loop._replan_stronger = AsyncMock(side_effect=RateLimitError("429 quota"))
         res = asyncio.run(loop.run(user_goal="open the message"))
@@ -584,7 +597,7 @@ class TestEscalationLadder:
     def test_a_budget_exceeded_escalation_stops_with_an_honest_reason(self):
         from grace.agent.planner import PlannerBudgetExceeded
 
-        loop, _, _ = make_loop([self.CLICK] * 8)
+        loop, _, _ = make_loop([self.CLICK] * 8, fleet=True)
         freeze_screen(loop)
         loop._replan_stronger = AsyncMock(
             side_effect=PlannerBudgetExceeded("planner call budget exhausted")
@@ -606,13 +619,26 @@ class TestRollingScratchpad:
         assert any("element not found" in e for e in memory.scratchpad["ruled_out"])
         assert "established" not in memory.scratchpad
 
-    def test_a_verified_step_establishes_its_expectation(self):
+    def test_a_verified_step_establishes_its_evidence_not_its_expect(self):
+        # `verified` only means something changed on screen; it does not mean
+        # the prediction came true. Only the tool's observation may be
+        # established, so the model never reads its own guess back as a fact.
         memory = AgentMemory("g")
         loop, _, _ = make_loop([])
         step = PlannedStep(action="cua_click", params={}, expect="the chat list is open")
         loop._remember(step, {"status": "ok", "result": {"verified": True,
                                                          "evidence": "focus moved"}}, memory)
-        assert memory.scratchpad["established"] == ["the chat list is open"]
+        assert memory.scratchpad["established"] == ["After `cua_click` {}: focus moved"]
+        # The prediction itself must not be stored as truth.
+        assert "the chat list is open" not in memory.scratchpad["established"]
+
+    def test_verified_with_no_evidence_establishes_nothing(self):
+        memory = AgentMemory("g")
+        loop, _, _ = make_loop([])
+        step = PlannedStep(action="cua_click", params={"x": 1, "y": 2}, expect="the message is sent")
+        loop._remember(step, {"status": "ok", "result": {"verified": True}}, memory)
+        assert "established" not in memory.scratchpad
+
 
     def test_unknown_outcomes_are_not_recorded_as_either(self):
         # A window that reports nothing produces one of these on every step.
@@ -1007,7 +1033,7 @@ class TestNoEffectRepeatNote:
             '{"action": "cua_click", "params": {"x": 1, "y": 2}, '
             '"expect": "the button is highlighted"}'
         )
-        loop, gemma, _ = make_loop([click, DONE])
+        loop, gemma, _ = make_loop([click, DONE], fleet=True)
         freeze_screen(loop)
         asyncio.run(loop.run(user_goal="click the button"))
         # Two planning calls were made; the second must carry the no-effect note.
@@ -1023,7 +1049,7 @@ class TestNoEffectRepeatNote:
             '{"action": "cua_click", "params": {"x": 1, "y": 2}, '
             '"expect": "something"}'
         )
-        loop, _, _ = make_loop([click] * 20)
+        loop, _, _ = make_loop([click] * 20, fleet=True)
         freeze_screen(loop)
         res = asyncio.run(loop.run(user_goal="open the message"))
         assert res["status"] == "no_progress"
@@ -1041,7 +1067,7 @@ class TestNoEffectRepeatNote:
             '{"action": "search_files", "params": {"query": "report.pdf"}, '
             '"expect": "find report"}'
         )
-        loop, _, dispatcher = make_loop([search] * 20)
+        loop, _, dispatcher = make_loop([search] * 20, fleet=True)
         freeze_screen(loop)
         dispatcher.execute.return_value = {
             "status": "ok",
@@ -1064,7 +1090,7 @@ class TestToolResultFeedback:
             '{"action": "search_files", "params": {"query": "report.pdf"}, '
             '"expect": "find report"}'
         )
-        loop, gemma, dispatcher = make_loop([plan1, DONE])
+        loop, gemma, dispatcher = make_loop([plan1, DONE], fleet=True)
         freeze_screen(loop)
         dispatcher.execute.return_value = {
             "status": "ok",
@@ -1092,7 +1118,7 @@ class TestToolResultFeedback:
             f'{{"action": "read_pdf", "params": {{"path": "{safe_path}"}}, '
             f'"expect": "read text"}}'
         )
-        loop, gemma, dispatcher = make_loop([plan1, DONE])
+        loop, gemma, dispatcher = make_loop([plan1, DONE], fleet=True)
         freeze_screen(loop)
         huge_text = "Important data line " * 100  # 2000 chars
         dispatcher.execute.return_value = {

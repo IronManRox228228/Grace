@@ -70,7 +70,8 @@ def test_password_value_never_appears_in_prompt_or_logs(caplog):
     logger.debug("Captured password node: %s", node.to_dict())
     elements_text = elements_to_prompt([node])
     llm = FakeLLM()
-    planner = Planner(llm)
+    # Fleet mode: elements_prompt is rendered into ### What is on screen
+    planner = Planner(llm, is_single=False)
     prompt = planner.build_prompt(
         goal="sign in to website",
         elements_prompt=elements_text,
@@ -80,6 +81,15 @@ def test_password_value_never_appears_in_prompt_or_logs(caplog):
     assert raw_secret not in prompt
     assert raw_secret not in caplog.text
     assert "[password field, filled]" in prompt
+
+    # Single mode: element list is dropped; screenshot is the screen
+    planner_single = Planner(llm, is_single=True)
+    prompt_single = planner_single.build_prompt(
+        goal="sign in to website",
+        elements_prompt=elements_text,
+    )
+    assert raw_secret not in prompt_single
+    assert "What is on screen" not in prompt_single
 
 
 def test_words_containing_pin_substring_are_not_passwords():

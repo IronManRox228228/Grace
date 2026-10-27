@@ -94,8 +94,18 @@ class TestParsePlannedStep:
         assert step.is_completed is True
 
     def test_user_update_defaults_to_action(self):
+        # Cockpit 8: no model-written user_update; Grace shows its own status
+        # phrase built from the tool name.
         step = parse_planned_step('{"action": "cua_scroll", "params": {}}')
-        assert "cua_scroll" in step.user_update
+        assert "Scrolling" in step.user_update
+
+    def test_user_update_status_phrase_map(self):
+        from grace.agent.planner import status_phrase
+        assert status_phrase("cua_click") == "Clicking\u2026"
+        assert status_phrase("cua_type_text") == "Typing\u2026"
+        assert status_phrase("cua_drag") == "Dragging\u2026"
+        assert status_phrase("open_app") == "Opening\u2026"
+        assert status_phrase("search_files") == "Searching files\u2026"
 
     def test_call_syntax_action_parsed_with_params(self):
         raw = '{"action": "open_app(name=\'msedge\', url=\'https://music.youtube.com\')"}'
@@ -207,8 +217,10 @@ class TestPlannerCalls:
         assert llm.calls[0].get("image_b64") == "ZmFrZS1wbmc="
 
     def test_prompt_carries_the_element_list_and_goal(self):
+        # The element list lives in the fleet prompt (cockpit 8 dropped it from
+        # single mode, where the screenshot is the screen).
         llm = FakeLLM([STEP_JSON])
-        asyncio.run(Planner(llm).plan(
+        asyncio.run(Planner(llm, is_single=False).plan(
             goal="play lo-fi on YouTube",
             elements_prompt='[{"id":4,"role":"searchbox","frame":"page"}]',
             window_title="YouTube - Edge",
@@ -218,10 +230,26 @@ class TestPlannerCalls:
         assert '"frame":"page"' in prompt
         assert "YouTube - Edge" in prompt
 
+    def test_single_mode_prompt_has_no_element_list_and_readings_instead(self):
+        llm = FakeLLM([STEP_JSON])
+        asyncio.run(Planner(llm, is_single=True).plan(
+            goal="say hi to mama",
+            elements_prompt='[{"id":4,"role":"searchbox","frame":"page"}]' * 200,
+            window_title="WhatsApp",
+            screen_readings="Active window: WhatsApp\nFocus: none",
+        ))
+        prompt = llm.calls[0]["prompt"]
+        assert "say hi to mama" in prompt
+        assert "What is on screen" not in prompt
+        assert '"frame":"page"' not in prompt
+        assert "### Now" in prompt
+        assert "Active window: WhatsApp" in prompt
+        assert "Focus: none" in prompt
+
     def test_expectation_note_goes_last(self):
         """The freshest correction signal should be closest to the answer."""
         llm = FakeLLM([STEP_JSON])
-        asyncio.run(Planner(llm).plan(
+        asyncio.run(Planner(llm, is_single=False).plan(
             goal="g", elements_prompt="[]", history="did stuff",
             expectation_note="IT FAILED: wrong focus",
         ))
@@ -318,7 +346,7 @@ class TestPlannerBudget:
 
 class TestPlannerPrompt:
     def test_states_the_frame_rule(self):
-        prompt = get_planner_system_prompt()
+        prompt = get_planner_system_prompt(is_single=False)
         assert 'frame: "page"' in prompt
         assert "address bar" in prompt.lower()
 
@@ -330,7 +358,13 @@ class TestPlannerPrompt:
         assert "Do NOT output JSON" not in prompt
 
     def test_requires_an_expectation(self):
-        assert "expect" in get_planner_system_prompt()
+        assert "expect" in get_planner_system_prompt(is_single=False)
+
+    def test_single_prompt_does_not_ask_for_expect(self):
+        # Cockpit 8: no `expect` in single mode; predictions are never fed
+        # back as facts.
+        assert "expect" not in get_planner_system_prompt(is_single=True)
+        assert '"last_step"' in get_planner_system_prompt(is_single=True)
 
     def test_states_the_untrusted_data_rule(self):
         prompt = get_planner_system_prompt()
@@ -399,13 +433,22 @@ class TestUntrustedContentWrapping:
         assert not any(line.startswith("### ") for line in body.splitlines())
 
     def test_build_prompt_wraps_the_on_screen_section(self):
-        planner = Planner(FakeLLM([]))
+        planner = Planner(FakeLLM([]), is_single=False)
         prompt = planner.build_prompt(goal="g", elements_prompt="[{\"id\": 1}]")
         screen_section = prompt.split("### What is on screen\n", 1)[1]
         assert screen_section.startswith("<<<UNTRUSTED_DATA_START")
 
+    def test_build_prompt_wraps_the_single_mode_readings(self):
+        planner = Planner(FakeLLM([]), is_single=True)
+        prompt = planner.build_prompt(
+            goal="g", elements_prompt="[{}] * 1000",
+            screen_readings="Active window: WhatsApp\nFocus: none",
+        )
+        readings_section = prompt.split("### Now\n", 1)[1]
+        assert readings_section.startswith("<<<UNTRUSTED_DATA_START")
+
     def test_build_prompt_wraps_scratchpad_and_history(self):
-        planner = Planner(FakeLLM([]))
+        planner = Planner(FakeLLM([]), is_single=False)
         prompt = planner.build_prompt(
             goal="g", elements_prompt="[]",
             history="Step 1: did a thing",
@@ -586,3 +629,144 @@ def test_inner_params_win_over_top_level_and_top_level_envelope_wins():
     assert step.params == {"a": 1, "b": 3}
     assert step.expect == "outer"
     assert step.thought == "inner thought"
+
+
+# -- Cockpit 8: single-mode output shapes ------------------------------------
+#
+# The harness asks for exactly this; the parser must also accept the
+# shapes Holo actually produces. Each variant below parses to the same tool
+# and arguments.
+
+_COCKPIT8_SHAPES = [
+    # The new prompt shape: tool + flat args inside the action object.
+    (
+        '{"thought": "r", "last_step": "changed", '
+        '"action": {"tool": "cua_click", "x": 500, "y": 300}, "done": false, "say": ""}',
+        {"x": 500, "y": 300},
+    ),
+    # The old shape.
+    (
+        '{"thought": "r", "last_step": "changed", '
+        '"action": "cua_click", "params": {"x": 500, "y": 300}, "done": false, "say": ""}',
+        {"x": 500, "y": 300},
+    ),
+    # Tool name with the args at the top level.
+    (
+        '{"thought": "r", "last_step": "changed", '
+        '"action": "cua_click", "x": 500, "y": 300, "done": false, "say": ""}',
+        {"x": 500, "y": 300},
+    ),
+    # Nested action object naming the tool with `name` instead of `tool`.
+    (
+        '{"thought": "r", "last_step": "changed", '
+        '"action": {"name": "cua_click", "x": 500, "y": 300}, "done": false, "say": ""}',
+        {"x": 500, "y": 300},
+    ),
+    # Nested action object naming the tool with `action`.
+    (
+        '{"thought": "r", "last_step": "changed", '
+        '"action": {"action": "cua_click", "x": 500, "y": 300}, "done": false, "say": ""}',
+        {"x": 500, "y": 300},
+    ),
+]
+
+
+def test_cockpit8_shapes_parse_to_the_same_tool_and_args():
+    from grace.agent.planner import parse_planned_step
+
+    for raw, expected_params in _COCKPIT8_SHAPES:
+        step = parse_planned_step(raw)
+        assert step is not None, raw
+        assert step.action == "cua_click", raw
+        assert step.params == expected_params, raw
+
+
+def test_done_and_say_alias_the_fleet_fields():
+    from grace.agent.planner import parse_planned_step
+
+    step = parse_planned_step(
+        '{"thought": "r", "action": {"tool": "converse"}, "done": true, "say": "It is done."}'
+    )
+    assert step.is_completed is True
+    assert step.final_response == "It is done."
+
+    # Old spellings keep working.
+    step = parse_planned_step(
+        '{"action": "converse", "is_completed": true, "final_response": "Also done."}'
+    )
+    assert step.is_completed is True
+    assert step.final_response == "Also done."
+
+    # done:false does not complete.
+    step = parse_planned_step('{"action": {"tool": "cua_click", "x": 1, "y": 2}, "done": false, "say": ""}')
+    assert step.is_completed is False
+
+    # done:true without action field defaults to completion converse
+    step = parse_planned_step('{"thought": "finished", "done": true, "say": "All finished."}')
+    assert step.is_completed is True
+    assert step.final_response == "All finished."
+
+    # action: "done" also completes
+    step = parse_planned_step('{"thought": "finished", "action": "done", "done": true, "say": "All finished."}')
+    assert step.is_completed is True
+    assert step.final_response == "All finished."
+
+    # flat open_app with top-level name
+    step = parse_planned_step('{"action": "open_app", "name": "calc"}')
+    assert step.action == "open_app"
+    assert step.params == {"name": "calc"}
+
+    # nested action with action key and name param
+    step = parse_planned_step('{"action": {"action": "open_app", "name": "calc"}}')
+    assert step.action == "open_app"
+    assert step.params == {"name": "calc"}
+
+
+def test_last_step_is_reported_on_the_step():
+    from grace.agent.planner import parse_planned_step
+
+    step = parse_planned_step(
+        '{"thought": "r", "last_step": "nothing changed", '
+        '"action": {"tool": "cua_click", "x": 1, "y": 2}, "done": false, "say": ""}'
+    )
+    assert step.last_step == "nothing changed"
+
+    step = parse_planned_step('{"action": "cua_click", "params": {}, "expect": "x"}')
+    assert step.last_step == ""
+
+
+def test_fenced_and_prose_wrapped_cockpit8_output_parses():
+    from grace.agent.planner import parse_planned_step
+
+    raw = 'Sure:\n```json\n{"thought": "r", "last_step": "none", "action": {"tool": "open_app", "name": "calc"}, "done": false, "say": ""}\n```'
+    step = parse_planned_step(raw)
+    assert step is not None
+    assert step.action == "open_app"
+    assert step.params == {"name": "calc"}
+    assert step.last_step == "none"
+
+
+def test_two_objects_take_the_first_complete_one():
+    """Evidence showed truncated first attempts followed by a full object;
+    trailing text after a good object. The parser takes the first *complete*
+    JSON object. No model call repairs anything."""
+    from grace.agent.planner import parse_planned_step
+
+    truncated_then_good = (
+        '{"thought": "The address bar is focused, so I should type the URL", "action": "cua_type_text", "params": {"te'
+        '{"thought": "retry", "action": {"tool": "cua_type_text", "text": "https://slack.com"}, '
+        '"done": false, "say": ""}'
+    )
+    step = parse_planned_step(truncated_then_good)
+    assert step is not None
+    assert step.action == "cua_type_text"
+    assert step.params == {"text": "https://slack.com"}
+
+    good_then_trailing_text = (
+        '{"thought": "r", "action": {"tool": "cua_click", "x": 5, "y": 6}, "done": false, "say": ""}'
+        ' Hope that helps, let me know if you need anything else!'
+    )
+    step = parse_planned_step(good_then_trailing_text)
+    assert step is not None
+    assert step.action == "cua_click"
+    assert step.params == {"x": 5, "y": 6}

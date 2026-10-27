@@ -27,6 +27,7 @@ def _snap(i):
 
 
 def _loop(responses):
+    from grace.fleet import build_cpu_fleet_preset
     gemma = AsyncMock()
     gemma.generate_text.side_effect = responses
     dispatcher = AsyncMock()
@@ -35,7 +36,12 @@ def _loop(responses):
     screens = (_snap(i) for i in itertools.count())
     perception.capture_snapshot.side_effect = lambda *a, **k: next(screens)
     perception.capture_snapshot_async.return_value = _snap(0)
-    loop = AgentLoop(gemma=gemma, dispatcher=dispatcher, perception=perception)
+    loop = AgentLoop(
+        gemma=gemma,
+        dispatcher=dispatcher,
+        perception=perception,
+        fleet_config=build_cpu_fleet_preset(),
+    )
     return loop, gemma, dispatcher
 
 

@@ -34,7 +34,7 @@ def test_ordinary_search_box_value_reaches_planner_prompt():
     )
     elements_text = elements_to_prompt([node])
     llm = FakeLLM()
-    planner = Planner(llm)
+    planner = Planner(llm, is_single=False)
     prompt = planner.build_prompt(
         goal="search for the song Signal by Home",
         elements_prompt=elements_text,
@@ -56,7 +56,7 @@ def test_address_bar_domain_reaches_planner_prompt_and_not_redacted_on_tape():
     )
     elements_text = elements_to_prompt([node])
     llm = FakeLLM()
-    planner = Planner(llm)
+    planner = Planner(llm, is_single=False)
     prompt = planner.build_prompt(
         goal="open youtube music",
         elements_prompt=elements_text,
@@ -111,7 +111,7 @@ def test_password_field_value_never_reaches_planner_prompt_and_never_reaches_log
 
     elements_text = elements_to_prompt([node_pwd, node_pin, node_key])
     llm = FakeLLM()
-    planner = Planner(llm)
+    planner = Planner(llm, is_single=False)
     prompt = planner.build_prompt(
         goal="log in to account",
         elements_prompt=elements_text,

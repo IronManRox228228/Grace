@@ -19,7 +19,7 @@ from grace.agent.loop import AgentLoop
 from grace.agent.planner import PlannedStep
 from grace.agent.perception import ScreenSnapshot
 from grace.agent.grounder import GroundedPoint
-from grace.fleet import build_gpu_single_preset
+from grace.fleet import build_gpu_single_preset, build_cpu_fleet_preset
 
 
 class TestUnshownElementIdNeedsGrounding:
@@ -156,8 +156,8 @@ class TestLoopGroundingExecution:
             dispatcher=dispatcher,
             perception=perception,
             grounder=grounder,
+            fleet_config=build_cpu_fleet_preset(),
         )
-        loop._fleet_config = build_gpu_single_preset()
 
         with patch(
             "grace.agent.loop.observe_for_planner",
@@ -228,8 +228,8 @@ class TestLoopGroundingExecution:
             dispatcher=dispatcher,
             perception=perception,
             grounder=grounder,
+            fleet_config=build_cpu_fleet_preset(),
         )
-        loop._fleet_config = build_gpu_single_preset()
 
         with patch(
             "grace.agent.loop.observe_for_planner",
@@ -296,8 +296,8 @@ class TestLoopGroundingExecution:
             dispatcher=dispatcher,
             perception=perception,
             grounder=grounder,
+            fleet_config=build_cpu_fleet_preset(),
         )
-        loop._fleet_config = build_gpu_single_preset()
 
         with patch(
             "grace.agent.loop.observe_for_planner",

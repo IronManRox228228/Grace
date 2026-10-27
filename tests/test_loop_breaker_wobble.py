@@ -23,7 +23,14 @@ def make_loop_with_frozen_screen(plans):
     )
     perception.capture_snapshot.return_value = fixed_snapshot
     perception.capture_snapshot_async = AsyncMock(return_value=fixed_snapshot)
-    loop = AgentLoop(gemma=gemma, dispatcher=dispatcher, perception=perception)
+    from grace.fleet import build_cpu_fleet_preset
+    # Cockpit 8: loop breaker / escalation ladder stops belong to fleet mode
+    loop = AgentLoop(
+        gemma=gemma,
+        dispatcher=dispatcher,
+        perception=perception,
+        fleet_config=build_cpu_fleet_preset(),
+    )
     return loop
 
 

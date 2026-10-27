@@ -42,13 +42,15 @@ def test_activate_window_picks_correct_best_match():
 
 
 def test_single_mode_prompt_says_whole_screen():
+    # Cockpit 8: lean single mode prompt mentions the screenshot and 0-1000 grid
     prompt = get_planner_system_prompt(is_single=True)
-    assert "current screenshot of the whole screen" in prompt
-    assert "current screenshot of the active window" not in prompt
+    assert "screenshot" in prompt
+    assert "0-1000 grid" in prompt
 
 
 def test_single_mode_prompt_says_xy_beats_element_id():
+    # Cockpit 8: element_id and target_name are removed from single mode prompt
     prompt = get_planner_system_prompt(is_single=True)
-    assert "`x`/`y` takes precedence" in prompt
-    assert "the element id takes precedence" not in prompt
-    assert "takes precedence" not in get_planner_system_prompt(is_single=False)
+    assert "element_id" not in prompt
+    assert "target_name" not in prompt
+    assert "takes precedence" not in prompt

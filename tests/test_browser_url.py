@@ -64,10 +64,11 @@ def test_extract_browser_url_returns_none_when_no_address_bar():
 
 
 def test_page_url_in_prompt_active_window():
-    planner = Planner(llm=MagicMock())
+    # Fleet mode retains ### Active window
+    planner_fleet = Planner(llm=MagicMock(), is_single=False)
 
     # With page_url
-    prompt_with_url = planner.build_prompt(
+    prompt_with_url = planner_fleet.build_prompt(
         goal="find song",
         elements_prompt="elements",
         window_title="YouTube Music - Edge",
@@ -76,7 +77,7 @@ def test_page_url_in_prompt_active_window():
     assert "### Active window\nYouTube Music - Edge\nPage URL: https://music.youtube.com" in prompt_with_url
 
     # Without page_url
-    prompt_no_url = planner.build_prompt(
+    prompt_no_url = planner_fleet.build_prompt(
         goal="find song",
         elements_prompt="elements",
         window_title="YouTube Music - Edge",
@@ -84,6 +85,16 @@ def test_page_url_in_prompt_active_window():
     )
     assert "Page URL:" not in prompt_no_url
     assert "### Active window\nYouTube Music - Edge" in prompt_no_url
+
+    # Single mode: URL appears in ### Now block with screen_readings
+    planner_single = Planner(llm=MagicMock(), is_single=True)
+    prompt_single = planner_single.build_prompt(
+        goal="find song",
+        elements_prompt="elements",
+        screen_readings="Active window: YouTube Music - Edge\nFocus: none",
+        page_url="https://music.youtube.com",
+    )
+    assert "Page URL: https://music.youtube.com" in prompt_single
 
 
 def test_url_before_and_now_in_expectation_note():

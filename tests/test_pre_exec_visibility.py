@@ -50,10 +50,13 @@ class TestPreExecVisibility:
         perception.capture_snapshot_async.return_value = snap
         perception.capture_snapshot.return_value = snap
 
+        from grace.fleet import build_cpu_fleet_preset
+        # Fleet mode renders pre-exec as 'Step 0: open_app(...)'
         loop = AgentLoop(
             gemma=gemma,
             dispatcher=dispatcher,
             perception=perception,
+            fleet_config=build_cpu_fleet_preset(),
         )
 
         pre_exec = {
@@ -72,6 +75,50 @@ class TestPreExecVisibility:
         # Step 0 must appear in the first prompt
         assert "Step 0: open_app" in first_prompt, f"Step 0 missing from first prompt:\n{first_prompt}"
         assert "music.youtube.com" in first_prompt
+
+    @pytest.mark.asyncio
+    async def test_pre_exec_step_0_single_mode(self):
+        """Single mode renders pre-exec in ### Your last steps as '0. open app ...'"""
+        dummy_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe\x02\xfe\xa74e\xed\x00\x00\x00\x00IEND\xaeB`\x82"
+        snap = ScreenSnapshot(
+            active_window=WindowInfo(hwnd=10, title="Terminal", class_name="W", rect=(0, 0, 800, 600)),
+            ocr_lines=[],
+            width=1920,
+            height=1080,
+            image_width=1280,
+            image_height=720,
+            png_bytes=dummy_png,
+        )
+        recorded_prompts = []
+        gemma = AsyncMock()
+        async def fake_gen(prompt, *args, **kwargs):
+            recorded_prompts.append(prompt)
+            return '{"thought": "done", "action": "converse", "is_completed": true, "final_response": "done"}'
+        gemma.generate_text.side_effect = fake_gen
+        dispatcher = AsyncMock()
+        dispatcher.execute.return_value = {"status": "ok", "result": {"ok": True}}
+        perception = MagicMock()
+        perception.capture_snapshot_async.return_value = snap
+        from grace.fleet import build_gpu_single_preset
+        loop = AgentLoop(
+            gemma=gemma,
+            dispatcher=dispatcher,
+            perception=perception,
+            fleet_config=build_gpu_single_preset(),
+        )
+        pre_exec = {
+            "action": "open_app",
+            "params": {"name": "YouTube Music", "url": "music.youtube.com"},
+            "result": {"status": "ok", "text": "Launched YouTube Music"},
+        }
+        res = await loop.run(
+            user_goal="open youtube music and play signal",
+            pre_exec_step=pre_exec,
+        )
+        assert res["status"] == "ok"
+        first_prompt = recorded_prompts[0]
+        assert '0. open app "YouTube Music"' in first_prompt
+        assert "Launched YouTube Music" in first_prompt
 
     @pytest.mark.asyncio
     async def test_activation_attempted_after_pre_exec(self):

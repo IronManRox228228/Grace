@@ -511,6 +511,20 @@ class AgentLoop:
         failed_history: list[PlannedStep] = []
         last_url: Optional[str] = None
         screen_still_loading = False
+        # Single mode (cockpit 8): Holo's own no-change reports drive the only
+        # new stop; the annotations here build `### Your last steps`.
+        is_single = bool(getattr(self._fleet_config, "is_single", False))
+        no_change_streak = 0
+        single_history: list[dict[str, Any]] = []
+        if is_single and getattr(memory, "steps_taken", None):
+            for s in memory.steps_taken:
+                if getattr(s, "step_number", None) == 0:
+                    single_history.append({
+                        "step_no": 0,
+                        "action": _single_action_line(s.action, s.params),
+                        "said": "changed",
+                        "reading": _single_reading_line(s.result, None),
+                    })
 
         while not memory.is_completed and not memory.is_exceeded:
             if self._cancel_requested or AgentLoop.is_cancel_requested():
@@ -572,14 +586,26 @@ class AgentLoop:
                 if last_step is not None and _failure_reason(last_result)
                 else 0
             )
-            expectation_note = self._expectation_note(
-                last_step, last_result, snapshot,
-                repeat_count=last_repeat_count,
-                tool_error_count=last_tool_error_count,
-                screen_still_loading=screen_still_loading,
-                url_before=url_before,
-                url_now=current_url,
-            )
+
+            if is_single:
+                # The newest history line gets its reading now: what Grace
+                # deterministically sees after the last action. Errors and
+                # tool content were already attached at dispatch time; this
+                # fills in the focus line when there was neither.
+                if single_history and not single_history[-1].get("reading"):
+                    single_history[-1]["reading"] = _readings_focus_line(snapshot)
+                screen_readings_text = screen_readings(snapshot)
+                expectation_note = ""
+            else:
+                screen_readings_text = ""
+                expectation_note = self._expectation_note(
+                    last_step, last_result, snapshot,
+                    repeat_count=last_repeat_count,
+                    tool_error_count=last_tool_error_count,
+                    screen_still_loading=screen_still_loading,
+                    url_before=url_before,
+                    url_now=current_url,
+                )
 
             try:
                 hide_tree = False  # Fleet mode always sees element list (cockpit-1)
@@ -588,8 +614,8 @@ class AgentLoop:
                     step = await self._planner.plan(
                         goal=memory.user_goal,
                         elements_prompt=view.markdown,
-                        history=memory.format_history_markdown(),
-                        scratchpad=memory.format_established_ruled_out_markdown(),
+                        history=_render_single_history(single_history) if is_single else memory.format_history_markdown(),
+                        scratchpad="" if is_single else memory.format_established_ruled_out_markdown(),
                         expectation_note=expectation_note,
                         window_title=_window_title(snapshot),
                         image_b64=view.image_b64,
@@ -597,6 +623,7 @@ class AgentLoop:
                         user_facts=facts_ctx,
                         step_no=step_no,
                         page_url=current_url,
+                        screen_readings=screen_readings_text,
                     )
                     plan_stage.detail(
                         f"{step.action if step else 'unparsed'} "
@@ -634,6 +661,39 @@ class AgentLoop:
                         memory, unparseable=getattr(self._planner, "last_failure", "") == "unparseable"
                     )
                 continue
+
+            # Cockpit 8, single mode: the model's own no-change report about
+            # the previous action attaches to that action's history line. It
+            # is the model's judgement; Grace only counts it. A report that
+            # arrives before any step has been executed (the first step, or
+            # after an unparsed plan) describes nothing and is ignored.
+            report = (step.last_step or "").strip().strip(".").lower()
+            if single_history:
+                if report.startswith("changed"):
+                    single_history[-1]["said"] = "changed"
+                    no_change_streak = 0
+                elif report.startswith("nothing"):
+                    single_history[-1]["said"] = "nothing changed"
+                    no_change_streak += 1
+                else:
+                    # "none" (first step), empty, or anything else.
+                    no_change_streak = 0
+
+            # Holo says "nothing changed" four times in a row: stop the task.
+            # Any other value resets the counter. This is the only
+            # change-verdict stop in single mode, and it is the model's own.
+            if no_change_streak >= 4:
+                logger.info(
+                    f"AgentLoop: the model reported no change from its last step "
+                    f"{no_change_streak} times in a row; stopping."
+                )
+                memory.is_completed = True
+                memory.final_response = "I tried four times and nothing changed, so I've stopped."
+                return {
+                    "status": "no_progress",
+                    "final_response": memory.final_response,
+                    "steps": [s.to_dict() for s in memory.steps_taken],
+                }
 
             # Holo invents tool names ("cua_describe_screen"). Resolve against
             # the real registry first, so the safety guard below judges the
@@ -678,9 +738,15 @@ class AgentLoop:
             # Retrying the identical action against the identical view. Doing
             # it once more is reasonable - a window may not have been ready -
             # but past that the loop is just spending time and quota.
+            #
+            # Cockpit 8, single mode: the model itself reports in `last_step`
+            # whether anything changed, and the stop above acts on that.
+            # Grace's own change verdicts ("tried the same parameters N times
+            # ... nothing changed", escalation to re-plan) are removed here -
+            # they stay in force for the fleet, whose planner reports nothing.
             attempt_count = sum(1 for s in attempt_history if _are_actions_equivalent(s, step)) + 1
             attempt_history.append(step)
-            rung = _rung(attempt_count, self._max_repeated_actions)
+            rung = "normal" if is_single else _rung(attempt_count, self._max_repeated_actions)
 
             if rung == "stop":
                 logger.error(
@@ -791,12 +857,19 @@ class AgentLoop:
             raw_elem_id = step.params.get("element_id") if step.params.get("element_id") is not None else step.params.get("element_index")
             rendered_ids = getattr(step, "rendered_element_ids", None)
             is_shown_id = False
+            has_id_source = False
             if raw_elem_id is not None:
                 try:
                     eid = int(raw_elem_id)
-                    if rendered_ids is not None:
+                    if rendered_ids:
+                        # Ids actually rendered in this step's prompt (fleet mode).
+                        has_id_source = True
                         is_shown_id = eid in rendered_ids
-                    elif snapshot and getattr(snapshot, "graph", None) is not None:
+                    elif snapshot is not None and getattr(snapshot, "graph", None) is not None:
+                        # Cockpit 8: the single-mode prompt shows no element
+                        # list; an id that names a real element on screen still
+                        # resolves, and an id absent from the graph gives an honest error.
+                        has_id_source = True
                         is_shown_id = snapshot.graph.by_id(eid) is not None
                     else:
                         is_shown_id = False
@@ -806,7 +879,7 @@ class AgentLoop:
             # Unshown id: drop it (it's literally not on the list). If x/y or target_name is present, use that.
             # Otherwise return an honest error that lists a few shown ids.
             unshown_error_result = None
-            if raw_elem_id is not None and not is_shown_id:
+            if raw_elem_id is not None and has_id_source and not is_shown_id:
                 has_fallback = (
                     (step.params.get("x") is not None and step.params.get("y") is not None)
                     or bool(step.params.get("target_name") or step.params.get("name") or step.params.get("label"))
@@ -816,11 +889,18 @@ class AgentLoop:
                     step.params["_raw_element_id"] = raw_elem_id
                     step.params.pop("element_id", None)
                     step.params.pop("element_index", None)
-                elif rendered_ids and step.action in ("cua_click", "cua_secondary_action", "cua_set_value", "cua_drag"):
+                elif step.action in ("cua_click", "cua_secondary_action", "cua_set_value", "cua_drag"):
                     step.params["_raw_element_id"] = raw_elem_id
                     step.params.pop("element_id", None)
                     step.params.pop("element_index", None)
-                    shown_sample = sorted(list(rendered_ids))[:10]
+                    if rendered_ids:
+                        shown_sample = sorted(list(rendered_ids))[:10]
+                    else:
+                        graph = getattr(snapshot, "graph", None)
+                        shown_sample = (
+                            sorted(e.id for e in graph.elements)[:10]
+                            if graph is not None else []
+                        )
                     shown_str = f" Available shown element ids: {shown_sample}" if shown_sample else ""
                     err_msg = f"Element [{raw_elem_id}] is not on screen.{shown_str}"
                     unshown_error_result = {
@@ -871,6 +951,21 @@ class AgentLoop:
                 if not isinstance(coord_fmt, str):
                     coord_fmt = "0-1000"
                 _scale_drag_points(step.params, img_size, scr_size, coord_fmt)
+                # Cockpit 8: in single mode a coordinate drag always wins over
+                # element ids, the same as for clicks. A model that sends
+                # `path` (or x,y -> to_x,to_y) together with from/to ids wants
+                # the stroke it described, not whatever the ids resolve to -
+                # `_stroke_points` in computer_use ignores `path` whenever an
+                # element id is present, which is the Paint bug this fixes.
+                if _stroke_coords_present(step.params):
+                    for key in ("from_element_id", "to_element_id"):
+                        raw = step.params.get(key)
+                        if raw is not None:
+                            step.params[f"_raw_{key}"] = raw
+                            step.params.pop(key, None)
+                    logger.info(
+                        "AgentLoop: single mode drag via coordinates; dropping from/to_element_id"
+                    )
             elif is_single:
                 if step.params.get("x") is not None and step.params.get("y") is not None:
                     try:
@@ -1085,10 +1180,26 @@ class AgentLoop:
                 memory.set_scratchpad("verification_hint", hint)
                 step.is_completed = False
 
-            self._remember(step, exec_result, memory)
+            if not is_single:
+                # Fleet mode only: single mode writes no established/ruled-out
+                # memory, which is Grace's own judgement of change.
+                self._remember(step, exec_result, memory)
             self._harvest(exec_result, memory)
             memory.add_step(step.thought, step.action, step.params, exec_result, step.user_update)
             last_step, last_result = step, exec_result
+
+            # Cockpit 8, single mode: this step becomes the newest line of
+            # `### Your last steps`. Its reading (error, tool content) is
+            # attached now; the focus reading is filled in on the next
+            # observation, and the model's own report about it arrives with
+            # the following step's output.
+            if is_single:
+                single_history.append({
+                    "step_no": step_no,
+                    "action": _single_action_line(step.action, step.params),
+                    "said": None,
+                    "reading": _single_reading_line(exec_result, None),
+                })
 
             await self._emit({
                 "type": "ToolExecutionFinished",
@@ -1248,7 +1359,7 @@ class AgentLoop:
         target = "screenshot" if is_single else "screen description"
         expect = (last_step.expect or "").strip()
         if expect:
-            lines = [f'You expected: "{expect}". Compare this with the {target} now.']
+            lines = [f'You predicted: "{expect}". That was a prediction, not a result. Check it against the {target} now.']
         else:
             lines = ["You did not state what you expected."]
 
@@ -1358,8 +1469,15 @@ class AgentLoop:
 
         inner = exec_result.get("result") if isinstance(exec_result.get("result"), dict) else {}
         verified = inner.get("verified")
-        if verified is True and step.expect:
-            memory.establish(step.expect)
+        if verified is True:
+            # `verified` means something changed on screen; it does not mean
+            # the step's `expect` prediction came true. Only what the tool
+            # observed may be established, never the model's own guess.
+            evidence = inner.get("evidence") or ""
+            if evidence:
+                memory.establish(
+                    f"After `{step.action}` {_short_params(step.params)}: {evidence}"
+                )
         elif verified is False:
             memory.rule_out(
                 f"`{step.action}` with {_short_params(step.params)}",
@@ -1591,6 +1709,19 @@ class AgentLoop:
         return None
 
 
+def _stroke_coords_present(params: dict[str, Any]) -> bool:
+    """True when the params carry a complete coordinate stroke: a `path` of at
+    least two points, or `x,y` together with `to_x,to_y` (either from-name)."""
+    raw_path = params.get("path")
+    if isinstance(raw_path, (list, tuple)) and len(raw_path) >= 2:
+        return True
+    sx = params.get("x", params.get("from_x"))
+    sy = params.get("y", params.get("from_y"))
+    if None not in (sx, sy, params.get("to_x"), params.get("to_y")):
+        return True
+    return False
+
+
 def _scale_drag_points(params: dict[str, Any], img_size, scr_size, coord_fmt: str) -> None:
     """Convert a drag's x/y, to_x/to_y and path from model space to screen pixels, in place."""
     def conv(x, y):
@@ -1621,6 +1752,222 @@ def _scale_drag_points(params: dict[str, Any], img_size, scr_size, coord_fmt: st
 def _window_title(snapshot) -> str:
     window = getattr(snapshot, "active_window", None)
     return getattr(window, "title", "") if window is not None else ""
+
+
+# Roles that may hold text, for the cockpit-8 readings line. The focus line
+# adds `contains:` to these so the planner can tell what is in the box it is
+# about to type into.
+_TEXT_BOX_ROLES = frozenset({
+    "edit", "textbox", "text", "searchbox", "combobox", "textarea", "document", "spinbutton",
+})
+
+_READINGS_CONTAINS_MAX = 80
+
+
+def _readings_focus_line(snapshot) -> str:
+    """Grace's plain, deterministic read of keyboard focus, or `Focus: none`.
+
+    Text boxes get `contains:` with the control's value (or ``(empty)``),
+    cut to 80 characters. Password fields never show their value; the
+    redaction helpers in `grace.perception.elements` decide what may be
+    shown. Nothing here judges change - these are readings of the screen as
+    it stands, and the model makes whatever sense of them it can.
+    """
+    from grace.perception.elements import is_password_element, redact_element_value_if_secret
+
+    graph = getattr(snapshot, "graph", None)
+    focused = graph.focused() if graph is not None else None
+    if focused is None:
+        return "Focus: none"
+
+    def _get(el, attr, default=""):
+        if isinstance(el, dict):
+            return el.get(attr, default)
+        return getattr(el, attr, default)
+
+    role = str(_get(focused, "role", "") or _get(focused, "control_type", "") or "").strip().lower()
+    name = str(_get(focused, "name", "") or _get(focused, "placeholder", "") or "").strip()
+    value = str(_get(focused, "value", "") or "")
+    placeholder = str(_get(focused, "placeholder", "") or "")
+    automation_id = str(_get(focused, "automation_id", "") or "")
+    is_password = bool(_get(focused, "is_password", False)) or is_password_element(
+        role, name, placeholder, automation_id
+    )
+
+    shown_value = redact_element_value_if_secret(
+        value, role=role, name=name, placeholder=placeholder,
+        automation_id=automation_id, is_password=is_password,
+    )
+    contains = ""
+    if is_password:
+        # Never the value. The redaction helper's own marker is the most the
+        # screen says: filled or empty, no characters.
+        state = "[password field, filled]" if shown_value == "[password field, filled]" else (
+            "[password field, empty]" if is_password else ""
+        )
+        if state:
+            contains = f', contains: {state}'
+    elif role in _TEXT_BOX_ROLES:
+        if value:
+            text = value[:_READINGS_CONTAINS_MAX]
+            contains = f', contains: "{text}"'
+        else:
+            contains = ', contains: (empty)'
+
+    label = f' "{name[:_READINGS_CONTAINS_MAX]}"' if name else ""
+    return f'Focus: {role or "element"}{label}{contains}'
+
+
+def screen_readings(snapshot) -> str:
+    """The cockpit-8 `### Now` block, from deterministic reads only.
+
+    The active window title, the browser URL if one is readable, and the
+    focus line. Wrapped by the caller; this returns the bare text.
+    """
+    lines = []
+    title = _window_title(snapshot)
+    lines.append(f"Active window: {title or '(unknown)'}")
+    lines.append(_readings_focus_line(snapshot))
+    return "\n".join(lines)
+
+
+def _single_action_line(action: str, params: dict[str, Any]) -> str:
+    """Short form of one executed action for the single-mode history.
+
+    Deterministic render of what was done. Typed text is checked against the
+    same secret rules the persistent history uses; nothing secret may reach
+    the prompt.
+    """
+    from grace.perception.elements import PASSWORD_HINTS
+    from grace.agent.facts import looks_like_secret, looks_like_secret_value
+    from grace.harness.redact import redact_string
+
+    try:
+        if action in ("cua_click", "cua_secondary_action"):
+            x, y = params.get("x"), params.get("y")
+            verb = "click" if action == "cua_click" else "right-click"
+            if x is not None and y is not None:
+                try:
+                    return f"{verb} ({int(round(float(x)))},{int(round(float(y)))})"
+                except (TypeError, ValueError):
+                    pass
+            eid = params.get("element_id", params.get("element_index"))
+            return f"{verb} id {eid}" if eid is not None else verb
+        if action == "cua_type_text":
+            text = str(params.get("text", ""))
+            password_shaped = any(
+                h in k.lower()
+                for k in params
+                for h in PASSWORD_HINTS
+            )
+            if (password_shaped or looks_like_secret("text", text)
+                    or looks_like_secret_value(text)):
+                return 'type "<redacted>"'
+            short = " ".join(redact_string(text).split())
+            if len(short) > 40:
+                short = short[:37] + "..."
+            return f'type "{short}"'
+        if action == "cua_press_key":
+            return f"press {params.get('key', '')}"
+        if action == "cua_scroll":
+            return f"scroll ({params.get('scrollY', 0)})"
+        if action == "cua_drag":
+            path = params.get("path")
+            if isinstance(path, (list, tuple)) and path:
+                try:
+                    first, last = path[0], path[-1]
+                    if isinstance(first, (list, tuple)) and isinstance(last, (list, tuple)):
+                        return f"drag ({int(first[0])},{int(first[1])})..({int(last[0])},{int(last[1])})"
+                except (TypeError, ValueError, IndexError):
+                    pass
+            x, y, tx, ty = params.get("x"), params.get("y"), params.get("to_x"), params.get("to_y")
+            if None not in (x, y, tx, ty):
+                try:
+                    return f"drag ({int(x)},{int(y)})..({int(tx)},{int(ty)})"
+                except (TypeError, ValueError):
+                    pass
+            return "drag"
+        if action == "open_app":
+            return f"open app \"{params.get('name', '')}\""
+        if action == "search_files":
+            return f"search files \"{params.get('query', '')}\""
+        if action == "open_file":
+            return f"open file \"{params.get('name', '')}\""
+    except Exception:
+        pass
+    return str(action)
+
+
+_SINGLE_HISTORY_STEPS = 5
+_SINGLE_HISTORY_LINE_MAX = 160
+
+
+def _single_reading_line(last_result: dict[str, Any], snapshot) -> str:
+    """Grace's plain deterministic reading after one executed action.
+
+    Priority: the tool's error (deterministic), the tool's own content
+    output (file lists, read text - wrapped as untrusted by the caller),
+    otherwise what now has keyboard focus. No verdicts, no change words.
+    """
+    reason = _failure_reason(last_result)
+    if reason:
+        text = " ".join(str(reason).split())
+        return f"error: {text}"
+    inner = last_result.get("result") if isinstance(last_result.get("result"), dict) else {}
+    if isinstance(last_result.get("text"), str) and last_result["text"].strip():
+        return " ".join(last_result["text"].split())
+    if isinstance(inner.get("text"), str) and inner["text"].strip():
+        return " ".join(inner["text"].split())
+    files = last_result.get("files") if isinstance(last_result.get("files"), list) else inner.get("files")
+    if isinstance(files, list) and files:
+        shown = ", ".join(str(f) for f in files[:5])
+        return f"files: {shown}"
+    if snapshot is not None:
+        return _readings_focus_line(snapshot)
+    message = inner.get("message") or inner.get("evidence") or last_result.get("message")
+    if message:
+        return " ".join(str(message).split())
+    return ""
+
+
+def _render_single_history(entries: list[dict[str, Any]]) -> str:
+    """The `### Your last steps` body: last 5 steps, one line each.
+
+    Each line: step number, the action in short form, the model's own
+    `last_step` report about it (taken from the *next* step's output, so the
+    newest line never has one yet), and Grace's plain reading after it.
+    Lines are capped at 160 characters; the newest step drops last.
+    """
+    lines = []
+    recent = entries[-_SINGLE_HISTORY_STEPS:]
+    # Keep the newest lines when the cap would bite: drop oldest first.
+    while recent and sum(len(_render_single_history_line(e)) + 1 for e in recent) > _SINGLE_HISTORY_LINE_MAX * _SINGLE_HISTORY_STEPS:
+        recent.pop(0)
+    for entry in recent:
+        lines.append(_render_single_history_line(entry))
+    return "\n".join(lines)
+
+
+def _render_single_history_line(entry: dict[str, Any]) -> str:
+    parts = [f"{entry['step_no']}. {entry['action']}"]
+    said = entry.get("said") or ""
+    said = said.strip().rstrip(".")
+    reading = (entry.get("reading") or "").strip()
+    said_shown = "you said: changed" if said.lower().startswith("changed") else (
+        "you said: nothing changed" if said.lower().startswith("nothing") else ""
+    )
+    tail = ""
+    if said_shown:
+        tail = f" -> you said: {said_shown.split(': ', 1)[1]}"
+    if reading:
+        text = " ".join(reading.split())
+        if len(text) > _SINGLE_HISTORY_LINE_MAX:
+            text = text[: _SINGLE_HISTORY_LINE_MAX - 3] + "..."
+        tail = f" -> {text}" if not tail else f"{tail}. {text}"
+    line = f"{parts[0]}{tail}" if tail else parts[0]
+    if len(line) > _SINGLE_HISTORY_LINE_MAX:
+        line = line[: _SINGLE_HISTORY_LINE_MAX - 3] + "..."
+    return line
 
 
 def _failure_reason(result: Optional[dict[str, Any]]) -> Optional[str]:

@@ -145,10 +145,11 @@ def test_decision_ladder_specialist_and_user_escalation():
 
 def test_tool_caller_responsibilities_split():
     mock_llm = MagicMock()
-    planner = Planner(llm=mock_llm)
+    # Cockpit 8: In fleet mode (is_single=False), the tool caller never sees the tree
+    # when hide_tree=True, and sees it when hide_tree=False.
+    planner = Planner(llm=mock_llm, is_single=False)
 
     tree_markdown = '[1] Button: "Send"\n[2] Button: "Cancel"'
-    # In fleet mode (hide_tree=True), the tool caller never sees the tree
     prompt = planner.build_prompt(
         goal="Send email",
         elements_prompt=tree_markdown,
@@ -158,10 +159,18 @@ def test_tool_caller_responsibilities_split():
     assert "A specialist decision model" in prompt
     assert "target_name" in prompt
 
-    # In single mode (hide_tree=False), tree is present
-    prompt_single = planner.build_prompt(
+    prompt_fleet_tree = planner.build_prompt(
         goal="Send email",
         elements_prompt=tree_markdown,
         hide_tree=False,
     )
-    assert tree_markdown in prompt_single
+    assert tree_markdown in prompt_fleet_tree
+
+    # Cockpit 8: In single mode (is_single=True), the element list is always dropped
+    planner_single = Planner(llm=mock_llm, is_single=True)
+    prompt_single = planner_single.build_prompt(
+        goal="Send email",
+        elements_prompt=tree_markdown,
+        hide_tree=False,
+    )
+    assert tree_markdown not in prompt_single

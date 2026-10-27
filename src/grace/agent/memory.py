@@ -709,6 +709,27 @@ class PersistentMemoryStore:
 MAX_REMEMBERED = 8
 
 
+def _join_message_evidence(message: str, evidence: str) -> str:
+    """Combine a tool result's message and evidence into one history fragment.
+
+    The evidence is the observation of what actually changed; the message is
+    only what the tool did. When the join is too long for the 160-character
+    history line, the message is shortened first so the evidence survives.
+    """
+    if not evidence:
+        return message
+    if not message:
+        return evidence
+    combined = f"{message} - {evidence}"
+    if len(combined) <= 160:
+        return combined
+    # 160 total, minus the separator, minus room for the ellipsis on each part.
+    keep = max(0, 160 - len(evidence) - len(" - ") - 3)
+    trimmed_message = message[:keep] + ("..." if keep < len(message) else "")
+    combined = f"{trimmed_message} - {evidence}"
+    return combined[:160]
+
+
 @dataclass
 class StepRecord:
     """Record of a single action step in the agentic loop."""
@@ -905,10 +926,14 @@ class AgentMemory:
                     res_content = "files found: " + ", ".join(str(f) for f in inner["files"][:5])
                 elif result_obj.get("error"):
                     res_content = f"error: {result_obj['error']}"
-                elif inner.get("message"):
-                    res_content = str(inner["message"])
-                elif result_obj.get("message"):
-                    res_content = str(result_obj["message"])
+                elif result_obj.get("message") or result_obj.get("evidence"):
+                    message = str(result_obj.get("message") or result_obj.get("evidence") or "")
+                    evidence = str(result_obj.get("evidence") or "")
+                    res_content = _join_message_evidence(message, evidence)
+                elif inner.get("message") or inner.get("evidence"):
+                    message = str(inner.get("message") or inner.get("evidence") or "")
+                    evidence = str(inner.get("evidence") or "")
+                    res_content = _join_message_evidence(message, evidence)
                 else:
                     res_content = str(result_obj.get("status", "ok"))
             elif isinstance(result_obj, str):
@@ -964,7 +989,7 @@ class AgentMemory:
         lines = []
         established = self.scratchpad.get("established", [])
         if established:
-            lines.append("Established facts:")
+            lines.append("Observed so far:")
             for item in established:
                 lines.append(f"- {item}")
         ruled_out = self.scratchpad.get("ruled_out", [])

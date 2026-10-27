@@ -70,7 +70,9 @@ def test_read_pdf_result_reaches_next_planner_prompt():
     assert len(llm.prompts) >= 2
     step_2_prompt = llm.prompts[1]
     assert "14 November" in step_2_prompt
-    assert "### What you have already done" in step_2_prompt
+    # Cockpit 8, single mode: the three old sections collapse into one
+    # `### Your last steps` block.
+    assert "### Your last steps" in step_2_prompt
 
 
 def test_history_is_capped_at_8_steps_and_1200_chars():
@@ -122,7 +124,10 @@ def test_history_is_wrapped_as_untrusted():
         history=history,
     )
 
-    assert "### What you have already done" in prompt
+    # Cockpit 8 (single mode, the default prompt) renders history under
+    # `### Your last steps`, still wrapped as untrusted data.
+    assert "### Your last steps" in prompt
+    assert "### What you have already done" not in prompt
     assert "<<<UNTRUSTED_DATA_START" in prompt
     assert "<<<UNTRUSTED_DATA_END>>>" in prompt
     assert "Deadline: 14 November" in prompt
@@ -161,3 +166,52 @@ def test_history_redacts_secrets_and_omits_confirmation_answers():
     assert "confirmed=True" not in history
     assert "text='yes'" not in history
     assert 'text="yes"' not in history
+
+
+def test_history_click_line_includes_both_message_and_evidence():
+    """A click whose result has both message and evidence renders both, joined with ' - '."""
+    memory = AgentMemory(user_goal="send a message")
+    memory.add_step(
+        thought="click mic button",
+        action="cua_click",
+        params={"x": 1774, "y": 1049},
+        result={"status": "ok",
+                "result": {"message": "Clicked 1 time(s) at (1774, 1049) via explicit",
+                           "evidence": "keyboard focus moved to [32] 'Voice message'"}},
+    )
+    history = memory.format_history_markdown()
+    line = [l for l in history.splitlines() if "cua_click" in l][0]
+    assert "Clicked 1 time(s) at (1774, 1049) via explicit" in line
+    assert "keyboard focus moved to [32] 'Voice message'" in line
+    assert " - " in line
+
+
+def test_history_trim_shortens_message_before_evidence():
+    """With a long message, the 160-char trim eats the message first; the evidence survives."""
+    memory = AgentMemory(user_goal="send a message")
+    long_message = "Clicked 1 time(s) at (1774, 1049) via explicit after settling and retrying with a great deal of additional padding text to push the length up"
+    evidence = "keyboard focus moved to [32] 'Voice message'"
+    assert len(long_message) + len(evidence) > 160
+    memory.add_step(
+        thought="click mic button",
+        action="cua_click",
+        params={"x": 1774, "y": 1049},
+        result={"status": "ok", "result": {"message": long_message, "evidence": evidence}},
+    )
+    history = memory.format_history_markdown()
+    line = [l for l in history.splitlines() if "cua_click" in l][0]
+    assert evidence in line
+    assert len(line) <= 160 + len(f"Step 1: cua_click(x=1774, y=1049) -> ")
+
+
+def test_history_click_line_message_only_still_works():
+    """A result with a message but no evidence still renders the message alone."""
+    memory = AgentMemory(user_goal="send a message")
+    memory.add_step(
+        thought="click",
+        action="cua_click",
+        params={"x": 1},
+        result={"status": "ok", "result": {"message": "Clicked 1 time(s) at (1, 0) via explicit"}},
+    )
+    history = memory.format_history_markdown()
+    assert "Clicked 1 time(s) at (1, 0) via explicit" in history

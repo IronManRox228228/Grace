@@ -36,7 +36,7 @@ class TestAgenticMultiStep:
         memory.rule_out("click search icon", "search icon not clickable")
 
         md = memory.format_established_ruled_out_markdown()
-        assert "Established facts:" in md
+        assert "Observed so far:" in md
         assert "Found report on Desktop" in md
         assert "Ruled out approaches:" in md
         assert "click search icon - search icon not clickable" in md
