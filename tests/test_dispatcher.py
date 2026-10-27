@@ -105,6 +105,23 @@ class TestOpenFileSafety:
         assert result["status"] == "ok"
         assert calls == [str(safe_home / "Documents" / "budget.pdf")]
 
+    @pytest.mark.parametrize("name", ["downloads", "Downloads folder", "my downloads folder"])
+    def test_a_safe_folder_by_name_opens_that_folder(self, safe_home, monkeypatch, name):
+        calls = []
+        monkeypatch.setattr(dispatcher_module.os, "startfile", lambda p: calls.append(p))
+        dispatcher = Dispatcher(computer_use=None)
+        result = asyncio.run(dispatcher.execute(Intent(tool="open_file", params={"name": name})))
+        assert result["status"] == "ok"
+        assert calls == [os.path.realpath(safe_home / "Downloads")]
+
+    def test_other_folder_names_are_not_opened(self, safe_home, monkeypatch):
+        calls = []
+        monkeypatch.setattr(dispatcher_module.os, "startfile", lambda p: calls.append(p))
+        dispatcher = Dispatcher(computer_use=None)
+        result = asyncio.run(dispatcher.execute(Intent(tool="open_file", params={"name": "system32 folder"})))
+        assert result["status"] == "error"
+        assert calls == []
+
     def test_an_exact_match_wins_over_a_substring_match(self, safe_home, monkeypatch):
         docs = safe_home / "Documents"
         (docs / "budget.pdf").write_text("x")

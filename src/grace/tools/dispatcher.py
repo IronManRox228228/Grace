@@ -158,6 +158,19 @@ def _is_within_open_file_roots(path: str) -> bool:
     return any(real == root or real.startswith(root + os.sep) for root in _open_file_safe_roots())
 
 
+def _open_file_root_named(name: str) -> Optional[str]:
+    """The safe root `name` refers to ("downloads", "my Downloads folder"), or None."""
+    words = name.strip().lower().split()
+    if words[:1] == ["my"]:
+        words = words[1:]
+    if words[-1:] == ["folder"]:
+        words = words[:-1]
+    for d, root in zip(_OPEN_FILE_SAFE_DIRS, _open_file_safe_roots()):
+        if words == [d.lower()] and os.path.isdir(root):
+            return root
+    return None
+
+
 class Dispatcher:
     """Routes intents to CUA or hardcoded tool implementations."""
 
@@ -660,6 +673,15 @@ class Dispatcher:
                 "error": f"Refusing '{name}': expected a file name, not a path.",
                 "text": "I can only open a file by name, not a path.",
             }
+
+        # "downloads", "my downloads folder": the safe root itself, opened in Explorer.
+        folder = _open_file_root_named(name)
+        if folder is not None:
+            try:
+                os.startfile(folder)
+                return {"status": "ok", "text": f"I've opened your {os.path.basename(folder)} folder."}
+            except Exception as e:
+                return {"status": "error", "error": str(e), "text": f"I couldn't open {name}. {e}"}
 
         target_path: Optional[str] = None
 
