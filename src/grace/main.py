@@ -1466,6 +1466,14 @@ class GraceApp:
         audio_buffer = bytearray()
         # Anything captured while the previous turn was still working is stale.
         self.pump.drain()
+        # Tell the pump (in harness replays) that the listening window is now
+        # consuming chunks, so pump exhaustion here is a real VAD-parity
+        # finding; exhaustion caused by the wake-word forwarder draining the
+        # tail while the agent goal runs is not.
+        try:
+            self.pump._listening = True
+        except AttributeError:
+            pass
 
         # Listen for speech with initial silence timeout (default 6s) and maximum timeout (30s)
         import time
@@ -1524,6 +1532,10 @@ class GraceApp:
                 except Exception as e:
                     log.error(f"Audio error: {e}")
                     break
+            try:
+                self.pump._listening = False
+            except AttributeError:
+                pass
             listen_stage.detail(f"{len(audio_buffer)} bytes")
 
         trace.mark_event("speech_end")
@@ -1843,7 +1855,7 @@ class GraceApp:
         if complexity == TaskComplexity.AGENTIC_GOAL:
             log.info(f"Routing goal '{transcript}' to Agentic ReAct Loop...")
             pre_exec_step = None
-            if intent and intent.tool in ("open_app", "cua_launch"):
+            if intent and intent.tool in ("open_app", "cua_launch", "open_calculator"):
                 log.info(f"Pre-executing setup intent before AgentLoop: {intent.tool}({intent.params})")
                 async with trace.stage("pre_exec"):
                     before_res = await self.dispatcher.execute(Intent(tool="cua_list_windows", params={}))

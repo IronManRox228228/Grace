@@ -311,7 +311,18 @@ class AppIndexer:
         return False
 
     def launch(self, name: str) -> dict[str, Any]:
-        """Launch an application by name or search query."""
+        """Launch an application by name or search query.
+
+        The indexed app wins over a protocol shortcut: a Store app such as
+        Calculator launches by its AUMID through `shell:AppsFolder`, which
+        brings its real window forward. A protocol shortcut
+        (`os.startfile("calc:")`) hands the URI to the shell and the modern
+        Calculator - a UWP hosted in ApplicationFrameHost - can appear slowly
+        or not match the window title within the bring-forward wait, so the
+        tool reported "Opened Calculator" while no Calculator window was ever
+        in front. Protocol shortcuts are therefore only used when the name is
+        not an indexed app.
+        """
         if not name:
             return {"status": "error", "error": "Missing application name"}
         if any(ch in name for ch in self._UNSAFE_NAME_CHARS):
@@ -322,17 +333,8 @@ class AppIndexer:
 
         clean_name = name.lower().strip()
 
-        # Direct Windows Protocol URI Handlers (WhatsApp, Settings, Calculator)
-        PROTOCOL_MAP = self.PROTOCOL_MAP
-        if clean_name in PROTOCOL_MAP:
-            try:
-                os.startfile(PROTOCOL_MAP[clean_name])
-                return {"status": "ok", "text": f"I've opened {name}."}
-            except Exception as pe:
-                logger.debug(f"Protocol launch for {clean_name} fallback to UWP index: {pe}")
-
+        # 1. An indexed app: Win32 shortcut/EXE, or a UWP Store app by AUMID.
         target = self.find_app(clean_name)
-
         if target:
             try:
                 if target.startswith("uwp:"):
@@ -352,9 +354,17 @@ class AppIndexer:
                 logger.error(f"Failed to launch {name} via target '{target}': {e}")
                 return {"status": "error", "error": str(e), "text": f"Failed to open {name}. {e}"}
 
-        # No cmd.exe fallback here either: `clean_name` is unresolved,
-        # arbitrary text at this point, and cmd would re-parse it as shell
-        # syntax. If Windows can't open it directly, say so honestly.
+        # 2. Direct Windows Protocol URI Handlers (WhatsApp, Settings, ...)
+        PROTOCOL_MAP = self.PROTOCOL_MAP
+        if clean_name in PROTOCOL_MAP:
+            try:
+                os.startfile(PROTOCOL_MAP[clean_name])
+                return {"status": "ok", "text": f"I've opened {name}."}
+            except Exception as pe:
+                logger.debug(f"Protocol launch for {clean_name} failed: {pe}")
+
+        # 3. Unresolved bare name: Windows may still open it directly
+        #    (notepad, cmd via PATH or App Paths). No cmd.exe fallback.
         try:
             os.startfile(clean_name)
             return {"status": "ok", "text": f"I've opened {name}."}

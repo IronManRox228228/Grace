@@ -190,14 +190,16 @@ class TestTypedEntrypointAgentGoal:
             result = asyncio.run(app._handle_text_activation("click the sign in button"))
 
             assert result is True
-            assert [c["tool"] for c in dispatcher.calls] == ["cua_click"]
-            assert dispatcher.calls[0]["confirmed"] is False
+            # Cockpit 9: `done: true` ends the task and speaks `say`; the
+            # step's cua_click is never executed, so nothing reaches the
+            # desktop.
+            assert dispatcher.calls == []
+            assert app._last_spoken_text == "I clicked it."
             assert gemma.intent_calls == ["click the sign in button"]
             kinds = [e["type"] for e in ws.events]
-            assert "ToolExecutionStarted" in kinds
-            # A completing step breaks the loop before ToolExecutionFinished
-            # (loop.py: verified completion returns instead of emitting), so
-            # only assert the events one-step completions really produce.
+            # The skipped action never reaches the desktop, so no tool events
+            # are emitted; the turn ends with the spoken say instead.
+            assert "ToolExecutionStarted" not in kinds
             assert "ConversationFinished" in kinds
         finally:
             asyncio.run(app.gemma.close())

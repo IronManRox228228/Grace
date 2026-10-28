@@ -287,10 +287,10 @@ class TestVerification:
         readable = snapshot(ui_elements=list(range(10)))
         assert loop._verify_goal_completion("open notepad", readable, memory)[0] is False
 
-    def test_a_successful_final_action_completes_on_its_own_dispatch(self):
-        # `_verify_goal_completion` used to run before `memory.add_step`, so a
-        # single step that both acts and claims completion was judged with no
-        # history at all and rejected - even though it had just succeeded.
+    def test_done_true_with_an_action_skips_the_action(self):
+        # Cockpit 9: `done: true` ends the task and speaks `say`; the step's
+        # action (cua_type_text here) is never executed, and the skip is logged
+        # in the step result.
         step_json = (
             '{"action": "cua_type_text", "params": {"text": "banana"}, '
             '"is_completed": true, "final_response": "Typed banana."}'
@@ -299,6 +299,19 @@ class TestVerification:
         res = asyncio.run(loop.run(user_goal="type banana"))
         assert res["status"] == "ok"
         assert res["final_response"] == "Typed banana."
+        assert dispatcher.execute.await_count == 0, "done=true must not dispatch the action"
+        skipped = [s for s in res["steps"] if s["result"].get("skipped_done")]
+        assert skipped, "the skipped action must be logged in the steps taken"
+
+    def test_done_false_with_an_action_still_executes_it(self):
+        # `done: false` with an action runs the action as normal.
+        step_json = (
+            '{"action": "cua_type_text", "params": {"text": "banana"}, '
+            '"is_completed": false, "final_response": ""}'
+        )
+        loop, _, dispatcher = make_loop([step_json, DONE], dispatch_result={"status": "ok"})
+        res = asyncio.run(loop.run(user_goal="type banana"))
+        assert res["status"] == "ok"
         assert dispatcher.execute.await_count == 1
 
     def test_a_failing_final_action_is_still_rejected(self):

@@ -6,15 +6,20 @@ From real-desktop-4:
   the next observation.
 - Poll a cheap signal every 250 ms: a downscaled grayscale screenshot hash,
   plus the UIA element count if cheap.
-- Proceed when two consecutive samples are stable (pixel diff under 1%).
+- Proceed only when the samples stayed stable for a continuous window of at
+  least 1000 ms (several consecutive polls) - one matching pair is not
+  enough: a loading YouTube watch page shows a black player that looks
+  identical on two quick samples.
+- Wait at least 400 ms before the first sample after a page-changing action.
 - Cap at 3 s, then proceed anyway and note "screen may still be loading"
   in the planner's last-step result.
 - Configurable settle time (OBSERVE_SETTLE_MAX_MS, default 3000).
 - Log settle time in turn trace.
 - Tests:
-  - Mocked frames that change 3 times then stabilise give 2 stable reads before observing.
+  - Frames that change 3 times then stabilise settle after the 1000 ms window.
   - Never-stable frames hit the cap and add the note.
-  - Zero overhead when the first two samples already match.
+  - Stable from the first sample settles at the 1000 ms window, not at the 2nd poll.
+  - Stable for 2 polls then a change must not count as settled at the 2nd poll.
 """
 
 import asyncio
@@ -91,20 +96,17 @@ class TestPixelDiffRatio:
 
 class TestScreenSettlerPolling:
     @pytest.mark.asyncio
-    async def test_frames_change_3_times_then_stabilise_gives_2_stable_reads(self):
-        """Mocked frames that change 3 times then stabilise give 2 stable reads before observing."""
+    async def test_frames_change_3_times_then_stabilise_settles_after_the_window(self):
+        """Mocked frames that change 3 times then stabilise settle once they
+        stayed unchanged for a continuous 1000 ms window, not on the first
+        matching pair."""
         frame1 = make_frame(10)
         frame2 = make_frame(50)
         frame3 = make_frame(100)
         frame4 = make_frame(200)
-        # Sequence: frame1 -> frame2 (change 1) -> frame3 (change 2) -> frame4 (change 3) -> frame4 (stable read 2)
-        sequence = [
-            (frame1, 10),
-            (frame2, 12),
-            (frame3, 15),
-            (frame4, 20),
-            (frame4, 20),
-        ]
+        # Sequence: frame1 -> frame2 -> frame3 -> frame4 (3 changes), then
+        # frame4 stays on screen for the whole stability window.
+        sequence = [frame1, frame2, frame3, frame4]
         call_idx = 0
 
         def sample_mock():
@@ -130,8 +132,11 @@ class TestScreenSettlerPolling:
         with patch("time.monotonic", side_effect=lambda: sim_time):
             res = await settler.wait_for_settle()
 
+        # Samples: frame1@400, frame2@650, frame3@900, frame4@1150, frame4@1400,
+        # frame4@1650, frame4@1900, frame4@2150 -> the 1000 ms window (1150..2150)
+        # completes at the 8th sample.
         assert res.settled is True
-        assert res.samples_taken == 5
+        assert res.samples_taken == 8
         assert res.note == ""
 
     @pytest.mark.asyncio
@@ -164,8 +169,9 @@ class TestScreenSettlerPolling:
         assert res.note == "screen may still be loading"
 
     @pytest.mark.asyncio
-    async def test_zero_overhead_when_first_two_samples_match(self):
-        """Zero overhead when the first two samples already match."""
+    async def test_stable_from_the_first_sample_settles_at_the_1000ms_window(self):
+        """Identical frames from the start settle at the 1000 ms window, not
+        when the first two samples match (~250 ms)."""
         frame = make_frame(128)
         reads = 0
 
@@ -190,17 +196,61 @@ class TestScreenSettlerPolling:
         with patch("time.monotonic", side_effect=lambda: sim_time):
             res = await settler.wait_for_settle()
 
+        # Samples at 400, 650, 900, 1150, 1400: the window 400..1400 ms is
+        # 1000 ms of stability, so the 5th sample settles.
         assert res.settled is True
-        assert res.samples_taken == 2
-        assert reads == 2
+        assert res.samples_taken == 5
+        assert reads == 5
         assert res.note == ""
+
+    @pytest.mark.asyncio
+    async def test_stable_for_two_polls_then_a_change_is_not_settled_at_poll_2(self):
+        """A fake sampler stable for 2 polls and then changing must not count
+        as settled at the 2nd poll (the old one-pair rule settled here)."""
+        stable_frame = make_frame(50)
+        other_frame = make_frame(10)
+        sequence = [stable_frame, stable_frame, other_frame]
+        call_idx = 0
+
+        def sample_mock():
+            nonlocal call_idx
+            if call_idx < len(sequence):
+                frame = sequence[call_idx]
+            else:
+                # Keep changing after the short stable run so it cannot settle
+                # on a later pair either.
+                frame = make_frame((call_idx * 37) % 255)
+            call_idx += 1
+            return frame
+
+        sim_time = 0.0
+
+        async def fast_sleep(s):
+            nonlocal sim_time
+            sim_time += s
+
+        settler = ScreenSettler(
+            max_ms=3000,
+            poll_interval_ms=250,
+            sample_fn=sample_mock,
+            sleep_fn=fast_sleep,
+        )
+
+        with patch("time.monotonic", side_effect=lambda: sim_time):
+            res = await settler.wait_for_settle()
+
+        # The first pair (poll 1 and poll 2) is stable, but 250 ms of stability
+        # is short of the 1000 ms window, and the 3rd sample changes anyway.
+        assert res.settled is False
+        assert res.note == "screen may still be loading"
+        assert res.samples_taken > 2
 
     @pytest.mark.asyncio
     async def test_settle_time_logged_in_turn_trace(self):
         """Log the settle time in the turn trace."""
         frame = make_frame(50)
         settler = ScreenSettler(
-            max_ms=1000,
+            max_ms=3000,
             poll_interval_ms=10,
             sample_fn=lambda: (frame, 10),
             sleep_fn=lambda s: asyncio.sleep(0.001),

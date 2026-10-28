@@ -191,3 +191,53 @@ class TestLaunchIsShellSafe:
 
         assert res["status"] == "error"
         assert run_calls == []
+
+
+class TestLaunchPicksTheIndexedAppFirst:
+    """An indexed app wins over a protocol shortcut.
+
+    Calculator is indexed as a UWP app (AUMID) and must launch by AUMID
+    through `shell:AppsFolder`, not via the `calc:` protocol shortcut - a
+    protocol launch can open the app without ever bringing its front window
+    forward, which is what the recorded Calculator run hit.
+    """
+
+    def test_uwp_app_launches_by_aumid_on_the_first_try(self, temp_cache, monkeypatch):
+        # _uwp_apps == {"stubuwp": "Stub.App_8wekyb!App"}
+        start_calls = []
+        monkeypatch.setattr(app_indexer_module.os, "startfile", lambda *a, **k: start_calls.append(a[0]))
+        run_calls = []
+        monkeypatch.setattr(app_indexer_module.subprocess, "run", lambda *a, **k: run_calls.append(a))
+
+        res = AppIndexer().launch("stubuwp")
+
+        assert res["status"] == "ok"
+        assert start_calls == ["shell:AppsFolder\\Stub.App_8wekyb!App"]
+        assert run_calls == [], "explorer.exe fallback only when startfile fails"
+
+    def test_calculator_launches_by_aumid_not_the_calc_protocol(self, temp_cache, monkeypatch):
+        indexer = AppIndexer()  # temp_cache: _index_apps stubbed
+        indexer._uwp_apps["calculator"] = "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"
+        indexer._display["calculator"] = "Calculator"
+        start_calls = []
+        monkeypatch.setattr(app_indexer_module.os, "startfile", lambda *a, **k: start_calls.append(a[0]))
+        run_calls = []
+        monkeypatch.setattr(app_indexer_module.subprocess, "run", lambda *a, **k: run_calls.append(a))
+
+        res = indexer.launch("Calculator")
+
+        assert res["status"] == "ok"
+        assert start_calls == ["shell:AppsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"]
+        assert not any("calc:" in str(call) for call in start_calls)
+        assert run_calls == []
+
+    def test_protocol_name_without_an_index_still_uses_the_protocol(self, temp_cache, monkeypatch):
+        # temp_cache indexes stubapp/stubuwp only, so whatsapp is protocol-only.
+        start_calls = []
+        monkeypatch.setattr(app_indexer_module.os, "startfile", lambda *a, **k: start_calls.append(a[0]))
+        monkeypatch.setattr(app_indexer_module.subprocess, "run", lambda *a, **k: None)
+
+        res = AppIndexer().launch("whatsapp")
+
+        assert res["status"] == "ok"
+        assert start_calls == ["whatsapp://"]

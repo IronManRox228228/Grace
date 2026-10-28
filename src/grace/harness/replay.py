@@ -321,6 +321,7 @@ class TapePump:
         self._index = 0
         self._started: Optional[float] = None
         self._windows = 0
+        self._listening = False  # True only while a listening window is consuming chunks
         self.ran_dry = False
         self.max_lateness_ms = 0.0
 
@@ -347,15 +348,13 @@ class TapePump:
                 await asyncio.sleep(0.02)
                 return None
 
-            # In the activation window this is a finding, not plumbing. In a
-            # real tape the recorded silence tail trips the VAD and the turn
-            # ends on its own; running out of chunks first means the replayed
-            # VAD did not close the turn where the recorded one did.
-            #
-            # Raising rather than returning None ends the window at once via
-            # the loop's existing error path, instead of leaving it spinning
-            # against its own 30s timeout.
-            self.ran_dry = True
+            # The wake-word forwarder keeps reading the pump while the agent
+            # goal runs (main.py: `_pump_audio_to_wake_word`), so exhaustion
+            # here can simply mean the goal outlasted the recording - not that
+            # the listening window starved. Only count it as a VAD-parity
+            # finding when the listening window itself is consuming chunks.
+            if self._listening:
+                self.ran_dry = True
             raise TapeExhausted("recorded audio ended before the VAD closed the turn")
 
         import time as _time
@@ -410,6 +409,11 @@ class TapePump:
         and "the session ended" in a follow-up.
         """
         self._windows += 1
+        self._listening = True
+        # A fresh listening window: a ran_dry flag left over from an earlier
+        # window (drained by the wake-word forwarder while the agent worked)
+        # must not be mistaken for this window starving.
+        self.ran_dry = False
         return 0
 
 

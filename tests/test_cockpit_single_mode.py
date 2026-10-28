@@ -584,6 +584,120 @@ class TestSingleModeHistory:
         # Step 1 dropped
         assert not any(l.startswith("1. ") for l in lines)
 
+    def test_history_click_shows_grid_coords_and_element_under_point(self):
+        from grace.agent.loop import _render_single_history_line, _single_action_line
+
+        graph = ElementGraph(
+            elements=[
+                make_test_node(39, "Lo Fi (Full Music Video)", frame=FRAME_PAGE, rect=(1100, 450, 1200, 550)),
+                make_test_node(40, "The whole video page", frame=FRAME_PAGE, rect=(0, 0, 1920, 1080)),
+            ],
+            window=WindowRef(hwnd=1, title="YouTube"),
+        )
+        # Grid (600,440) on a 1920x1080 screen is pixel (1152, 475): inside the
+        # small button [39] and inside the full-page container [40]; the
+        # smallest one wins, so [39] is named.
+        line = _single_action_line(
+            "cua_click",
+            {"x": 1152, "y": 475, "_raw_x": 600.0, "_raw_y": 440.0, "_graph": graph},
+        )
+        assert line == 'click (600,440) on button "Lo Fi (Full Music Video)"'
+
+        # No element under the point: coordinates alone.
+        line = _single_action_line(
+            "cua_click",
+            {"x": 9000, "y": 9000, "_raw_x": 600.0, "_raw_y": 440.0, "_graph": graph},
+        )
+        assert line == "click (600,440)"
+
+    def test_history_drag_and_scroll_use_grid_coords(self):
+        from grace.agent.loop import _single_action_line
+
+        assert (
+            _single_action_line(
+                "cua_drag",
+                {"path": [[100, 300], [500, 300]], "_raw_path": [[100, 300], [500, 300]]},
+            )
+            == "drag (100,300)..(500,300)"
+        )
+        assert (
+            _single_action_line(
+                "cua_scroll",
+                {"x": 600, "y": 440, "_raw_x": 600.0, "_raw_y": 440.0},
+            )
+            == "scroll (600,440)"
+        )
+
+    def test_history_window_line_only_when_the_title_changes(self):
+        from grace.agent.loop import _render_single_history, _render_single_history_line
+
+        entries = [
+            # First step: no previous step, so no Window line even though a
+            # window is recorded.
+            {
+                "step_no": 1,
+                "action": 'click (600,440) on link "Lo Fi (Full Music Video)"',
+                "said": "changed",
+                "reading": "",
+                "window": "Lo Fi (Full Music Video) - YouTube",
+                "prev_window": None,
+            },
+            # Same window as the previous step: no Window line.
+            {
+                "step_no": 2,
+                "action": 'type "hello"',
+                "said": "changed",
+                "reading": "",
+                "window": "Lo Fi (Full Music Video) - YouTube",
+                "prev_window": "Lo Fi (Full Music Video) - YouTube",
+            },
+            # Window changed: the Window line appears after the report.
+            {
+                "step_no": 3,
+                "action": "press win",
+                "said": "changed",
+                "reading": "",
+                "window": "Start",
+                "prev_window": "Lo Fi (Full Music Video) - YouTube",
+            },
+            # An error reading survives, after the Window line.
+            {
+                "step_no": 4,
+                "action": "click (10,10)",
+                "said": "nothing changed",
+                "reading": "error: Element [141] is not on screen.",
+                "window": "Start",
+                "prev_window": "Start",
+            },
+        ]
+        body = _render_single_history(entries)
+        lines = [l for l in body.splitlines() if l.strip()]
+        assert len(lines) == 4
+        assert lines[0] == '1. click (600,440) on link "Lo Fi (Full Music Video)" -> you said: changed'
+        assert "Window:" not in lines[0]
+        assert lines[1] == '2. type "hello" -> you said: changed'
+        assert "Window:" not in lines[1]
+        assert (
+            lines[2]
+            == '3. press win -> you said: changed. Window: Start'
+        )
+        assert lines[3] == '4. click (10,10) -> you said: nothing changed. error: Element [141] is not on screen.'
+
+    def test_history_lines_stay_under_160_chars(self):
+        from grace.agent.loop import _render_single_history_line
+
+        long_name = "button " + "x" * 200
+        entry = {
+            "step_no": 9,
+            "action": f'click (600,440) on button "{long_name}"',
+            "said": "changed",
+            "reading": "",
+            "window": "A very long window title " + "y" * 120,
+            "prev_window": "something else entirely",
+        }
+        line = _render_single_history_line(entry)
+        assert len(line) <= 160, (len(line), line)
+
 
 DONE_JSON = (
     '{"thought": "Done", "action": "converse", "params": {"response": "Done."}, '

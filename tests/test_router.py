@@ -106,11 +106,21 @@ class TestFastPathIsOptIn:
         ("list my open windows", "cua_list_windows"),
         ("get rid of the draft file", "delete_file"),
         ("open the budget spreadsheet", "open_file"),
+        ("open calculator", "open_calculator"),
     ])
     def test_genuinely_atomic_commands_keep_the_fast_path(self, text, tool):
         # Every fast-path utterance in the recorded corpus. Escalating these
         # would trade the whole latency benefit for nothing.
         assert route(text, Intent(tool=tool, params={})) == TaskComplexity.FAST_PATH
+
+    def test_open_calculator_with_a_second_clause_pre_executes_before_the_loop(self):
+        # Cockpit 9: "open calculator and work out 23 times 47" must not start
+        # Holo on the desktop - the open_calculator setup intent pre-executes
+        # the same way open_app does, so the agent starts inside Calculator.
+        intent = Intent(tool="open_calculator", params={})
+        assert route(
+            "open calculator and work out 23 times 47", intent,
+        ) == TaskComplexity.AGENTIC_GOAL
 
 
 class TestMultiStepBackstop:

@@ -522,8 +522,11 @@ class AgentLoop:
                     single_history.append({
                         "step_no": 0,
                         "action": _single_action_line(s.action, s.params),
+                        "sig": _single_action_sig(s.action, s.params),
                         "said": "changed",
                         "reading": _single_reading_line(s.result, None),
+                        "window": "",
+                        "prev_window": None,
                     })
 
         while not memory.is_completed and not memory.is_exceeded:
@@ -588,12 +591,6 @@ class AgentLoop:
             )
 
             if is_single:
-                # The newest history line gets its reading now: what Grace
-                # deterministically sees after the last action. Errors and
-                # tool content were already attached at dispatch time; this
-                # fills in the focus line when there was neither.
-                if single_history and not single_history[-1].get("reading"):
-                    single_history[-1]["reading"] = _readings_focus_line(snapshot)
                 screen_readings_text = screen_readings(snapshot)
                 expectation_note = ""
             else:
@@ -734,6 +731,31 @@ class AgentLoop:
                     continue
 
             consecutive_failures = 0
+
+            # `done: true` ends the task and speaks `say`. The step's action is
+            # never executed - Holo's completion claim is trusted exactly as
+            # when the action is `converse`; `converse` itself is not an action
+            # and keeps its normal completion path below. Log that the action
+            # was skipped.
+            if step.is_completed and step.action != "converse":
+                logger.info(
+                    f"AgentLoop: step {step_no} claims completion (done=true); "
+                    f"action '{step.action}' skipped, speaking say."
+                )
+                memory.is_completed = True
+                memory.final_response = step.final_response or memory.final_response or "Done."
+                memory.add_step(
+                    step.thought,
+                    step.action,
+                    step.params,
+                    {
+                        "status": "ok",
+                        "skipped_done": True,
+                        "result": {"ok": True, "sent": False, "skipped": True, "done": True},
+                    },
+                    step.user_update,
+                )
+                return self._result(memory)
 
             # Retrying the identical action against the identical view. Doing
             # it once more is reasonable - a window may not have been ready -
@@ -988,6 +1010,8 @@ class AgentLoop:
                         if scaled is not None:
                             step.params["x"], step.params["y"] = scaled
                             logger.info(f"AgentLoop: single mode normalized coords ({raw_x}, {raw_y}) -> screen {scaled}")
+                            if step.action == "cua_click":
+                                await self._refine_click_point(step, snapshot, scaled, scr_size, step_no)
                     except (ValueError, TypeError) as e:
                         logger.warning(f"Failed to scale coordinates: {e}")
             else:
@@ -1134,6 +1158,7 @@ class AgentLoop:
 
             step_end_time = time.monotonic()
             if getattr(self, "_run_capture", None) and self._run_capture.is_enabled:
+                extra = {"refine": step.params["_refine"]} if step.params.get("_refine") else {}
                 self._run_capture.record_step(
                     step_no=step_no,
                     action=step.action,
@@ -1146,6 +1171,7 @@ class AgentLoop:
                         "end": step_end_time,
                         "duration": round(step_end_time - step_start_time, 3),
                     },
+                    **extra,
                 )
 
             # Verification of action effect
@@ -1190,15 +1216,18 @@ class AgentLoop:
 
             # Cockpit 8, single mode: this step becomes the newest line of
             # `### Your last steps`. Its reading (error, tool content) is
-            # attached now; the focus reading is filled in on the next
-            # observation, and the model's own report about it arrives with
-            # the following step's output.
+            # attached now; the model's own report about it arrives with the
+            # following step's output. `Window: <title>` is shown only when the
+            # window title differs from the previous step's.
             if is_single:
                 single_history.append({
                     "step_no": step_no,
                     "action": _single_action_line(step.action, step.params),
+                    "sig": _single_action_sig(step.action, step.params),
                     "said": None,
                     "reading": _single_reading_line(exec_result, None),
+                    "window": normalize_title(_window_title(snapshot)),
+                    "prev_window": single_history[-1]["window"] if single_history else None,
                 })
 
             await self._emit({
@@ -1217,6 +1246,43 @@ class AgentLoop:
         return self._result(memory)
 
     # -- pieces ------------------------------------------------------------
+
+    async def _refine_click_point(
+        self,
+        step: PlannedStep,
+        snapshot: Any,
+        scaled: tuple[int, int],
+        scr_size: tuple[int, int],
+        step_no: int,
+    ) -> None:
+        """Single mode: zoom on Holo's click point and let Holo point again.
+
+        Coordinates only. On any failure the first point stays as scaled.
+        `x`/`y` become pixels of the refined point; `_raw_x`/`_raw_y` (Holo's
+        own grid numbers, used by the history) are untouched.
+        """
+        from grace.agent import click_refine
+
+        capture = getattr(self, "_refine_capture", None)
+        enabled, crop_px, scale = click_refine.refine_settings(getattr(self, "_config", None))
+        if not enabled:
+            return
+        # A snapshot without a real PNG screenshot is a headless or fake
+        # observation: nothing real on screen to crop.
+        png = getattr(snapshot, "png_bytes", None)
+        if capture is None and not (isinstance(png, (bytes, bytearray)) and bytes(png[:4]) == b"\x89PNG"):
+            return
+        llm = getattr(self._grounder, "_llm", None) or self._vision_llm
+        result = await click_refine.refine_click(
+            llm, scaled, scr_size, step.thought or "",
+            crop_px=crop_px, scale=scale, capture=capture,
+        )
+        step.params["_refine"] = result.to_record()
+        run_capture = getattr(self, "_run_capture", None)
+        if run_capture is not None and run_capture.is_enabled:
+            run_capture.record_refine_image(step_no, result.png)
+        if result.refined is not None:
+            step.params["x"], step.params["y"] = result.refined
 
     @staticmethod
     def _canonicalise_action(step: PlannedStep) -> bool:
@@ -1723,7 +1789,12 @@ def _stroke_coords_present(params: dict[str, Any]) -> bool:
 
 
 def _scale_drag_points(params: dict[str, Any], img_size, scr_size, coord_fmt: str) -> None:
-    """Convert a drag's x/y, to_x/to_y and path from model space to screen pixels, in place."""
+    """Convert a drag's x/y, to_x/to_y and path from model space to screen pixels, in place.
+
+    The raw model-space (0-1000 grid) points are kept under ``_raw_*`` keys so
+    the single-mode history line can render the drag in Holo's own grid
+    coordinates rather than screen pixels.
+    """
     def conv(x, y):
         try:
             return scale_to_screen(float(x), float(y), img_size, scr_size, coord_fmt)
@@ -1732,20 +1803,26 @@ def _scale_drag_points(params: dict[str, Any], img_size, scr_size, coord_fmt: st
 
     for kx, ky in (("x", "y"), ("to_x", "to_y")):
         if params.get(kx) is not None and params.get(ky) is not None:
+            params.setdefault(f"_raw_{kx}", params[kx])
+            params.setdefault(f"_raw_{ky}", params[ky])
             scaled = conv(params[kx], params[ky])
             if scaled is not None:
                 params[kx], params[ky] = scaled
     path = params.get("path")
     if isinstance(path, (list, tuple)):
+        raw_path = []
         out = []
         for item in path:
             try:
                 point = (item["x"], item["y"]) if isinstance(item, dict) else (item[0], item[1])
             except (KeyError, IndexError, TypeError):
                 continue
+            raw_path.append(list(point))
             scaled = conv(*point)
             if scaled is not None:
                 out.append(list(scaled))
+        if out:
+            params.setdefault("_raw_path", raw_path)
         params["path"] = out
 
 
@@ -1831,9 +1908,64 @@ def screen_readings(snapshot) -> str:
     return "\n".join(lines)
 
 
+def _element_at_point(graph: Optional[Any], x: Optional[int], y: Optional[int]) -> Optional[Any]:
+    """The smallest element in `graph` whose rect contains pixel (x, y), or None.
+
+    Used to name what a click/drag actually hit, in Holo's own grid
+    coordinates. Nothing here is a judgement - it is a plain rectangle test.
+    """
+    if graph is None or x is None or y is None:
+        return None
+    best: Optional[Any] = None
+    for element in getattr(graph, "elements", []) or []:
+        try:
+            if not element.contains(int(x), int(y)):
+                continue
+        except (TypeError, ValueError, AttributeError):
+            continue
+        area = element.width * element.height
+        if best is None or area < best.width * best.height:
+            best = element
+    return best
+
+
+def _grid_point(params: dict[str, Any]) -> Optional[tuple[int, int]]:
+    """The model-space (0-1000 grid) point Holo sent, if any was recorded."""
+    raw_x, raw_y = params.get("_raw_x"), params.get("_raw_y")
+    if raw_x is not None and raw_y is not None:
+        try:
+            return int(round(float(raw_x))), int(round(float(raw_y)))
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _pixel_point(params: dict[str, Any]) -> Optional[tuple[int, int]]:
+    """The resolved screen-pixel point, if any."""
+    x, y = params.get("x"), params.get("y")
+    if x is not None and y is not None:
+        try:
+            return int(round(float(x))), int(round(float(y)))
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _cut(text: str, max_chars: int = 40) -> str:
+    """Cut a display string to `max_chars`, never splitting mid-surrogate."""
+    text = str(text)
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1] + "\u2026"
+
+
 def _single_action_line(action: str, params: dict[str, Any]) -> str:
     """Short form of one executed action for the single-mode history.
 
+    Coordinates are rendered in Holo's own 0-1000 grid (the raw x/y the model
+    sent), not screen pixels, so the history line matches what the model sees.
+    A click names the smallest element under the point (`role "name"`, cut to
+    40 chars) when the step's element graph has one there.
     Deterministic render of what was done. Typed text is checked against the
     same secret rules the persistent history uses; nothing secret may reach
     the prompt.
@@ -1844,8 +1976,16 @@ def _single_action_line(action: str, params: dict[str, Any]) -> str:
 
     try:
         if action in ("cua_click", "cua_secondary_action"):
-            x, y = params.get("x"), params.get("y")
             verb = "click" if action == "cua_click" else "right-click"
+            grid = _grid_point(params)
+            if grid is not None:
+                line = f"{verb} ({grid[0]},{grid[1]})"
+                element = _element_at_point(params.get("_graph"), *_pixel_point(params))
+                if element is not None:
+                    name = (element.name or element.placeholder or "").strip()
+                    line += f" on {element.role} \"{_cut(name)}\""
+                return line
+            x, y = params.get("x"), params.get("y")
             if x is not None and y is not None:
                 try:
                     return f"{verb} ({int(round(float(x)))},{int(round(float(y)))})"
@@ -1870,15 +2010,25 @@ def _single_action_line(action: str, params: dict[str, Any]) -> str:
         if action == "cua_press_key":
             return f"press {params.get('key', '')}"
         if action == "cua_scroll":
+            grid = _grid_point(params)
+            if grid is not None:
+                return f"scroll ({grid[0]},{grid[1]})"
             return f"scroll ({params.get('scrollY', 0)})"
         if action == "cua_drag":
-            path = params.get("path")
-            if isinstance(path, (list, tuple)) and path:
+            raw_path = params.get("_raw_path")
+            if isinstance(raw_path, (list, tuple)) and len(raw_path) >= 2:
                 try:
-                    first, last = path[0], path[-1]
+                    first, last = raw_path[0], raw_path[-1]
                     if isinstance(first, (list, tuple)) and isinstance(last, (list, tuple)):
                         return f"drag ({int(first[0])},{int(first[1])})..({int(last[0])},{int(last[1])})"
                 except (TypeError, ValueError, IndexError):
+                    pass
+            raw_x, raw_y = params.get("_raw_x"), params.get("_raw_y")
+            raw_tx, raw_ty = params.get("_raw_to_x"), params.get("_raw_to_y")
+            if None not in (raw_x, raw_y, raw_tx, raw_ty):
+                try:
+                    return f"drag ({int(round(float(raw_x)))},{int(round(float(raw_y)))})..({int(round(float(raw_tx)))},{int(round(float(raw_ty)))})"
+                except (TypeError, ValueError):
                     pass
             x, y, tx, ty = params.get("x"), params.get("y"), params.get("to_x"), params.get("to_y")
             if None not in (x, y, tx, ty):
@@ -1901,13 +2051,46 @@ def _single_action_line(action: str, params: dict[str, Any]) -> str:
 _SINGLE_HISTORY_STEPS = 5
 _SINGLE_HISTORY_LINE_MAX = 160
 
+# Params that are Holo's own numbers; the scaled pixel twins are derived.
+_SIG_RAW_TWINS = {
+    "_raw_x": ("x",), "_raw_y": ("y",),
+    "_raw_to_x": ("to_x",), "_raw_to_y": ("to_y",),
+    "_raw_path": ("path",),
+}
+
+
+def _single_action_sig(action: str, params: dict[str, Any]) -> str:
+    """The tool plus the args exactly as Holo sent them (grid x/y, text, key,
+    path...). Two steps with equal signatures are the same action. Scaled
+    pixels and Grace's own `_` bookkeeping never count; a refine moves the
+    pixel point but not what Holo sent."""
+    try:
+        hidden: set[str] = set()
+        for raw_key, twins in _SIG_RAW_TWINS.items():
+            if raw_key in params:
+                hidden.update(twins)
+        items = []
+        for k, v in params.items():
+            if k in hidden:
+                continue
+            if k.startswith("_") and k not in _SIG_RAW_TWINS:
+                continue
+            items.append((k, v))
+        items.sort(key=lambda kv: kv[0])
+        return repr((action, items))
+    except Exception:
+        return ""
+
 
 def _single_reading_line(last_result: dict[str, Any], snapshot) -> str:
     """Grace's plain deterministic reading after one executed action.
 
     Priority: the tool's error (deterministic), the tool's own content
-    output (file lists, read text - wrapped as untrusted by the caller),
-    otherwise what now has keyboard focus. No verdicts, no change words.
+    output (file lists, read text - wrapped as untrusted by the caller).
+    The tool's boilerplate message ("Clicked 1 time(s) at ... via explicit")
+    is deliberately dropped - the grid-coordinate action line already says
+    what was done, and `Window: <title>` says where the step ended up.
+    No verdicts, no change words.
     """
     reason = _failure_reason(last_result)
     if reason:
@@ -1922,11 +2105,6 @@ def _single_reading_line(last_result: dict[str, Any], snapshot) -> str:
     if isinstance(files, list) and files:
         shown = ", ".join(str(f) for f in files[:5])
         return f"files: {shown}"
-    if snapshot is not None:
-        return _readings_focus_line(snapshot)
-    message = inner.get("message") or inner.get("evidence") or last_result.get("message")
-    if message:
-        return " ".join(str(message).split())
     return ""
 
 
@@ -1944,29 +2122,67 @@ def _render_single_history(entries: list[dict[str, Any]]) -> str:
     while recent and sum(len(_render_single_history_line(e)) + 1 for e in recent) > _SINGLE_HISTORY_LINE_MAX * _SINGLE_HISTORY_STEPS:
         recent.pop(0)
     for entry in recent:
-        lines.append(_render_single_history_line(entry))
+        lines.append(_render_single_history_line(entry, _same_as_step(entries, entry)))
     return "\n".join(lines)
 
 
-def _render_single_history_line(entry: dict[str, Any]) -> str:
+def _same_as_step(entries: list[dict[str, Any]], entry: dict[str, Any]) -> Optional[int]:
+    """Step number of the most recent earlier step in the turn whose action is
+    exactly the same as `entry`'s, or None. Looks at the whole turn, not just
+    the lines shown."""
+    sig = entry.get("sig")
+    if not sig:
+        return None
+    idx = next((i for i, e in enumerate(entries) if e is entry), 0)
+    for earlier in reversed(entries[:idx]):
+        if earlier.get("sig") == sig:
+            return earlier["step_no"]
+    return None
+
+
+def _render_single_history_line(entry: dict[str, Any], same_as: Optional[int] = None) -> str:
+    if same_as is None:
+        return _render_single_history_body(entry)
+    marker = f" (same as step {same_as})"
+    room = _SINGLE_HISTORY_LINE_MAX - len(marker)
+    full = _render_single_history_body(entry, limit=10**6)
+    if len(full) > room:
+        # Trim the element name first; the tail is cut only if that is not enough.
+        over = len(full) - room
+        m = re.match(r'^(.* on \S+ ")(.*)(")$', str(entry["action"]))
+        if m and len(m.group(2)) > 1:
+            keep = max(len(m.group(2)) - over - 1, 0)
+            entry = dict(entry, action=f"{m.group(1)}{m.group(2)[:keep]}…{m.group(3)}")
+    return _render_single_history_body(entry, limit=room) + marker
+
+
+def _render_single_history_body(entry: dict[str, Any], limit: int = _SINGLE_HISTORY_LINE_MAX) -> str:
     parts = [f"{entry['step_no']}. {entry['action']}"]
     said = entry.get("said") or ""
     said = said.strip().rstrip(".")
-    reading = (entry.get("reading") or "").strip()
+    reading = " ".join((entry.get("reading") or "").split())
+    if len(reading) > _SINGLE_HISTORY_LINE_MAX:
+        reading = reading[: _SINGLE_HISTORY_LINE_MAX - 3] + "..."
+    window = (entry.get("window") or "").strip()
+    prev_window = entry.get("prev_window")
+    prev_window = (prev_window or "").strip() if prev_window is not None else None
+    window_changed = prev_window is not None and bool(window) and window != prev_window
+
     said_shown = "you said: changed" if said.lower().startswith("changed") else (
         "you said: nothing changed" if said.lower().startswith("nothing") else ""
     )
+
     tail = ""
     if said_shown:
         tail = f" -> you said: {said_shown.split(': ', 1)[1]}"
+    if window_changed:
+        addition = f"Window: {window}"
+        tail = f"{tail}. {addition}" if tail else f" -> {addition}"
     if reading:
-        text = " ".join(reading.split())
-        if len(text) > _SINGLE_HISTORY_LINE_MAX:
-            text = text[: _SINGLE_HISTORY_LINE_MAX - 3] + "..."
-        tail = f" -> {text}" if not tail else f"{tail}. {text}"
+        tail = f"{tail}. {reading}" if tail else f" -> {reading}"
     line = f"{parts[0]}{tail}" if tail else parts[0]
-    if len(line) > _SINGLE_HISTORY_LINE_MAX:
-        line = line[: _SINGLE_HISTORY_LINE_MAX - 3] + "..."
+    if len(line) > limit:
+        line = line[: limit - 3] + "..."
     return line
 
 

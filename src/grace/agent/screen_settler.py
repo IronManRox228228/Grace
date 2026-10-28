@@ -25,6 +25,11 @@ DEFAULT_SETTLE_MAX_MS = 3000
 DEFAULT_POLL_INTERVAL_MS = 250
 DEFAULT_PIXEL_DIFF_THRESHOLD = 0.01  # 1%
 
+# How long the samples must stay stable (continuous window) before "settled".
+# A small tolerance absorbs floating-point rounding on the clock.
+SETTLE_WINDOW_MS = 1000.0
+SETTLE_WINDOW_TOLERANCE_MS = 1e-6
+
 
 def action_can_change_page(action: Optional[str], params: Optional[dict[str, Any]] = None) -> bool:
     """Check whether a tool action is capable of triggering page transitions/loads."""
@@ -95,6 +100,7 @@ class ScreenSettler:
         pixel_diff_threshold: float = DEFAULT_PIXEL_DIFF_THRESHOLD,
         sample_fn: Optional[Callable] = None,
         sleep_fn: Optional[Callable] = None,
+        initial_wait_ms: int = 400,
     ):
         if max_ms is not None:
             self.max_ms = max_ms
@@ -107,6 +113,7 @@ class ScreenSettler:
 
         self.poll_interval_ms = poll_interval_ms
         self.pixel_diff_threshold = pixel_diff_threshold
+        self.initial_wait_ms = initial_wait_ms
         self._sample_fn = sample_fn or self._default_sample
         self._sleep_fn = sleep_fn or asyncio.sleep
 
@@ -180,11 +187,29 @@ class ScreenSettler:
             pass
 
     async def wait_for_settle(self) -> SettleResult:
-        """Wait until two consecutive samples are within the pixel diff threshold or cap hits."""
+        """Wait until the screen stayed stable for a continuous 1000 ms window or cap hits.
+
+        Settled means several consecutive polls (spanning at least 1000 ms)
+        are all within the pixel diff threshold - one matching pair is not
+        enough: a loading YouTube watch page shows a black player that looks
+        identical on two quick samples, which used to fool this into
+        reporting settled in ~312 ms.
+        """
         start_time = time.monotonic()
+
+        # After a page-changing action (click, Enter, ...) the screen may be
+        # mid-transition. Wait before the first sample so a slow-loading page
+        # does not look stable on two samples taken while it is still black.
+        if self.initial_wait_ms > 0:
+            wait_s = self.initial_wait_ms / 1000.0
+            sleep_res = self._sleep_fn(wait_s)
+            if inspect.isawaitable(sleep_res):
+                await sleep_res
 
         sample1 = await self._get_sample()
         samples_taken = 1
+        prev_time = time.monotonic()
+        stable_since: Optional[float] = None  # monotonic time the current stable run began
 
         if self.max_ms <= 0:
             res = SettleResult(settled=True, elapsed_ms=0.0, samples_taken=1)
@@ -222,14 +247,19 @@ class ScreenSettler:
             uia_stable = (sample1[1] is None or sample2[1] is None or sample1[1] == sample2[1])
 
             if pix_diff < self.pixel_diff_threshold and uia_stable:
-                res = SettleResult(
-                    settled=True,
-                    elapsed_ms=elapsed_ms,
-                    samples_taken=samples_taken,
-                    note="",
-                )
-                self._log_trace(res)
-                return res
+                if stable_since is None:
+                    stable_since = prev_time  # the run began at the earlier sample
+                if (now - stable_since) * 1000.0 >= SETTLE_WINDOW_MS - SETTLE_WINDOW_TOLERANCE_MS:
+                    res = SettleResult(
+                        settled=True,
+                        elapsed_ms=elapsed_ms,
+                        samples_taken=samples_taken,
+                        note="",
+                    )
+                    self._log_trace(res)
+                    return res
+            else:
+                stable_since = None
 
             if elapsed_ms >= self.max_ms:
                 res = SettleResult(
@@ -242,3 +272,4 @@ class ScreenSettler:
                 return res
 
             sample1 = sample2
+            prev_time = now

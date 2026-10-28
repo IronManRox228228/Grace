@@ -79,6 +79,11 @@ async def test_demo_task_completes_with_sloppy_holo_outputs(caplog):
 
     loop = AgentLoop(gemma=gemma, dispatcher=dispatcher, perception=SimPerception(sim),
                      grounder=grounder, settler=settler)
+    # Click zoom refine (single mode): a fake crop and a model that says
+    # not_here, so the first point is clicked and the real screen is untouched.
+    from PIL import Image
+    grounder._llm = MagicMock(generate_text=AsyncMock(return_value='{"not_here": true}'))
+    loop._refine_capture = lambda rect: Image.new("RGB", (rect[2], rect[3]))
     res = await loop.run(GOAL)
 
     assert res["status"] == "ok", res

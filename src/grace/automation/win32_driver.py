@@ -38,6 +38,18 @@ FOCUS_SETTLE_MS = 150
 HOVER_SETTLE_MS = 60
 HOVER_SETTLE_FAST_MS = 10
 
+# How long the left button is held before the first move and again before the
+# release. Paint (and other win32 apps) can drop a drag that starts moving the
+# instant the button goes down, so the cursor rests on the start point first.
+DRAG_HOLD_PAUSE_MS = 50
+
+# A drag segment is cut into steps no wider than this, so a canvas stroke is
+# continuous rather than one straight jump. 10 px at a time.
+DRAG_STEP_PX = 10
+
+# About 5-10 ms per step, as close to human input as the loop can get.
+DRAG_STEP_DELAY_S = 0.006
+
 
 class MOUSEINPUT(ctypes.Structure):
     _fields_ = [
@@ -353,13 +365,18 @@ class Win32Driver:
         return cls._send_mouse(int(x), int(y), MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP)
 
     @classmethod
-    def drag_path(cls, points: list[tuple[int, int]], step_px: int = 12, step_delay: float = 0.006) -> bool:
+    def drag_path(cls, points: list[tuple[int, int]], step_px: int = DRAG_STEP_PX, step_delay: float = DRAG_STEP_DELAY_S) -> bool:
         """Press at the first point, move through the rest in small steps, release at the last.
 
-        The same SendInput route a click uses. A move is sent right after the
-        press so apps that start a drag on the first move see it, and every
-        segment is cut into steps of about `step_px` so a canvas gets a
-        continuous stroke rather than a straight jump.
+        A real human-style drag, all via SendInput absolute moves:
+
+        - move the cursor to the start point
+        - left button down
+        - pause (~50 ms) so the app registers the button-down on the start point
+        - move through the path in steps of at most `step_px` pixels
+          (about `step_delay` each) with the button held
+        - pause (~50 ms)
+        - left button up
         """
         if len(points) < 2:
             return False
@@ -383,6 +400,7 @@ class Win32Driver:
 
         if not cls.mouse_down(*first):
             return False
+        time.sleep(DRAG_HOLD_PAUSE_MS / 1000.0)
         last = first
         try:
             cls.mouse_move(*first)
@@ -397,6 +415,7 @@ class Win32Driver:
                     )
                     time.sleep(step_delay)
                 last = (px, py)
+            time.sleep(DRAG_HOLD_PAUSE_MS / 1000.0)
         finally:
             cls.mouse_up(*last)
         return True

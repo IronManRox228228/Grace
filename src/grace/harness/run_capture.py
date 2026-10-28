@@ -285,6 +285,14 @@ class RunCapture:
 
         (step_dir / "screenshot.png").write_bytes(png_bytes)
 
+    def record_refine_image(self, step_no: int, png_bytes: Optional[bytes]) -> None:
+        """Write step_NNN/refine.png: the enlarged crop the click refine saw."""
+        if not self.is_enabled or not png_bytes:
+            return
+        step_dir = self._step_dir(step_no)
+        step_dir.mkdir(parents=True, exist_ok=True)
+        (step_dir / "refine.png").write_bytes(png_bytes)
+
     def record_planner(
         self,
         step_no: int,
@@ -314,6 +322,7 @@ class RunCapture:
         result: Any,
         snapshot: Any,
         timings: Optional[dict[str, Any]] = None,
+        refine: Optional[dict[str, Any]] = None,
     ) -> None:
         """Write step_NNN/step.json with action, params, click point, result, elements, window, timings."""
         if not self.is_enabled:
@@ -355,6 +364,8 @@ class RunCapture:
             "hwnd": hwnd,
             "timings": timings or {},
         }
+        if refine:
+            step_data["refine"] = refine
         redacted = self._redact(step_data)
         (step_dir / "step.json").write_text(
             json.dumps(redacted, indent=2, default=str), encoding="utf-8"

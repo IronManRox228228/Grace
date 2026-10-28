@@ -183,6 +183,13 @@ class Config:
     # view is not making progress, it is just spending quota.
     agent_max_repeated_actions: int = field(default_factory=lambda: int( os.getenv("AGENT_MAX_REPEATED_ACTIONS", "3")))
     screenshot_max_width: int = field(default_factory=lambda: int(os.getenv("SCREENSHOT_MAX_WIDTH", "1280")))
+    # Single mode only: zoom a full-resolution crop around each click point and
+    # ask the model to point again inside it (see grace.agent.click_refine).
+    # Off by default: on Paint (28 Oct) the zoomed answer missed by the same
+    # ~10 px as the first point and cost ~2.5 s per click.
+    click_refine: bool = field(default_factory=lambda: os.getenv("CLICK_REFINE", "0").strip().lower() not in ("0", "false", "no", "off", ""))
+    click_refine_crop_px: int = field(default_factory=lambda: int(os.getenv("CLICK_REFINE_CROP_PX", "300")))
+    click_refine_scale: int = field(default_factory=lambda: int(os.getenv("CLICK_REFINE_SCALE", "3")))
     # Fewest actionable controls a window can report and still be planned for
     # from its element list rather than from a marked screenshot. Raising it
     # sends more apps down the vision path: slower, and more likely to be right.
