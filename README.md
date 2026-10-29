@@ -39,7 +39,7 @@ Grace runs entirely offline. Download the required model weights manually and pl
 | **Whisper small** | Local speech-to-text (ASR) | `Systran/faster-whisper-small` (set by `WHISPER_MODEL_PATH`) | Cached via `faster-whisper` | ~480 MB |
 | **Vosk** (default) / openWakeWord | Offline wake word ("Grace") | Small Vosk English model | `vosk-model-small-en-us` | ~45 MB |
 | **Kokoro-82M** | Local text-to-speech (TTS) | `hexgrad/Kokoro-82M` | `kokoro-v0_19.onnx` + `voices.json` | ~320 MB |
-| **llama-server** | High-performance local inference binary | `ggerganov/llama.cpp` releases | `llama-server.exe` (cuBLAS/CUDA build) | ~50 MB |
+| **llama-server** | High-performance local inference binary | `TheTom's turboquant llama.cpp OR AtomicChat's turboquant llama.cpp` releases | `llama-server.exe` (cuBLAS/CUDA build) | ~50 MB |
 
 Configure `.env` with:
 ```env
