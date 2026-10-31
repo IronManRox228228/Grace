@@ -175,6 +175,10 @@ class Config:
     # Set empty to make that rung a plain retry with the failure evidence.
     stronger_planner_model: str = field(default_factory=lambda: os.getenv("STRONGER_PLANNER_MODEL", "gemini-3.1-flash"))
     planner_max_calls_per_goal: int = field(default_factory=lambda: int(os.getenv("PLANNER_MAX_CALLS_PER_GOAL", "40")))
+    # How long a single planner.plan() call may run before the loop abandons it
+    # as a failure. A spoken "stop" interrupts it sooner regardless (the cancel
+    # flag is polled inside the call). 0 disables the limit.
+    planner_step_timeout_s: int = field(default_factory=lambda: int(os.getenv("PLAN_STEP_TIMEOUT_S", "45")))
     # Not unlimited, unlike the two above. Those bound a task that is making
     # progress; this bounds one that is making none, and "unlimited" there means
     # an unreachable LLM freezes Grace mid-task with no way to interrupt it.

@@ -49,6 +49,7 @@ class CapabilityRouter:
     # so there is nothing for the agentic loop to add.
     FAST_PATH_TOOLS = {
         "adjust_volume",
+        "media_control",
         "lock_computer",
         "open_calculator",
         "open_app",
@@ -131,6 +132,24 @@ class CapabilityRouter:
 
 
     @classmethod
+    def _mentions_separator(cls, text: str) -> bool:
+        """Whole-word / phrase matching for clause separators.
+
+        'next' joins clauses ('open Spotify next play my playlist'), but
+        acts as an adjective in media/list commands ('next track', 'next song').
+        """
+        for sep in cls.CLAUSE_SEPARATORS:
+            if sep == "next":
+                pattern = r"\bnext\b(?!\s+(?:track|song|video|item|page|slide|one)\b)"
+                if re.search(pattern, text, re.IGNORECASE):
+                    return True
+            else:
+                pattern = r"\b" + r"\s+".join(re.escape(w) for w in sep.split()) + r"\b"
+                if re.search(pattern, text, re.IGNORECASE):
+                    return True
+        return False
+
+    @classmethod
     def _mentions(cls, text: str, phrases) -> bool:
         """Whole-word / whole-phrase matching, not substring."""
         for phrase in phrases:
@@ -147,7 +166,7 @@ class CapabilityRouter:
         a bare bool makes "why did that go agentic?" unanswerable after the
         fact.
         """
-        if cls._mentions(text, cls.CLAUSE_SEPARATORS):
+        if cls._mentions_separator(text):
             return "the request has a second clause"
 
         words = len(text.split())

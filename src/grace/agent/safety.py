@@ -33,6 +33,7 @@ class SafetyGuard:
         "converse",
         "search_files",
         "adjust_volume",
+        "media_control",
         "open_calculator",
         "undo",
         "describe_screen",

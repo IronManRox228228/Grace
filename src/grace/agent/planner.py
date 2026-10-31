@@ -255,6 +255,7 @@ _STATUS_PHRASES: dict[str, str] = {
     "read_pdf": "Reading document\u2026",
     "summarize_pdf": "Summarizing document\u2026",
     "adjust_volume": "Adjusting volume\u2026",
+    "media_control": "Controlling media\u2026",
     "lock_computer": "Locking computer\u2026",
     "open_calculator": "Opening calculator\u2026",
     "delete_file": "Moving file to recycle bin\u2026",
@@ -322,6 +323,10 @@ class Planner:
     @property
     def calls_made(self) -> int:
         return self._calls
+
+    @calls_made.setter
+    def calls_made(self, val: int) -> None:
+        self._calls = int(val)
 
     @property
     def calls_remaining(self) -> float:

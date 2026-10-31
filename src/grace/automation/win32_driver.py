@@ -217,6 +217,21 @@ class Win32Driver:
             logger.debug(f"ALT-tap unlock failed: {e}")
 
     @classmethod
+    def send_virtual_key(cls, vk: int) -> bool:
+        """Send a virtual key press and release via SendInput."""
+        try:
+            user32 = ctypes.windll.user32
+            inputs = (INPUT * 2)()
+            inputs[0].type = INPUT_KEYBOARD
+            inputs[0].u.ki = KEYBDINPUT(vk, 0, 0, 0, None)
+            inputs[1].type = INPUT_KEYBOARD
+            inputs[1].u.ki = KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, None)
+            return user32.SendInput(2, ctypes.byref(inputs), ctypes.sizeof(INPUT)) == 2
+        except Exception as e:
+            logger.debug(f"SendInput virtual key {hex(vk)} failed: {e}")
+            return False
+
+    @classmethod
     def click_at(cls, x: int, y: int, hwnd: Optional[int] = None, clicks: int = 1) -> bool:
         """Dispatch a mouse click to physical coordinates (x, y).
 

@@ -32,6 +32,10 @@ from grace.util.timing import stage
 
 logger = logging.getLogger("grace.agent.loop")
 
+# Outcomes of `_plan_once` when a planner call does not return a step on its own.
+_PLAN_CANCELLED = object()
+_PLAN_TIMED_OUT = object()
+
 # Tools whose execution constitutes actually doing something to the desktop.
 INTERACTIVE_TOOLS = {
     "cua_click", "cua_type_text", "cua_press_key", "cua_scroll",
@@ -498,6 +502,64 @@ class AgentLoop:
             )
         return res
 
+    async def _plan_once(self, step_no: int, **plan_kwargs) -> Any:
+        """Run one ``self._planner.plan(...)`` as an interruptible, time-bounded task.
+
+        The plan call runs as its own ``asyncio`` task so a spoken "stop" can
+        interrupt it mid-flight instead of waiting for the model's aiohttp
+        timeout (up to 120 s for llama-server). The cancel flag is polled every
+        100 ms. Cancelling the task drops the in-flight HTTP request, so
+        llama-server stops generating when the client disconnects - nothing here
+        shields the call or runs it in a thread.
+
+        Returns the PlannedStep on success, or the sentinel ``_PLAN_CANCELLED``
+        when a stop was requested, or ``_PLAN_TIMED_OUT`` when the per-step
+        clock ran out. ``PlannerBudgetExceeded`` and ``RateLimitError`` propagate
+        to the caller, which already handles them.
+        """
+        timeout_s = _config_int("planner_step_timeout_s", 45, config=self._config)
+        plan_kwargs["step_no"] = step_no
+        task = asyncio.create_task(self._planner.plan(**plan_kwargs))
+        deadline = None if not timeout_s else time.monotonic() + timeout_s
+        try:
+            while True:
+                # A spoken "stop" must win over an in-flight model request.
+                if self._cancel_requested or AgentLoop.is_cancel_requested():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    return _PLAN_CANCELLED
+                if deadline is not None and time.monotonic() >= deadline:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    logger.warning(f"Planner step {step_no} timed out after {timeout_s}s")
+                    tail_cb = getattr(self, "_llama_stderr_tail_cb", None)
+                    if tail_cb is not None:
+                        try:
+                            for line in tail_cb():
+                                logger.warning(f"  [llama-server] {line}")
+                        except Exception:
+                            pass
+                    return _PLAN_TIMED_OUT
+                done, _ = await asyncio.wait({task}, timeout=0.1)
+                if task in done:
+                    return task.result()
+                continue
+        except asyncio.CancelledError:
+            # This helper itself was cancelled: make sure the plan task dies too.
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            raise
+
     async def _continue(
         self,
         memory: AgentMemory,
@@ -608,7 +670,8 @@ class AgentLoop:
                 hide_tree = False  # Fleet mode always sees element list (cockpit-1)
                 facts_ctx = memory.format_user_facts_markdown() if hasattr(memory, "format_user_facts_markdown") else ""
                 async with stage(f"plan#{step_no}") as plan_stage:
-                    step = await self._planner.plan(
+                    step = await self._plan_once(
+                        step_no=step_no,
                         goal=memory.user_goal,
                         elements_prompt=view.markdown,
                         history=_render_single_history(single_history) if is_single else memory.format_history_markdown(),
@@ -618,15 +681,24 @@ class AgentLoop:
                         image_b64=view.image_b64,
                         hide_tree=hide_tree,
                         user_facts=facts_ctx,
-                        step_no=step_no,
                         page_url=current_url,
                         screen_readings=screen_readings_text,
                     )
-                    plan_stage.detail(
-                        f"{step.action if step else 'unparsed'} "
-                        f"(call {self._planner.calls_made}, {view.mode}"
-                        f"{f', {view.marks} marks' if view.marks else ''})"
-                    )
+                    if step is _PLAN_CANCELLED:
+                        logger.info("AgentLoop: cancelled by voice stop request.")
+                        return self._cancel_result(memory)
+                    if step is _PLAN_TIMED_OUT:
+                        # A timeout counts as a plan failure: the existing
+                        # `step is None` path below increments consecutive
+                        # failures and ends with _plan_failure_result at the
+                        # failure limit, so no new outcome is invented.
+                        step = None
+                    else:
+                        plan_stage.detail(
+                            f"{step.action if step else 'unparsed'} "
+                            f"(call {self._planner.calls_made}, {view.mode}"
+                            f"{f', {view.marks} marks' if view.marks else ''})"
+                        )
             except PlannerBudgetExceeded as e:
                 logger.warning(str(e))
                 return self._budget_result(memory)
@@ -785,7 +857,7 @@ class AgentLoop:
                     f"{self._escalation_label}."
                 )
                 try:
-                    stronger = await self._replan_stronger(memory, view, snapshot, expectation_note)
+                    stronger = await self._replan_stronger(memory, view, snapshot, expectation_note, step_no=step_no)
                 except PlannerBudgetExceeded as e:
                     # The overall per-goal budget is spent, not just this one
                     # optional attempt - the same terminal condition the
@@ -1326,7 +1398,7 @@ class AgentLoop:
             return await self._dispatcher.execute(intent, confirmed=confirmed)
 
     async def _replan_stronger(
-        self, memory: AgentMemory, view, snapshot, expectation_note: str
+        self, memory: AgentMemory, view, snapshot, expectation_note: str, step_no: int = 0
     ) -> Optional[PlannedStep]:
         """Ask a more capable model for a different approach to the same goal.
 
@@ -1334,10 +1406,15 @@ class AgentLoop:
         scratchpad is what makes this rung worth its cost: it carries what has
         already been established and ruled out, which the three-step verbatim
         history has usually forgotten by the time this fires.
+
+        The plan call runs through `_plan_once`, so a stop or the per-step
+        clock abandons this optional rung rather than hanging; either way the
+        originally planned step is kept.
         """
         try:
             facts_ctx = memory.format_user_facts_markdown() if hasattr(memory, "format_user_facts_markdown") else ""
-            return await self._planner.plan(
+            stronger = await self._plan_once(
+                step_no=step_no,
                 goal=memory.user_goal,
                 elements_prompt=view.markdown,
                 history=memory.format_history_markdown(),
@@ -1348,6 +1425,11 @@ class AgentLoop:
                 model=self._stronger_model,
                 user_facts=facts_ctx,
             )
+            if stronger is _PLAN_CANCELLED or stronger is _PLAN_TIMED_OUT:
+                # Escalation is optional: abandon it (a stop is in flight, or
+                # this step's clock ran out) and keep the original step.
+                return None
+            return stronger
         except (PlannerBudgetExceeded, RateLimitError):
             # Both are handled by the caller's own planning path on the next
             # lap. Escalating is optional; failing the goal because the
@@ -1439,8 +1521,12 @@ class AgentLoop:
                 lines.append(f"This exact action has returned an error {tool_error_count} times.")
         else:
             tool_output = ""
-            if isinstance(last_result.get("text"), str) and last_result["text"].strip():
-                tool_output = last_result["text"].strip()
+            detail = last_result.get("screen_detail") or inner.get("screen_detail")
+            text = last_result.get("text") or inner.get("text")
+            if isinstance(detail, str) and detail.strip():
+                tool_output = detail.strip()
+            elif isinstance(text, str) and text.strip():
+                tool_output = text.strip()
             elif inner.get("message"):
                 tool_output = str(inner["message"]).strip()
             elif "files" in last_result and isinstance(last_result["files"], list) and last_result["files"]:

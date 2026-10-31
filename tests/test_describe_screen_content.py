@@ -72,16 +72,24 @@ class TestDescribeScreenContent:
         res = await dispatcher.execute(Intent(tool="describe_screen", params={}))
 
         assert res["status"] == "ok"
+        detail = res["screen_detail"]
         text = res["text"]
 
-        # All screen text must be inside wrap_untrusted
-        assert _UNTRUSTED_START in text
-        assert _UNTRUSTED_END in text
+        # All screen detail text must be inside wrap_untrusted
+        assert _UNTRUSTED_START in detail
+        assert _UNTRUSTED_END in detail
+
+        # Spoken text is short sentence with no markers or element dump
+        assert _UNTRUSTED_START not in text
+        assert _UNTRUSTED_END not in text
+        assert "Button:" not in text and "Link:" not in text
+        assert len(text) <= 160
+        assert text == "You're on YouTube Music."
 
         # Verify page items appear before chrome Minimize
-        signal_idx = text.index("Signal")
-        play_idx = text.index("Play")
-        min_idx = text.index("Minimize")
+        signal_idx = detail.index("Signal")
+        play_idx = detail.index("Play")
+        min_idx = detail.index("Minimize")
 
         assert signal_idx < min_idx, "Expected 'Signal' before 'Minimize'"
         assert play_idx < min_idx, "Expected 'Play' before 'Minimize'"
@@ -116,10 +124,12 @@ class TestDescribeScreenContent:
         dispatcher = Dispatcher(computer_use=None)
         res = await dispatcher.execute(Intent(tool="describe_screen", params={}))
 
-        text = res["text"]
-        assert "Heading: 'Top Results'" in text
-        assert "Focused edit: 'Search songs'" in text
-        assert "Item: 'Result 1'" in text
+        detail = res["screen_detail"]
+        assert "Heading: 'Top Results'" in detail
+        assert "Focused edit: 'Search songs'" in detail
+        assert "Item: 'Result 1'" in detail
+        assert "Heading:" not in res["text"]
+        assert res["text"] == "You're on Player."
 
     @pytest.mark.asyncio
     async def test_ocr_lines_sorted_in_reading_order_and_chrome_dropped_on_cap(self, mock_graph_builder):
@@ -164,4 +174,78 @@ class TestDescribeScreenContent:
         assert len(res["controls"]) <= 25
         # Chrome should have been dropped because 25 page items filled the budget
         assert "Minimize" not in res["controls"]
+        assert "Minimize" not in res["screen_detail"]
         assert "Minimize" not in res["text"]
+
+    @pytest.mark.asyncio
+    async def test_spoken_text_sanitizes_title_and_excludes_raw_dump(self, mock_graph_builder):
+        """Spoken text is built deterministically, has no markers or button/link lists, and strips < >."""
+        btn = ElementNode(
+            id=1, role="button", name="Guide", rect=(10, 10, 50, 50),
+            center=(30, 30), frame=FRAME_PAGE,
+        )
+        link = ElementNode(
+            id=2, role="link", name="Home", rect=(10, 60, 50, 100),
+            center=(30, 80), frame=FRAME_PAGE,
+        )
+        graph = ElementGraph(
+            elements=[btn, link],
+            window=WindowRef(
+                hwnd=999,
+                title="<Imagine (Ultimate Mix) | YouTube Music and 2 more pages> - Personal - Microsoft Edge",
+                class_name="Chrome_WidgetWin_1",
+            ),
+        )
+        mock_graph_builder.get.return_value = graph
+
+        dispatcher = Dispatcher(computer_use=None)
+        res = await dispatcher.execute(Intent(tool="describe_screen", params={}))
+
+        text = res["text"]
+        detail = res["screen_detail"]
+
+        # Detail has untrusted markers and elements
+        assert _UNTRUSTED_START in detail
+        assert _UNTRUSTED_END in detail
+        assert "Button: 'Guide'" in detail
+        assert "Link: 'Home'" in detail
+
+        # Spoken text is short and clean
+        assert text == 'You\'re on "Imagine (Ultimate Mix) | YouTube Music" in Microsoft Edge.'
+        assert _UNTRUSTED_START not in text
+        assert _UNTRUSTED_END not in text
+        assert "Button:" not in text
+        assert "Link:" not in text
+        assert "Guide" not in text
+        assert "Home" not in text
+        assert "<" not in text and ">" not in text
+        assert len(text) <= 160
+
+    @pytest.mark.asyncio
+    async def test_spoken_text_edge_beta_with_more_pages_and_profile(self, mock_graph_builder):
+        """Live title with 'and 1 more page', 'Personal', and zero-width char in 'Microsoft Edge Beta'."""
+        btn = ElementNode(
+            id=1, role="button", name="Play", rect=(10, 10, 50, 50),
+            center=(30, 30), frame=FRAME_PAGE,
+        )
+        title = "Imagine (Ultimate Mix) | YouTube Music and 1 more page - Personal - Microsoft\u200b Edge Beta"
+        graph = ElementGraph(
+            elements=[btn],
+            window=WindowRef(
+                hwnd=1001,
+                title=title,
+                class_name="Chrome_WidgetWin_1",
+            ),
+        )
+        mock_graph_builder.get.return_value = graph
+
+        dispatcher = Dispatcher(computer_use=None)
+        res = await dispatcher.execute(Intent(tool="describe_screen", params={}))
+
+        assert res["text"] == 'You\'re on "Imagine (Ultimate Mix) | YouTube Music" in Microsoft Edge Beta.'
+
+
+def test_spoken_window_description_exact_live_edge_beta():
+    from grace.tools.dispatcher import _spoken_window_description
+    title = "Imagine (Ultimate Mix) | YouTube Music and 1 more page - Personal - Microsoft\u200b Edge Beta"
+    assert _spoken_window_description(title) == 'You\'re on "Imagine (Ultimate Mix) | YouTube Music" in Microsoft Edge Beta.'

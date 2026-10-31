@@ -916,7 +916,11 @@ class AgentMemory:
             res_content = ""
             if isinstance(result_obj, dict):
                 inner = result_obj.get("result") if isinstance(result_obj.get("result"), dict) else {}
-                if result_obj.get("text"):
+                if result_obj.get("screen_detail"):
+                    res_content = str(result_obj["screen_detail"])
+                elif inner.get("screen_detail"):
+                    res_content = str(inner["screen_detail"])
+                elif result_obj.get("text"):
                     res_content = str(result_obj["text"])
                 elif inner.get("text"):
                     res_content = str(inner["text"])

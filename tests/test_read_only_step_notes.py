@@ -53,3 +53,26 @@ def test_describe_screen_text_is_not_cut_at_600():
     step = PlannedStep(action="describe_screen")
     note = _loop()._expectation_note(step, {"status": "ok", "text": text}, _snap())
     assert "Song: 'Signal'" in note
+
+def test_describe_screen_prefers_screen_detail_over_text():
+    detail = "Active window: YouTube Music\n" + "\n".join(f"- Item: 'song {i:03d}'" for i in range(40))
+    detail = detail[:1150] + " - Song: 'Signal'"
+    step = PlannedStep(action="describe_screen")
+    res = {
+        "status": "ok",
+        "text": "You're on \"YouTube Music\" in Microsoft Edge.",
+        "screen_detail": detail,
+    }
+    note = _loop()._expectation_note(step, res, _snap())
+    assert "Song: 'Signal'" in note
+    assert "You're on" not in note
+
+
+def test_single_reading_line_uses_short_text():
+    from grace.agent.loop import _single_reading_line
+    res = {
+        "status": "ok",
+        "text": "You're on \"YouTube Music\" in Microsoft Edge.",
+        "screen_detail": "Active window: YouTube Music\n- Button: 'Play'",
+    }
+    assert _single_reading_line(res, _snap()) == "You're on \"YouTube Music\" in Microsoft Edge."

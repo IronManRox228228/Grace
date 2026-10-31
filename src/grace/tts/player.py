@@ -60,6 +60,8 @@ class TTSPlayer:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._active = False
+        # When the chunk now playing will finish (monotonic s); wait() budgets for it.
+        self._active_ends = 0.0
         # Bumped by stop(); the writer drops anything from an older generation
         # so barge-in cannot be overtaken by audio already in flight.
         self._generation = 0
@@ -170,10 +172,11 @@ class TTSPlayer:
     # -- internals -------------------------------------------------------
 
     def _pending_timeout(self) -> float:
-        """Enough time for the queued audio to actually play, plus slack."""
+        """Enough time for the queued audio and the rest of the chunk now playing, plus slack."""
         with self._cv:
             queued = list(self._queue)
-        seconds = sum(self._get_wav_duration(chunk) for chunk in queued)
+            playing_left = max(0.0, self._active_ends - time.monotonic()) if self._active else 0.0
+        seconds = playing_left + sum(self._get_wav_duration(chunk) for chunk in queued)
         return max(15.0, seconds + 10.0)
 
     def _ensure_thread(self):
@@ -206,6 +209,7 @@ class TTSPlayer:
                 wav_bytes = self._queue.popleft()
                 generation = self._generation
                 self._active = True
+                self._active_ends = time.monotonic() + self._get_wav_duration(wav_bytes)
 
             try:
                 self._write_chunk(wav_bytes, generation)

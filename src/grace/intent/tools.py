@@ -239,6 +239,14 @@ SYSTEM_TOOLS: list[ToolDefinition] = [
         is_system=True,
     ),
     ToolDefinition(
+        name="media_control",
+        description="Control media playback (pause/play/resume the song/music/video, next song, previous track).",
+        params=[
+            ToolParam("action", "Media playback action: 'play_pause', 'next', or 'previous'", True, "play_pause", "str"),
+        ],
+        is_system=True,
+    ),
+    ToolDefinition(
         name="lock_computer",
         description="Lock the Windows workstation session immediately (equivalent to Win+L).",
         params=[],

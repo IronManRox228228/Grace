@@ -24,6 +24,96 @@ from grace.ws_server import WsEventServer
 
 logger = logging.getLogger("grace.dispatcher")
 
+VK_MEDIA_NEXT_TRACK = 0xB0
+VK_MEDIA_PREV_TRACK = 0xB1
+VK_MEDIA_PLAY_PAUSE = 0xB3
+
+
+def _send_media_key(vk: int) -> None:
+    from grace.automation.win32_driver import Win32Driver
+    Win32Driver.send_virtual_key(vk)
+
+
+def _spoken_window_description(title: str) -> str:
+    """Deterministic, short spoken sentence describing the active window.
+
+    Strips untrusted control characters, '<', and '>', drops browser profile
+    and tab suffixes (e.g. ' - Personal - Microsoft Edge', ' and 2 more pages'),
+    and caps the output at 160 characters.
+    """
+    if not title or not title.strip():
+        return "I cannot detect an active application on screen."
+
+    import unicodedata
+    from grace.automation.computer_use import normalize_title
+
+    t = normalize_title(title)
+    t = "".join(
+        ch for ch in t
+        if ch not in ("<", ">") and (unicodedata.category(ch)[0] != "C" or ch == " ")
+    )
+    t = " ".join(t.split())
+
+    if not t:
+        return "I cannot detect an active application on screen."
+
+    if t.lower() in ("desktop", "current screen"):
+        return f"You're on {t}."
+
+    def _strip_page_suffix(s: str) -> str:
+        return re.sub(r"\s+and\s+\d+\s+more\s+pages?", "", s, flags=re.IGNORECASE).strip()
+
+    t_clean = _strip_page_suffix(t)
+    parts = [_strip_page_suffix(p) for p in re.split(r"\s+[-–—]\s+", t) if p.strip()]
+    parts = [p for p in parts if p]
+
+    if len(parts) <= 1:
+        target = parts[0] if parts else t_clean
+        sentence = f"You're on {target}."
+        if len(sentence) > 160:
+            allowed = max(0, 160 - len("You're on ..."))
+            sentence = f"You're on {target[:allowed]}..."
+        return sentence
+
+    app = parts[-1]
+
+    profile_pattern = re.compile(
+        r"^(?:personal|work|default|inprivate|incognito|(?:profile|person)\s*\d+.*)$",
+        re.IGNORECASE,
+    )
+    browser_names = {
+        "microsoft edge", "edge", "google chrome", "chrome", "brave", "vivaldi",
+        "chromium", "firefox", "mozilla firefox", "opera",
+    }
+
+    app_lower = app.lower()
+    is_browser = any(app_lower.startswith(b) for b in browser_names)
+
+    content_parts = parts[:-1]
+    if len(content_parts) >= 1 and is_browser:
+        while content_parts and profile_pattern.match(content_parts[-1]):
+            content_parts = content_parts[:-1]
+
+    if not content_parts:
+        content = app
+        sentence = f"You're on {content}."
+        if len(sentence) > 160:
+            allowed = max(0, 160 - len("You're on ..."))
+            sentence = f"You're on {content[:allowed]}..."
+        return sentence
+
+    content = " - ".join(content_parts)
+    content = _strip_page_suffix(content)
+
+    prefix = 'You\'re on "'
+    suffix = f'" in {app}.'
+    overhead = len(prefix) + len(suffix)
+    if overhead + len(content) > 160:
+        max_content = max(0, 160 - overhead - 3)
+        content = content[:max_content] + "..."
+
+    return f'{prefix}{content}{suffix}'
+
 _TOOL_LABELS: dict[str, str] = {
     "open_app": "Opening application\u2026",
     "close_app": "Closing application\u2026",
@@ -38,6 +128,7 @@ _TOOL_LABELS: dict[str, str] = {
     "undo": "Undoing action\u2026",
     "describe_screen": "Inspecting screen\u2026",
     "set_speech_rate": "Adjusting speech rate\u2026",
+    "media_control": "Controlling media\u2026",
     "voice_training_status": "Checking voice training status\u2026",
     "rollback_voice_model": "Rolling back voice model\u2026",
 }
@@ -237,7 +328,7 @@ class Dispatcher:
         "read_pdf", "summarize_pdf", "adjust_volume", "lock_computer",
         "open_calculator", "delete_file", "undo", "describe_screen",
         "set_speech_rate", "voice_training_status", "rollback_voice_model",
-        "remember", "type_saved_secret", "forget_secret",
+        "remember", "type_saved_secret", "forget_secret", "media_control",
     }
 
     @staticmethod
@@ -321,6 +412,7 @@ class Dispatcher:
             "remember": lambda p: self._remember(p, confirmed=confirmed),
             "type_saved_secret": self._type_saved_secret,
             "forget_secret": self._forget_secret,
+            "media_control": self._media_control,
         }
 
         handler = handler_map.get(tool)
@@ -631,6 +723,7 @@ class Dispatcher:
                 return {
                     "status": "ok",
                     "text": text,
+
                     "files": self._last_search_results,
                     "results": [{"path": p, "is_folder": f} for p, f in results],
                 }
@@ -924,8 +1017,12 @@ class Dispatcher:
                 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
                 from comtypes import CLSCTX_ALL
                 devices = AudioUtilities.GetSpeakers()
-                interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-                volume_obj = interface.QueryInterface(IAudioEndpointVolume)
+                # pycaw 2025+ wraps the device in AudioDevice, which exposes
+                # EndpointVolume and has no Activate; older pycaw returns the raw IMMDevice.
+                volume_obj = getattr(devices, "EndpointVolume", None)
+                if volume_obj is None:
+                    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                    volume_obj = interface.QueryInterface(IAudioEndpointVolume)
                 current_vol = volume_obj.GetMasterVolumeLevelScalar()
                 if mode == "increase":
                     new_vol = min(1.0, current_vol + (amount / 100))
@@ -1173,12 +1270,15 @@ class Dispatcher:
         else:
             body = "I cannot detect an active application on screen."
 
-        text = wrap_untrusted(body)
+        screen_detail = wrap_untrusted(body)
+        spoken_text = _spoken_window_description(title)
 
         return {
             "status": "ok",
             "action": "describe_screen",
-            "text": text,
+            "text": spoken_text,
+            "screen_detail": screen_detail,
+
             "window_title": title,
             "controls": elements_summary,
         }
@@ -1218,6 +1318,52 @@ class Dispatcher:
             logger.error(f"Set speech rate failed: {e}")
             FeedbackSounds.play_error()
             return {"status": "error", "error": str(e), "text": f"Could not adjust speech rate: {e}"}
+
+    async def _media_control(self, params: dict) -> dict:
+        """Control media playback (play/pause, next track, previous track)."""
+        from grace.response.feedback import FeedbackSounds
+
+        action = str(params.get("action", "play_pause") or "play_pause").strip().lower()
+        action_map = {
+            "play_pause": (VK_MEDIA_PLAY_PAUSE, "Done."),
+            "play": (VK_MEDIA_PLAY_PAUSE, "Done."),
+            "pause": (VK_MEDIA_PLAY_PAUSE, "Done."),
+            "resume": (VK_MEDIA_PLAY_PAUSE, "Done."),
+            "next": (VK_MEDIA_NEXT_TRACK, "Next track."),
+            "next_track": (VK_MEDIA_NEXT_TRACK, "Next track."),
+            "next_song": (VK_MEDIA_NEXT_TRACK, "Next track."),
+            "previous": (VK_MEDIA_PREV_TRACK, "Previous track."),
+            "prev": (VK_MEDIA_PREV_TRACK, "Previous track."),
+            "prev_track": (VK_MEDIA_PREV_TRACK, "Previous track."),
+            "previous_track": (VK_MEDIA_PREV_TRACK, "Previous track."),
+            "previous_song": (VK_MEDIA_PREV_TRACK, "Previous track."),
+        }
+        if action not in action_map:
+            return {
+                "status": "error",
+                "action": "media_control",
+                "error": f"Unknown media action '{action}'. Valid actions are 'play_pause', 'next', 'previous'.",
+                "text": f"I don't know how to {action} media.",
+            }
+        vk, spoken = action_map[action]
+        try:
+            await asyncio.to_thread(_send_media_key, vk)
+            FeedbackSounds.play_success()
+            return {
+                "status": "ok",
+                "action": "media_control",
+                "text": spoken,
+                "media_action": action,
+            }
+        except Exception as e:
+            logger.error(f"Media control failed for {action}: {e}")
+            FeedbackSounds.play_error()
+            return {
+                "status": "error",
+                "action": "media_control",
+                "error": str(e),
+                "text": f"Could not control media: {e}",
+            }
 
     async def _voice_training_status(self, params: dict) -> dict:
         """Report on-device voice training progress and accuracy."""

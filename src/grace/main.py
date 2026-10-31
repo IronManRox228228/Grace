@@ -315,6 +315,10 @@ class GraceApp:
             config=self.config,
             run_capture=self._run_capture,
         )
+        # Let the loop report llama-server's recent stderr when a planner step
+        # times out. Read lazily at timeout time, so it is safe to attach before
+        # _start_llama_server has created the tail; the loop guards the call.
+        self.agent_loop._llama_stderr_tail_cb = lambda: list(getattr(self, "_llama_stderr_tail", None) or [])
 
         # Persistent memory store (PLAN §12, Task 16)
         from grace.agent.memory import PersistentMemoryStore
