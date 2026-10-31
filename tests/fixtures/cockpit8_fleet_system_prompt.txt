@@ -133,6 +133,11 @@ Parameters:
   - `amount` (int, required): Volume amount integer (0 to 100)
   - `mode` (str, required): Adjustment mode: 'increase', 'decrease', 'set', or 'percent'
 
+### `media_control`
+Description: Control media playback (pause/play/resume the song/music/video, next song, previous track).
+Parameters:
+  - `action` (str, required): Media playback action: 'play_pause', 'next', or 'previous'
+
 ### `lock_computer`
 Description: Lock the Windows workstation session immediately (equivalent to Win+L).
 Parameters: None
