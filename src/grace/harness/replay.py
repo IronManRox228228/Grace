@@ -339,6 +339,9 @@ class TapePump:
         return self._index >= len(self._chunks)
 
     async def get(self, timeout: Optional[float] = None) -> Optional[bytes]:
+        if not self._listening:
+            await asyncio.sleep(0.05)
+            return None
         if self.exhausted:
             if self._windows > 1:
                 # A follow-up window that outlives the recorded audio is the

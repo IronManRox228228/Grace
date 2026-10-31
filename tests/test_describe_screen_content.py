@@ -26,6 +26,13 @@ from grace.perception.elements import (
 from grace.tools.dispatcher import Dispatcher
 
 
+@pytest.fixture(autouse=True)
+def mock_foreground_window():
+    with patch("win32gui.GetForegroundWindow", return_value=0), \
+         patch("win32gui.GetWindowText", return_value=""):
+        yield
+
+
 @pytest.fixture
 def mock_graph_builder():
     builder = MagicMock()

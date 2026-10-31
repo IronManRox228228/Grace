@@ -453,6 +453,7 @@ class GraceApp:
                 await asyncio.sleep(0.1)
                 continue
             if chunk is None:
+                await asyncio.sleep(0.05)
                 continue
             if self._audio_queue is not None:
                 try:
@@ -2061,6 +2062,10 @@ class GraceApp:
             if not handled or not self._awaiting_answer():
                 break
 
+        try:
+            self.pump._listening = False
+        except AttributeError:
+            pass
         log.info("Answer window closed. Returning to idle.")
         scanner = getattr(self, "_active_mark_scanner", None)
         if scanner is not None:

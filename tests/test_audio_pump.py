@@ -186,3 +186,63 @@ class TestSyncChunkSource:
         source = SyncChunkSource(FakeCapture())
         assert chunk_number(await source.get()) == 1
         assert source.drain() == 0
+
+
+class TestWakeWordForwarderYield:
+    @pytest.mark.asyncio
+    async def test_forwarder_does_not_starve_event_loop_when_pump_returns_none_immediately(self):
+        """With a pump whose get returns None immediately, another task on the same loop still completes within 1 s while the forwarder runs."""
+        from grace.main import GraceApp
+
+        class ImmediateNonePump:
+            async def get(self, timeout=None):
+                return None
+
+        class AppStandIn:
+            def __init__(self):
+                self.pump = ImmediateNonePump()
+                self._audio_queue = None
+
+        app = AppStandIn()
+        forwarder_task = asyncio.create_task(GraceApp._pump_audio_to_wake_word(app))
+
+        async def worker():
+            await asyncio.sleep(0.01)
+            return "completed"
+
+        try:
+            result = await asyncio.wait_for(worker(), timeout=1.0)
+            assert result == "completed"
+        finally:
+            forwarder_task.cancel()
+            try:
+                await forwarder_task
+            except asyncio.CancelledError:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_forwarder_with_unstarted_audiopump_allows_other_tasks_to_complete(self):
+        """With an unstarted AudioPump whose get returns None immediately without suspending, another task on the same loop still completes within 1 s."""
+        from grace.main import GraceApp
+
+        class AppStandIn:
+            def __init__(self):
+                self.pump = AudioPump(FakeCapture())
+                self._audio_queue = None
+
+        app = AppStandIn()
+        forwarder_task = asyncio.create_task(GraceApp._pump_audio_to_wake_word(app))
+
+        async def worker():
+            await asyncio.sleep(0.01)
+            return "completed"
+
+        try:
+            result = await asyncio.wait_for(worker(), timeout=1.0)
+            assert result == "completed"
+        finally:
+            forwarder_task.cancel()
+            try:
+                await forwarder_task
+            except asyncio.CancelledError:
+                pass

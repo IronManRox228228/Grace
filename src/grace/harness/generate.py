@@ -435,6 +435,7 @@ SIDE_EFFECTING_HANDLERS = (
     "_undo", "_describe_screen", "_set_speech_rate",
     "_remember",
     "_type_saved_secret", "_forget_secret",
+    "_media_control",
 )
 
 
