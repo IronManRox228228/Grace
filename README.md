@@ -37,8 +37,8 @@ Grace runs entirely offline. Download the required model weights manually and pl
 | **Holo-3.1-4B** | Unified LLM (intent, planning, vision grounding, tool calling) | Official `Hcompany/Holo-3.1-4B` is gated — use the ungated quant mirror `prithivMLmods/Holo-3.1-4B-GGUF` | `Holo-3.1-4B.Q4_K_M.gguf` | ~2.9 GB |
 | **Holo-3.1-4B mmproj** | Multimodal projector for vision grounding | `prithivMLmods/Holo-3.1-4B-GGUF` | `Holo-3.1-4B.mmproj-q8_0.gguf` | ~350 MB |
 | **Whisper small** | Local speech-to-text (ASR) | `Systran/faster-whisper-small` (set by `WHISPER_MODEL_PATH`) | Cached via `faster-whisper` | ~480 MB |
-| **Vosk** (default) / openWakeWord | Offline wake word ("Grace") | Small Vosk English model | `vosk-model-small-en-us` | ~45 MB |
-| **Kokoro-82M** | Local text-to-speech (TTS) | `hexgrad/Kokoro-82M` | `kokoro-v0_19.onnx` + `voices.json` | ~320 MB |
+| **Vosk** (default) / openWakeWord | Offline wake word ("Grace") | Small Vosk English model | `vosk-model-small-en-us-0.15` | ~45 MB |
+| **Kokoro-82M** | Local text-to-speech (TTS) | `hexgrad/Kokoro-82M` | `kokoro-v1_0.pth` + `voices/af_bella.pt` | ~328 MB |
 | **llama-server** | High-performance local inference binary | `TheTom's turboquant llama.cpp OR AtomicChat's turboquant llama.cpp` releases | `llama-server.exe` (cuBLAS/CUDA build) | ~50 MB |
 
 Configure `.env` with:
@@ -116,7 +116,7 @@ For users unable to type, Grace types saved passwords into verified fields witho
 
 ## Safety Architecture in Five Bullets
 
-1. **Explicit Allowlist Confirmations:** Destructive actions (`delete_file`, `close_app`, `lock_computer`, `shutdown`) are blocked by `SafetyGuard` until the user verbally confirms approval. Unclear or mumbled replies trigger clarification rather than assumption.
+1. **Explicit Allowlist Confirmations:** Destructive actions (`delete_file`, `close_app`, `lock_computer`) are blocked by `SafetyGuard` until the user verbally confirms approval. Unclear or mumbled replies trigger clarification rather than assumption.
 2. **Untrusted-Data Quarantine:** Desktop content (window titles, web text, file contents) is quarantined within rigid boundary markers (`<<<UNTRUSTED_DATA_START ...>>>`) to neutralize prompt injection attacks.
 3. **Instant Voice Stop Reflex:** The microphone stream remains open during task execution. Saying "Grace stop" or "cancel" immediately halts mouse/keyboard actuation and cancels speech within 500 ms.
 4. **Airgap Offline Guarantee:** Grace defaults to `USE_CLOUD_LLM=false` and requires no network interface. The local WebSocket server is secured with per-launch cryptographic tokens and strict Origin allowlists.
@@ -188,7 +188,7 @@ flowchart TD
 
 Grace maintains strict automated regression test suites across Python, Rust, and Frontend:
 - **Python Backend:** `1687 passed, 3 skipped` (`pytest`, 28 Oct 2026)
-- **Rust Crates:** last recorded `289 passed, 3 ignored, 0 failed` (`cargo test --workspace`, per `PORT_STATUS.md`; not re-verifiable on this machine without the Rust toolchain)
+- **Rust Crates:** last recorded `295 passed, 3 ignored, 0 failed` (`cargo test --workspace`, per `PORT_STATUS.md`; not re-verifiable on this machine without the Rust toolchain)
 - **Frontend Renderer:** `65 passed` (`npm run test`)
 - **Preflight Checks:** `14/14 checks passed` (`python scripts/demo_check.py`)
 - **Deterministic Replay Gate:** 100% pass on 30/30 recorded corpus tapes with exact event parity.

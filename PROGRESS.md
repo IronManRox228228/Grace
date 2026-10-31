@@ -88,7 +88,7 @@ Every command ran in the foreground and returned before reporting (both full
 pytest runs exited, with codes 1 and 0). Verification command and output:
 
 ```
-PS C:\Users\Ashman Das\Documents\Grace> Get-Process | Where-Object { $_.ProcessName -match '^(python|pytest|cargo|rustc|grace)' } | Format-Table Id, ProcessName, StartTime -AutoSize
+PS C:\Users\<you>\Documents\Grace> Get-Process | Where-Object { $_.ProcessName -match '^(python|pytest|cargo|rustc|grace)' } | Format-Table Id, ProcessName, StartTime -AutoSize
 (no output — no matching process exists)
 ```
 
@@ -97,7 +97,7 @@ PS C:\Users\Ashman Das\Documents\Grace> Get-Process | Where-Object { $_.ProcessN
 ## Cockpit 5
 
 Scope: `cockpit-5.md` — the terminal cover must check the window that actually gets the keys.
-Repo: `C:\Users\Ashman Das\Documents\Grace`, branch `main`. Commit `7007e0c`
+Repo: `C:\Users\<you>\Documents\Grace`, branch `main`. Commit `7007e0c`
 `fix(agent): terminal cover checks the window that actually receives the keys`, pushed to `origin/main`.
 
 ### Gap
@@ -377,7 +377,7 @@ process is left; every command ran in the foreground. Final `git status`:
 clean except this report.
 
 ```
-PS C:\Users\Ashman Das\Documents\Grace> Get-Process | Where-Object { $_.ProcessName -match '^(python|pytest|cargo|rustc|grace|llama-server)' } | Format-Table Id, ProcessName, StartTime -AutoSize
+PS C:\Users\<you>\Documents\Grace> Get-Process | Where-Object { $_.ProcessName -match '^(python|pytest|cargo|rustc|grace|llama-server)' } | Format-Table Id, ProcessName, StartTime -AutoSize
 (no output — no matching process exists)
 ```
 
@@ -492,7 +492,7 @@ Per `PORT_STATUS.md`:
 
 3. **`README.md` stale test counts** — Python said `1136 passed`, Rust said `295 passed`. Fixed: Python → `1163 passed, 1 skipped`; Rust → `last recorded 289 passed, 3 ignored, 0 failed (per PORT_STATUS.md; not re-verifiable without Rust toolchain)`.
 
-4. **Corpus `meta.json` files contain developer username paths** (`C:\Users\Ashman Das\...` in kokoro/llama/vosk paths) — R44 class finding. **Not fixed:** these are committed regression test tapes; changing them would break replay parity, and rule 10 prohibits rewriting history. Reported for user decision.
+4. **Corpus `meta.json` files contain developer username paths** (`C:\Users\<you>\...` in kokoro/llama/vosk paths) — R44 class finding. **Not fixed:** these are committed regression test tapes; changing them would break replay parity, and rule 10 prohibits rewriting history. Reported for user decision.
 
 5. **Dead code:** No UI-TARS or `nest_asyncio` references remain in `src/grace/`, `crates/`, or `tests/`. No dead imports found.
 
@@ -690,7 +690,7 @@ Grace correctly remembers what the user tells it, confirms before storing, injec
 ### Behaviours & Proving Tests
 
 1. **Remembering (Deterministic pattern & intent proposal):**
-   - User phrases like "my name is Ashman", "remember that I prefer Firefox", "remember my usual song is Signal by Home" are recognized deterministically; intent model proposals are accepted only when value is in spoken transcript.
+   - User phrases like "my name is Sam", "remember that I prefer Firefox", "remember my usual song is Signal by Home" are recognized deterministically; intent model proposals are accepted only when value is in spoken transcript.
    - Proved by:
      - `tests/test_memory_facts.py::TestFactsHelpers::test_detect_remember_pattern_my_name`
      - `tests/test_memory_facts.py::TestFactsHelpers::test_detect_remember_pattern_prefer_browser`
@@ -878,7 +878,7 @@ Driving tape: agentic_read_pdf...
   dispatches: 6
   final_response: "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."
   last 2 raw planner outputs:
-    [1] {"thought": "The PDF has been read and the first excerpt was spoken. The goal is to read the report PDF, which may have more content. I should continue reading the rest of the document.", "action": "read_pdf", "params": {"path": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [1] {"thought": "The PDF has been read and the first excerpt was spoken. The goal is to read the report PDF, which may have more content. I should continue reading the rest of the document.", "action": "read_pdf", "params": {"path": "C:\\Users\\<you>\\Documents\\report.pdf"}}
     [2] {"thought": "The PDF has been successfully read - I can see the excerpt 'Third quarter results exceeded projections.' from the report. The goal was to read the report PDF to the user, and this has been accomplished. I should confirm this to the user.", "action": "converse", "params": {"response": "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."}}
   verdict: PASS
 
@@ -997,8 +997,8 @@ Driving tape: agentic_read_pdf...
   dispatches: 5
   final_response: "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."
   last 3 raw planner outputs:
-    [1] {"thought": "I found the report PDF file at C:\\Users\\Ashman Das\\Documents\\report.pdf. The Notepad window is currently open but empty. To achieve the goal of reading the PDF, I need to open the PDF file in its default application.", "action": "open_file", "params": {"name": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
-    [2] {"thought": "The PDF is open in Edge browser, showing only one line of text 'Third quarter results exceeded projections'. The document likely has more content. I need to read the full PDF to the user. I'll use the read_pdf tool to extract and read the document content.", "action": "read_pdf", "params": {"path": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [1] {"thought": "I found the report PDF file at C:\\Users\\<you>\\Documents\\report.pdf. The Notepad window is currently open but empty. To achieve the goal of reading the PDF, I need to open the PDF file in its default application.", "action": "open_file", "params": {"name": "C:\\Users\\<you>\\Documents\\report.pdf"}}
+    [2] {"thought": "The PDF is open in Edge browser, showing only one line of text 'Third quarter results exceeded projections'. The document likely has more content. I need to read the full PDF to the user. I'll use the read_pdf tool to extract and read the document content.", "action": "read_pdf", "params": {"path": "C:\\Users\\<you>\\Documents\\report.pdf"}}
     [3] {"thought": "The PDF has been successfully read - I can see the excerpt 'Third quarter results exceeded projections.' from the report. The goal was to read the report PDF to the user, and this has been accomplished. I should confirm this to the user.", "action": "converse", "params": {"response": "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."}}
   verdict: PASS
 
@@ -1107,7 +1107,7 @@ Driving tape: agentic_read_pdf...
   final_response: "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."
   last 3 raw planner outputs:
     [1] {"thought": "The PDF is open in Edge showing the first page with text 'Third quarter results exceeded projections'. I need to read the entire document to the user. I'll scroll down to see if there's more content, then use the read_pdf tool to extract and read the full text.", "action": "cua_scroll", "params": {"window": {"title": "report.pdf - Edge", "id": 1234}, "scrollY": 500}}
-    [2] {"thought": "The PDF is open in Edge showing the first page. To read the report to the user, I should use the read_pdf tool which will extract and read the PDF content aloud using sub-second RAG chunking.", "action": "read_pdf", "params": {"path": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [2] {"thought": "The PDF is open in Edge showing the first page. To read the report to the user, I should use the read_pdf tool which will extract and read the PDF content aloud using sub-second RAG chunking.", "action": "read_pdf", "params": {"path": "C:\\Users\\<you>\\Documents\\report.pdf"}}
     [3] {"thought": "The PDF has been successfully read - I can see the excerpt 'Third quarter results exceeded projections.' from the report. The goal was to read the report PDF to the user, and this has been accomplished. The task is complete.", "action": "converse", "params": {"response": "I've read your report PDF. The excerpt shows that third quarter results exceeded projections."}}
   verdict: PASS
 
@@ -1128,7 +1128,7 @@ Driving tape: agentic_pdf_to_notes...
   dispatches: 11
   final_response: 'I reached the step limit before fully completing the goal.'
   last 3 raw planner outputs:
-    [1] {"thought": "I need to open the PDF file to find the deadline. The data shows the PDF is located at C:\\Users\\Ashman Das\\Documents\\report.pdf. I should use open_file to open this PDF in its default viewer so I can read it and find the deadline information.", "action": "open_file", "params": {"name": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [1] {"thought": "I need to open the PDF file to find the deadline. The data shows the PDF is located at C:\\Users\\<you>\\Documents\\report.pdf. I should use open_file to open this PDF in its default viewer so I can read it and find the deadline information.", "action": "open_file", "params": {"name": "C:\\Users\\<you>\\Documents\\report.pdf"}}
     [2] {"thought": "The PDF file was supposed to open in the default PDF viewer, but I'm still seeing Notepad. I need to switch to the PDF viewer window to read the report and find the deadline. Let me list the open windows to identify the PDF viewer.", "action": "cua_list_windows", "params": {}}
     [3] {"thought": "The PDF file was supposed to open in the default PDF viewer, but I'm still seeing Notepad. I need to switch to the PDF viewer window to read the deadline. Let me list the open windows to find the PDF viewer.", "action": "cua_list_windows", "params": {}}
   verdict: NOT PROVEN
@@ -1180,7 +1180,7 @@ Notice: Tapes run against a stateful sim desktop, a PASS means the sim reached i
 ## Planner context
 
 Scope: Task `planner-context.md`.
-Working repo: `C:\Users\Ashman Das\Documents\Grace`, branch `main`.
+Working repo: `C:\Users\<you>\Documents\Grace`, branch `main`.
 
 ### 1. Ordinary Field Values Redaction
 
@@ -1273,8 +1273,8 @@ Driving tape: agentic_read_pdf...
   dispatches: 8
   final_response: "I have read your report PDF. The excerpt from the document states: 'Third quarter results exceeded projections.' Is there anything specific from the report you would like me to read or summarize further?"
   last 3 raw planner outputs:
-    [1] {"thought": "I've extracted the first excerpt from the PDF ('Third quarter results exceeded projections.'), but the user wants me to read the full report. I should continue reading the PDF to extract more content.", "action": "read_pdf", "params": {"path": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
-    [2] {"thought": "I've already extracted the report content in previous steps ('Third quarter results exceeded projections.'), but I need to continue reading the PDF to fulfill the goal of reading the report. I should run read_pdf again to get more content from the document.", "action": "read_pdf", "params": {"path": "C:\\Users\\Ashman Das\\Documents\\report.pdf"}}
+    [1] {"thought": "I've extracted the first excerpt from the PDF ('Third quarter results exceeded projections.'), but the user wants me to read the full report. I should continue reading the PDF to extract more content.", "action": "read_pdf", "params": {"path": "C:\\Users\\<you>\\Documents\\report.pdf"}}
+    [2] {"thought": "I've already extracted the report content in previous steps ('Third quarter results exceeded projections.'), but I need to continue reading the PDF to fulfill the goal of reading the report. I should run read_pdf again to get more content from the document.", "action": "read_pdf", "params": {"path": "C:\\Users\\<you>\\Documents\\report.pdf"}}
     [3] {"thought": "I have already read the report PDF in previous steps (steps 6-8), with the excerpt 'Third quarter results exceeded projections.' being reported. The goal is to read the report PDF to the user, which has been accomplished. Now I should communicate the findings to the user using the converse tool.", "action": "converse", "params": {"response": "I have read your report PDF. The excerpt from the document states: 'Third quarter results exceeded projections.' Is there anything specific from the report you would like me to read or summarize further?"}}
   verdict: PASS
 

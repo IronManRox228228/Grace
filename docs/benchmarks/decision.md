@@ -70,19 +70,19 @@ Models must be downloaded directly by the user per Grace Hard Rule 2:
 
 1. **Julia-1 ONNX (144M, Apache 2.0):**
    - Source: https://huggingface.co/SupersonicLabs/julia-1-onnx
-   - Destination: `C:\Users\Ashman Das\Downloads\julia-1-onnx\model.onnx` (~288 MB)
+   - Destination: `C:\Users\<you>\Downloads\julia-1-onnx\model.onnx` (~288 MB)
 
 2. **GLiNER2.5-Decide (340M, Apache 2.0):**
    - Source: https://huggingface.co/fastino/gliner-2.5-decide
-   - Destination: `C:\Users\Ashman Das\Downloads\gliner2.5-decide\` (~680 MB)
+   - Destination: `C:\Users\<you>\Downloads\gliner2.5-decide\` (~680 MB)
 
 3. **Laya Decision Model (421M, Apache 2.0):**
    - Source: https://huggingface.co/laya-ai/laya-421m-decide
-   - Destination: `C:\Users\Ashman Das\Downloads\laya-421m\` (~840 MB)
+   - Destination: `C:\Users\<you>\Downloads\laya-421m\` (~840 MB)
 
 4. **LFM2.5-350M (350M, Liquid Foundation Models):**
    - Source: https://huggingface.co/LiquidAI/LFM2.5-350M
-   - Destination: `C:\Users\Ashman Das\Downloads\lfm2.5-350m\` (~700 MB)
+   - Destination: `C:\Users\<you>\Downloads\lfm2.5-350m\` (~700 MB)
 
 ---
 

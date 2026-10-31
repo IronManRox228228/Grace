@@ -100,8 +100,8 @@ class TestFactStoreBasics:
             store.store_fact(topic="note", value="Tr0ub4dor&3xyz")
 
         # Ordinary facts are permitted
-        store.store_fact(topic="name", value="Ashman")
-        assert store.get_active_fact("name")["value"] == "Ashman"
+        store.store_fact(topic="name", value="Sam")
+        assert store.get_active_fact("name")["value"] == "Sam"
         store.close()
 
     def test_one_live_fact_per_topic_and_supersede(self):
@@ -153,15 +153,15 @@ class TestPatternDetection:
     def test_pronoun_flip(self):
         assert pronoun_flip("I prefer Firefox") == "you prefer Firefox"
         assert pronoun_flip("my usual song is Signal by Home") == "your usual song is Signal by Home"
-        assert pronoun_flip("my name is Ashman") == "your name is Ashman"
+        assert pronoun_flip("my name is Sam") == "your name is Sam"
 
     def test_detect_remember_patterns(self):
         # Name pattern
-        p1 = detect_remember_pattern("my name is Ashman")
+        p1 = detect_remember_pattern("my name is Sam")
         assert p1 is not None
         assert p1["topic"] == "name"
-        assert p1["value"] == "Ashman"
-        assert p1["confirmation_prompt"] == "Should I remember that your name is Ashman?"
+        assert p1["value"] == "Sam"
+        assert p1["confirmation_prompt"] == "Should I remember that your name is Sam?"
 
         # Preference pattern
         p2 = detect_remember_pattern("remember that I prefer Firefox")
@@ -381,12 +381,12 @@ class TestConfirmationAndSafetyFlow:
 
         app = GraceApp(tts_off=True)
         app.memory_store = PersistentMemoryStore(db_path=":memory:")
-        app.memory_store.store_fact("name", "Ashman", provenance="user_heard")
+        app.memory_store.store_fact("name", "Sam", provenance="user_heard")
         app.memory_store.confirm_fact("name")
 
         sys_prompt = app._get_intent_system_prompt()
         assert "### What you know about the user" in sys_prompt
-        assert "name: Ashman" in sys_prompt
+        assert "name: Sam" in sys_prompt
         assert "<<<UNTRUSTED_DATA_START" in sys_prompt
         app.memory_store.close()
 
@@ -495,7 +495,7 @@ class TestConfirmationAndSafetyFlow:
 
         app = GraceApp(tts_off=True)
         app.memory_store = PersistentMemoryStore(db_path=":memory:")
-        app.memory_store.store_fact("name", "Ashman", provenance="user_heard")
+        app.memory_store.store_fact("name", "Sam", provenance="user_heard")
         app.memory_store.confirm_fact("name")
         app.memory_store.store_fact("preference:browser", "Firefox", provenance="user_heard")
         app.memory_store.confirm_fact("preference:browser")
@@ -505,7 +505,7 @@ class TestConfirmationAndSafetyFlow:
 
         await app._route_transcript(MagicMock(), "What do you remember about me?")
         assert len(spoken) == 1
-        assert "your name is Ashman" in spoken[0]
+        assert "your name is Sam" in spoken[0]
         assert "you prefer Firefox" in spoken[0]
         app.memory_store.close()
 
@@ -516,7 +516,7 @@ class TestConfirmationAndSafetyFlow:
 
         app = GraceApp(tts_off=True)
         app.memory_store = PersistentMemoryStore(db_path=":memory:")
-        app.memory_store.store_fact("name", "Ashman", provenance="user_heard")
+        app.memory_store.store_fact("name", "Sam", provenance="user_heard")
         app.memory_store.confirm_fact("name")
         app.memory_store.store_fact("preference:browser", "Firefox", provenance="user_heard")
         app.memory_store.confirm_fact("preference:browser")
@@ -558,7 +558,7 @@ class TestConfirmationAndSafetyFlow:
 
         app = GraceApp(tts_off=True)
         app.memory_store = PersistentMemoryStore(db_path=":memory:")
-        app.memory_store.store_fact("name", "Ashman", provenance="user_heard")
+        app.memory_store.store_fact("name", "Sam", provenance="user_heard")
         app.memory_store.confirm_fact("name")
         app.memory_store.store_fact("usual_song", "Signal by Home", provenance="user_heard")
         app.memory_store.confirm_fact("usual_song")

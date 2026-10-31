@@ -246,6 +246,66 @@ class TestScreenSettlerPolling:
         assert res.samples_taken > 2
 
     @pytest.mark.asyncio
+    async def test_settler_disabled_max_ms_zero_no_sleep_no_sample(self):
+        """max_ms=0 returns immediately without sleeping or sampling."""
+        samples_called = 0
+        sleep_called = False
+
+        def sample_mock():
+            nonlocal samples_called
+            samples_called += 1
+            return make_frame(50)
+
+        async def fast_sleep(s):
+            nonlocal sleep_called
+            sleep_called = True
+
+        settler = ScreenSettler(
+            max_ms=0,
+            sample_fn=sample_mock,
+            sleep_fn=fast_sleep,
+        )
+
+        res = await settler.wait_for_settle()
+        assert res.settled is True
+        assert res.elapsed_ms == 0.0
+        assert res.samples_taken == 0
+        assert res.note == ""
+        assert samples_called == 0
+        assert sleep_called is False
+
+    @pytest.mark.asyncio
+    async def test_settler_cap_under_400ms_total_wait_bounded(self):
+        """max_ms=200 initial wait is capped so total wait <= 200 ms."""
+        sim_time = 0.0
+        samples_called = 0
+
+        def sample_mock():
+            nonlocal samples_called
+            samples_called += 1
+            return make_frame(samples_called * 20)
+
+        async def fast_sleep(s):
+            nonlocal sim_time
+            sim_time += s
+
+        settler = ScreenSettler(
+            max_ms=200,
+            poll_interval_ms=250,
+            sample_fn=sample_mock,
+            sleep_fn=fast_sleep,
+        )
+
+        with patch("time.monotonic", side_effect=lambda: sim_time):
+            res = await settler.wait_for_settle()
+
+        assert sim_time <= 0.200001
+        assert res.elapsed_ms <= 200.000001
+        assert res.settled is False
+        assert res.samples_taken == 1
+        assert res.note == "screen may still be loading"
+
+    @pytest.mark.asyncio
     async def test_settle_time_logged_in_turn_trace(self):
         """Log the settle time in the turn trace."""
         frame = make_frame(50)

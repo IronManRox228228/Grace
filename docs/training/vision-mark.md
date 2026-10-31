@@ -45,7 +45,7 @@ Fine-tuning recipe for LFM2.5-VL-450M for selecting numbered visual marks on cro
 
 ```bash
 # 1. Prepare and merge OS-Atlas Windows parts if downloaded
-./venv/Scripts/python.exe -m training.data_prep --merge-os-atlas "C:\Users\Ashman Das\Downloads\os_atlas_parts" --os-atlas-out "C:\Users\Ashman Das\Downloads\os_atlas_windows.tar.gz"
+./venv/Scripts/python.exe -m training.data_prep --merge-os-atlas "C:\Users\<you>\Downloads\os_atlas_parts" --os-atlas-out "C:\Users\<you>\Downloads\os_atlas_windows.tar.gz"
 
 # 2. Smoke test
 ./venv/Scripts/python.exe -m training.train_vision_mark --smoke-run --output-dir models/fine_tunes/vision_mark

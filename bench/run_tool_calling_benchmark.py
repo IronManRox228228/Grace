@@ -290,13 +290,13 @@ def print_prerequisite_instructions(missing_items: List[str]) -> None:
     print("\nTo run local weights benchmarks, please acquire the files:")
     print("  1. FunctionGemma 270M:")
     print("     Source: https://huggingface.co/google/functiongemma-270m-it")
-    print("     Target: C:\\Users\\Ashman Das\\Downloads\\functiongemma-270m (~540 MB)")
+    print("     Target: C:\\Users\\<you>\\Downloads\\functiongemma-270m (~540 MB)")
     print("  2. LFM2.5-350M:")
     print("     Source: https://huggingface.co/LiquidAI/LFM2.5-350M")
-    print("     Target: C:\\Users\\Ashman Das\\Downloads\\lfm2.5-350m (~700 MB)")
+    print("     Target: C:\\Users\\<you>\\Downloads\\lfm2.5-350m (~700 MB)")
     print("  3. xLAM-2-1b-fc-r:")
     print("     Source: https://huggingface.co/Salesforce/xLAM-2-1b-fc-r")
-    print("     Target: C:\\Users\\Ashman Das\\Downloads\\xlam-2-1b-fc-r (~2.0 GB)")
+    print("     Target: C:\\Users\\<you>\\Downloads\\xlam-2-1b-fc-r (~2.0 GB)")
     print("=" * 80 + "\n")
 
 

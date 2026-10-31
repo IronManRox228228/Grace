@@ -282,20 +282,20 @@ def print_prerequisite_instructions(missing_items: List[str]) -> None:
     print("   - Direct archive links: F01, F03, F04, M01, M02, M03, M04, M05 (dysarthric)")
     print("                           FC01, FC02, FC03, MC01, MC02, MC03, MC04 (control)")
     print("   - Destination: Extract all archives into a single directory, e.g.:")
-    print(r"                  C:\Users\Ashman Das\Downloads\TORGO")
-    print("   - Re-run command: python -m bench.run_asr_torgo --torgo-dir \"C:\\Users\\Ashman Das\\Downloads\\TORGO\"")
+    print(r"                  C:\Users\<you>\Downloads\TORGO")
+    print("   - Re-run command: python -m bench.run_asr_torgo --torgo-dir \"C:\\Users\\<you>\\Downloads\\TORGO\"")
     print()
     print("2. Parakeet-TDT 0.6B (NeMo / Sherpa-ONNX):")
     print("   - Source: https://github.com/k2-fsa/sherpa-onnx/releases or Hugging Face csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-en-3000")
-    print(r"   - Destination: C:\Users\Ashman Das\Downloads\sherpa-onnx-nemo-parakeet-tdt-0.6b-en-3000")
+    print(r"   - Destination: C:\Users\<you>\Downloads\sherpa-onnx-nemo-parakeet-tdt-0.6b-en-3000")
     print()
     print("3. Moonshine Base (Useful Sensors ONNX):")
     print("   - Source: https://github.com/usefulsensors/moonshine or Hugging Face usefulsensors/moonshine")
-    print(r"   - Destination: C:\Users\Ashman Das\Downloads\moonshine-base")
+    print(r"   - Destination: C:\Users\<you>\Downloads\moonshine-base")
     print()
     print("4. Whisper Baseline (Systran / faster-whisper):")
     print("   - Source: Hugging Face Systran/faster-whisper-base (or tiny / small)")
-    print(r"   - Destination: C:\Users\Ashman Das\Downloads\faster-whisper-base")
+    print(r"   - Destination: C:\Users\<you>\Downloads\faster-whisper-base")
     print("=" * 80)
 
 
@@ -317,7 +317,7 @@ def run_benchmark(
         torgo_path = Path(os.environ["TORGO_DATASET_DIR"])
     else:
         # Check standard download paths
-        default_p = Path(r"C:\Users\Ashman Das\Downloads\TORGO")
+        default_p = Path.home() / "Downloads" / "TORGO"
         if default_p.is_dir():
             torgo_path = default_p
 
@@ -338,8 +338,9 @@ def run_benchmark(
     try:
         import faster_whisper
         # Only instantiate if whisper weights exist locally or model is a local dir
-        if os.path.exists(w_model) or Path(r"C:\Users\Ashman Das\Downloads\faster-whisper-base").is_dir():
-            w_path = w_model if os.path.exists(w_model) else str(Path(r"C:\Users\Ashman Das\Downloads\faster-whisper-base"))
+        default_whisper_p = Path.home() / "Downloads" / "faster-whisper-base"
+        if os.path.exists(w_model) or default_whisper_p.is_dir():
+            w_path = w_model if os.path.exists(w_model) else str(default_whisper_p)
             evaluators.append(FasterWhisperEvaluator(w_path, budget.llama_threads))
         else:
             missing.append(f"Whisper model weights '{w_model}' (offline local path required)")

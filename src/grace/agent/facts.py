@@ -137,7 +137,7 @@ def detect_remember_pattern(transcript: str) -> Optional[dict[str, Any]]:
 
     Returns dict with {topic, value, confirmation_prompt, spoken_fact} or None.
     Handles:
-    - "my name is Ashman" / "remember my name is Ashman"
+    - "my name is Sam" / "remember my name is Sam"
     - "remember that I prefer Firefox" / "I prefer Firefox"
     - "remember my usual song is Signal by Home" / "my usual song is Signal by Home"
     - General "remember that ..." / "remember ..."
@@ -268,7 +268,7 @@ def detect_forget_fact_pattern(
 
     Returns (topic, human_label) or None.
     Handles:
-    - "forget my name" / "forget that my name is Ashman"
+    - "forget my name" / "forget that my name is Sam"
     - "forget that I prefer Firefox" / "forget I prefer Firefox"
     - "forget my usual song" / "forget that my usual song is Signal by Home"
     - "forget <fact value or topic name>"

@@ -195,13 +195,19 @@ class ScreenSettler:
         identical on two quick samples, which used to fool this into
         reporting settled in ~312 ms.
         """
+        if self.max_ms <= 0:
+            res = SettleResult(settled=True, elapsed_ms=0.0, samples_taken=0)
+            self._log_trace(res)
+            return res
+
         start_time = time.monotonic()
 
         # After a page-changing action (click, Enter, ...) the screen may be
         # mid-transition. Wait before the first sample so a slow-loading page
         # does not look stable on two samples taken while it is still black.
-        if self.initial_wait_ms > 0:
-            wait_s = self.initial_wait_ms / 1000.0
+        init_wait_ms = min(self.initial_wait_ms, self.max_ms)
+        if init_wait_ms > 0:
+            wait_s = init_wait_ms / 1000.0
             sleep_res = self._sleep_fn(wait_s)
             if inspect.isawaitable(sleep_res):
                 await sleep_res
@@ -210,11 +216,6 @@ class ScreenSettler:
         samples_taken = 1
         prev_time = time.monotonic()
         stable_since: Optional[float] = None  # monotonic time the current stable run began
-
-        if self.max_ms <= 0:
-            res = SettleResult(settled=True, elapsed_ms=0.0, samples_taken=1)
-            self._log_trace(res)
-            return res
 
         while True:
             now = time.monotonic()

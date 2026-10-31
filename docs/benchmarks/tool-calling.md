@@ -62,15 +62,15 @@ Models must be acquired manually per Grace Hard Rule 2:
 
 1. **FunctionGemma 270M (Gemma Terms of Use):**
    - Source: https://huggingface.co/google/functiongemma-270m-it
-   - Target: `C:\Users\Ashman Das\Downloads\functiongemma-270m` (~540 MB)
+   - Target: `C:\Users\<you>\Downloads\functiongemma-270m` (~540 MB)
 
 2. **LFM2.5-350M (Open Weights):**
    - Source: https://huggingface.co/LiquidAI/LFM2.5-350M
-   - Target: `C:\Users\Ashman Das\Downloads\lfm2.5-350m` (~700 MB)
+   - Target: `C:\Users\<you>\Downloads\lfm2.5-350m` (~700 MB)
 
 3. **xLAM-2-1b-fc-r (Apache 2.0):**
    - Source: https://huggingface.co/Salesforce/xLAM-2-1b-fc-r
-   - Target: `C:\Users\Ashman Das\Downloads\xlam-2-1b-fc-r` (~2.0 GB)
+   - Target: `C:\Users\<you>\Downloads\xlam-2-1b-fc-r` (~2.0 GB)
 
 ---
 

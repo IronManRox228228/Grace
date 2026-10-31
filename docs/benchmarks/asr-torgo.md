@@ -66,7 +66,7 @@ TORGO is distributed by the University of Toronto under a **non-commercial resea
 3. **Extraction Target:**  
    Extract all speakers into a single directory, structured as:
    ```text
-   C:\Users\Ashman Das\Downloads\TORGO\
+   C:\Users\<you>\Downloads\TORGO\
    ├── F01\
    │   └── Session1\
    │       ├── prompts\
@@ -79,8 +79,8 @@ TORGO is distributed by the University of Toronto under a **non-commercial resea
 
 4. **Model Weights Placement:**
    - **Whisper Base:** Local directory or Hugging Face cache `Systran/faster-whisper-base`
-   - **Parakeet-TDT 0.6B:** `C:\Users\Ashman Das\Downloads\sherpa-onnx-nemo-parakeet-tdt-0.6b-en-3000`
-   - **Moonshine Base:** `C:\Users\Ashman Das\Downloads\moonshine-base`
+   - **Parakeet-TDT 0.6B:** `C:\Users\<you>\Downloads\sherpa-onnx-nemo-parakeet-tdt-0.6b-en-3000`
+   - **Moonshine Base:** `C:\Users\<you>\Downloads\moonshine-base`
 
 ---
 
@@ -90,10 +90,10 @@ Once the dataset and models are placed, run the benchmark runner:
 
 ```bash
 # Standard evaluation under idle conditions
-./venv/Scripts/python.exe -m bench.run_asr_torgo --torgo-dir "C:\Users\Ashman Das\Downloads\TORGO"
+./venv/Scripts/python.exe -m bench.run_asr_torgo --torgo-dir "C:\Users\<you>\Downloads\TORGO"
 
 # Multitasking evaluation simulating 20 open Chrome tabs
-./venv/Scripts/python.exe -m bench.run_asr_torgo --torgo-dir "C:\Users\Ashman Das\Downloads\TORGO" --simulate-tabs 20
+./venv/Scripts/python.exe -m bench.run_asr_torgo --torgo-dir "C:\Users\<you>\Downloads\TORGO" --simulate-tabs 20
 
 # Generate Markdown results table
 ./venv/Scripts/python.exe -m bench.report --benchmark-name asr_torgo --out docs/benchmarks/asr-torgo-results.md
