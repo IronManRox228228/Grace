@@ -453,6 +453,11 @@ class GraceApp:
                 await asyncio.sleep(0.1)
                 continue
             if chunk is None:
+                # Pump not running yet or stopped - yield so other tasks
+                # (e.g. _plan_once on the agent goal) don't starve. Without
+                # this the loop spins at full speed when the pump is down,
+                # freezing the whole run (regression: typed agent goal hangs).
+                await asyncio.sleep(0.05)
                 continue
             if self._audio_queue is not None:
                 try:

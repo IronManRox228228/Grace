@@ -751,7 +751,11 @@ class AgentLoop:
             # Holo says "nothing changed" four times in a row: stop the task.
             # Any other value resets the counter. This is the only
             # change-verdict stop in single mode, and it is the model's own.
-            if no_change_streak >= 4:
+            # A step that also claims done=true wins: the completion branch
+            # below ends the task and speaks `say`, and its action is never
+            # executed. Without this, a goal completed on a step whose report
+            # is "nothing changed" for the fourth time ended as no_progress.
+            if no_change_streak >= 4 and not step.is_completed:
                 logger.info(
                     f"AgentLoop: the model reported no change from its last step "
                     f"{no_change_streak} times in a row; stopping."

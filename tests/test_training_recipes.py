@@ -4,6 +4,20 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _bench_results_to_tmp(tmp_path, monkeypatch):
+    """Smoke tests must never append rows to the tracked bench/results/*.jsonl.
+
+    Each full-suite run used to add ~7 rows to four tracked files, dirtying
+    the repo. Point the benchmark writer's default directory at pytest's
+    tmp_path for the duration of these tests; real training/benchmark runs
+    outside tests keep writing to bench/results/ unchanged.
+    """
+    import bench.harness as bench_harness
+
+    monkeypatch.setattr(bench_harness, "DEFAULT_RESULTS_DIR", tmp_path / "bench_results")
+
+
 def test_tool_caller_smoke_run(tmp_path):
     from training.common import TrainingConfig
     import training.train_tool_caller as train_tc

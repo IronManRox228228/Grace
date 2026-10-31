@@ -29,7 +29,13 @@ from grace.tools.dispatcher import Dispatcher
 @pytest.fixture
 def mock_graph_builder():
     builder = MagicMock()
-    with patch("grace.agent.perception.PerceptionEngine.get_graph_builder", return_value=builder):
+    # Never read the real foreground window title in tests; the mocked graph
+    # supplies the window title instead. Without this, GetForegroundWindow
+    # returns whatever app happens to be in front on the test machine and the
+    # graph title never takes over.
+    with patch("grace.agent.perception.PerceptionEngine.get_graph_builder", return_value=builder), \
+         patch("win32gui.GetForegroundWindow", return_value=0), \
+         patch("win32gui.GetWindowText", return_value=""):
         yield builder
 
 

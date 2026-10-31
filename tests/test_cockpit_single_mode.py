@@ -755,6 +755,35 @@ class TestSingleModeStopping:
         assert dispatcher.execute.call_count == 4
 
     @pytest.mark.asyncio
+    async def test_done_true_wins_over_the_four_no_change_stop(self):
+        """A step claiming done:true on its fourth "nothing changed" report
+        must end the task as done, not as no_progress (all-fixes Part B).
+
+        The completion claim is trusted exactly like any other done step: the
+        action behind it is never executed and `say` is spoken.
+        """
+        done_step = json.dumps({
+            "thought": "Signed in.",
+            "action": {"tool": "cua_click", "x": 500, "y": 500},
+            "done": True,
+            "say": "I've signed in.",
+            "last_step": "nothing changed",
+        })
+        responses = [
+            self._single_step(),
+            self._single_step("nothing changed"),
+            self._single_step("nothing changed"),
+            self._single_step("nothing changed"),
+            done_step,
+        ]
+        result, dispatcher = await self._loop(responses)
+        assert result["status"] == "ok"
+        assert result["final_response"] == "I've signed in."
+        # The skipped done action was never dispatched: the four earlier
+        # clicks ran, the done step's click did not.
+        assert dispatcher.execute.call_count == 4
+
+    @pytest.mark.asyncio
     async def test_three_no_change_then_changed_does_not_stop(self):
         responses = [
             self._single_step(),

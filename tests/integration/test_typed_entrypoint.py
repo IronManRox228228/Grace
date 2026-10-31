@@ -205,6 +205,44 @@ class TestTypedEntrypointAgentGoal:
             asyncio.run(app.gemma.close())
             assert gemma.closed
 
+    def test_forwarder_yields_when_pump_is_down(self):
+        """Regression test for _pump_audio_to_wake_word starving the loop.
+
+        When the audio pump is down, pump.get() returns None immediately
+        without suspending. The old code looped back with no await, so the
+        event loop never yielded and any other task (notably _plan_once on
+        an agent goal) starved forever - Grace freezes mid-run.
+        """
+        app, gemma, dispatcher, ws = build_typed_app()
+        try:
+
+            async def main():
+                other_done = asyncio.Event()
+
+                async def other_task():
+                    await asyncio.sleep(0)
+                    other_done.set()
+                    return True
+
+                forwarder_task = asyncio.create_task(
+                    app._pump_audio_to_wake_word()
+                )
+                try:
+                    result = await asyncio.wait_for(other_task(), timeout=1.0)
+                    assert result is True
+                    assert other_done.is_set()
+                finally:
+                    forwarder_task.cancel()
+                    try:
+                        await forwarder_task
+                    except asyncio.CancelledError:
+                        pass
+
+            asyncio.run(main())
+        finally:
+            asyncio.run(app.gemma.close())
+            assert gemma.closed
+
     def test_typed_stop_reflex_cancels_instead_of_routing(self):
         app, gemma, dispatcher, ws = build_typed_app(
             intent_reply='{"tool": "cua_click", "params": {"element_id": 2}}',
